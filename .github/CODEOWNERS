@@ -1,0 +1,6 @@
+# These owners will be the default owners for everything in the repo
+* @hummingbot/core-dev
+
+# Ownership of specific directories or files
+/market_connector/ @hummingbot/core-dev
+/.github/ @hummingbot/devops

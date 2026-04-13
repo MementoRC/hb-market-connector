@@ -73,3 +73,60 @@ exclude_lines = ["no cov", "if __name__", "if TYPE_CHECKING", "raise NotImplemen
 module = "hummingbot.connector"
 import_path = "market_connector"
 test_paths = []
+exchanges = []
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "osx-64", "win-64"]
+
+[tool.pixi.dependencies]
+python = ">=3.10,<3.13"
+pydantic = ">=2"
+
+[tool.pixi.feature.dev.dependencies]
+pytest = ">=9.0.3"
+pytest-asyncio = ">=0.21.0"
+pytest-cov = ">=7.1.0"
+pytest-timeout = ">=2.2.0"
+ruff = ">=0.15.10"
+mypy = ">=1.5.1"
+pre-commit = ">=2.15.0"
+
+[tool.pixi.feature.ci.dependencies]
+ruff = ">=0.15.10"
+mypy = ">=1.5.1"
+pytest = ">=9.0.3"
+pytest-cov = ">=7.1.0"
+pytest-timeout = ">=2.2.0"
+bandit = ">=1.8.0"
+pre-commit = ">=2.15.0"
+hatchling = ">=1.18"
+
+[tool.pixi.feature.py310.dependencies]
+python = "3.10.*"
+
+[tool.pixi.feature.py311.dependencies]
+python = "3.11.*"
+
+[tool.pixi.feature.py312.dependencies]
+python = "3.12.*"
+
+[tool.pixi.environments]
+default = { features = ["dev"], solve-group = "default" }
+ci = { features = ["ci", "dev"], solve-group = "default" }
+quality-ci = { features = ["ci", "dev"], solve-group = "default" }
+py310 = { features = ["py310", "dev"], solve-group = "py310" }
+py311 = { features = ["py311", "dev"], solve-group = "py311" }
+py312 = { features = ["py312", "dev"], solve-group = "py312" }
+
+[tool.pixi.tasks]
+test = "pytest tests/"
+test-unit = "pytest tests/unit/"
+test-integration = "pytest tests/integration/"
+lint = "ruff check market_connector tests"
+format = "ruff format market_connector tests"
+format-check = "ruff format --check market_connector tests"
+typecheck = "mypy market_connector"
+build = "hatchling build"
+quality = { depends-on = ["lint", "format-check"] }
+check = { depends-on = ["quality", "typecheck", "test"] }

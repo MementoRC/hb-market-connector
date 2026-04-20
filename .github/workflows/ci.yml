@@ -9,7 +9,7 @@ on:
 
 jobs:
   ci:
-    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@v2.7.0
+    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@v2.9.2
     permissions:
       contents: write
       id-token: write

@@ -3,9 +3,14 @@ name: CI
 
 on:
   push:
-    branches: [development, main]
+    branches: [main, development]
   pull_request:
-    branches: [development, main]
+    branches: [main, development]
+
+# Cancel in-progress CI runs for the same ref/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions: read-all
 

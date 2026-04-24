@@ -36,12 +36,20 @@ and formalises a protocol that any exchange implementation must satisfy.
 
 ```
 strategy-framework          (protocols + primitives consumers use)
-        ↑
+        ·
+        · bridged by hb_compat (optional dependency — see below)
+        ·
 hb-market-connector         (ExchangeGateway framework — THIS PACKAGE)
         ↑              ↑
 hb-coinbase-connector  hb-binance-connector  hb-kraken-connector  ...
 (reference impl)       (future)
 ```
+
+**Arrow convention:** `↑` = "depends on" (lower package imports from upper).
+Connectors depend on `hb-market-connector`. The `hb-market-connector` core has **no dependency**
+on `strategy-framework` (Design Goal #5). The dotted line represents an **optional** bridge
+module (`hb_compat`) that imports `strategy-framework` protocols to adapt the gateway for
+strategy consumers. The bridge is an installable extra, not a hard requirement.
 
 Each exchange connector sub-package:
 - Has its own `pyproject.toml`, `pixi.toml`, CI pipeline, and test suite
@@ -124,10 +132,13 @@ class MarketDataGateway(Protocol):
     async def get_candles(self, trading_pair: str, interval: str, limit: int) -> list[CandleData]: ...
     async def get_mid_price(self, trading_pair: str) -> Decimal: ...
 
-    # Subscriptions: callback-based, WS lifecycle internal to the implementation
+    # Subscriptions return an AsyncContextManager — two-step usage:
+    #   sub = await gateway.subscribe_orderbook("BTC-USDT", on_update)
+    #   async with sub:
+    #       await some_event.wait()  # callbacks fire while context is active
     async def subscribe_orderbook(
         self, trading_pair: str, callback: Callable[[OrderBookUpdate], None],
-    ) -> AsyncContextManager: ...
+    ) -> AsyncContextManager: ...  # delivers incremental deltas (OrderBookUpdate)
 
     async def subscribe_trades(
         self, trading_pair: str, callback: Callable[[TradeEvent], None],
@@ -137,23 +148,48 @@ class MarketDataGateway(Protocol):
 ### `ExchangeGateway`
 
 ```python
-class ExchangeGateway(ExecutionGateway, MarketDataGateway, Protocol): ...
+class ExchangeGateway(ExecutionGateway, MarketDataGateway, Protocol):
+    async def start(self) -> None: ...   # connect transport, warm caches
+    async def stop(self) -> None: ...    # graceful shutdown
+    @property
+    def ready(self) -> bool: ...         # True after start() completes
 ```
 
 Consumers that need only data use `MarketDataGateway`. Consumers that need execution use
 `ExecutionGateway`. The composite `ExchangeGateway` is what connector implementations satisfy.
+It also owns the connection lifecycle — `start()` must be called before any other method,
+and `stop()` gracefully tears down transport (see [Connection Lifecycle](#connection-lifecycle)).
 
 ---
 
 ## New Domain Primitives (`hb-market-connector`)
 
-These complement `CandleData` and `OrderBookSnapshot` (re-used from `strategy-framework`):
+These complement `CandleData` (re-used from `strategy-framework`):
 
-| Primitive | Fields |
-|-----------|--------|
-| `OpenOrder` | `client_order_id`, `exchange_order_id`, `trading_pair`, `order_type`, `side`, `amount`, `price`, `filled_amount`, `status` |
-| `TradeEvent` | `exchange_trade_id`, `trading_pair`, `price`, `amount`, `side`, `timestamp` |
-| `OrderBookUpdate` | `trading_pair`, `bids: list[tuple[Decimal, Decimal]]`, `asks: list[tuple[Decimal, Decimal]]`, `is_snapshot: bool` |
+| Primitive | Fields | Purpose |
+|-----------|--------|---------|
+| `OpenOrder` | `client_order_id`, `exchange_order_id`, `trading_pair`, `order_type`, `side`, `amount`, `price`, `filled_amount`, `status` | Order state from REST queries |
+| `TradeEvent` | `exchange_trade_id`, `trading_pair`, `price`, `amount`, `side`, `timestamp` | Individual fill / public trade |
+| `OrderBookSnapshot` | `trading_pair`, `bids: list[tuple[Decimal, Decimal]]`, `asks: list[tuple[Decimal, Decimal]]`, `timestamp` | Full book from REST `get_orderbook()` |
+| `OrderBookUpdate` | `trading_pair`, `bids: list[tuple[Decimal, Decimal]]`, `asks: list[tuple[Decimal, Decimal]]`, `update_id: int` | Incremental delta from WS stream |
+
+`OrderBookSnapshot` represents a complete order book (returned by REST endpoints).
+`OrderBookUpdate` represents an incremental change (delivered by WebSocket).
+
+**Connector responsibility for orderbook initialization:** Many exchanges send a
+structurally different initial snapshot message on WS subscribe. The connector must
+absorb this complexity — `subscribe_orderbook()` callbacks receive **only**
+`OrderBookUpdate` deltas, never snapshots. Connectors follow this sequence internally:
+
+1. Subscribe to WS channel
+2. Receive and buffer the exchange's initial snapshot/delta messages
+3. Call `get_orderbook()` (REST) to obtain a clean `OrderBookSnapshot` baseline
+4. Reconcile buffered WS messages against the snapshot's sequence point
+5. Begin delivering `OrderBookUpdate` deltas to the callback
+
+Consumers that need the full book should call `get_orderbook()` once at startup,
+then apply the stream of `OrderBookUpdate` deltas. This keeps the callback type
+unambiguous and pushes exchange-specific snapshot handling into the connector.
 
 All frozen Pydantic v2 models.
 
@@ -212,8 +248,10 @@ class FillEvent(BaseModel):
 ### `converters.py` example
 
 ```python
-def fill_to_trade_event(fill: FillEvent) -> TradeEvent:
+def fill_to_trade_event(fill: FillEvent, trading_pair: str) -> TradeEvent:
     return TradeEvent(
+        exchange_trade_id=fill.trade_id,
+        trading_pair=trading_pair,
         price=Decimal(fill.price),
         amount=Decimal(fill.size),
         side=TradeType.BUY if fill.side == "BUY" else TradeType.SELL,
@@ -264,9 +302,11 @@ Three tiers, no live exchange required for the first two:
 
 ### Tier 3 — Contract (gateway conformance)
 
-- Shared test suite in `hb-market-connector/tests/contract/`
-- Parameterized against the `ExchangeGateway` protocol
-- Run against each connector's gateway using mock transport + fixtures
+- **Test base** in `hb-market-connector`: `GatewayContractTestBase` — abstract pytest class
+  parameterized against the `ExchangeGateway` protocol, providing all shared assertions
+- **Test execution** in each connector package: e.g. `hb-coinbase-connector/tests/test_contract.py`
+  subclasses `GatewayContractTestBase`, injects `CoinbaseGateway` with mock transport + fixtures
+- Each connector's CI runs its own contract tests — no cross-package test dependency at runtime
 - Validates: "does this connector correctly satisfy the gateway protocol?"
 
 ### Fixture Convention
@@ -295,17 +335,128 @@ to the sync `MarketAccessProtocol` / `MarketDataProtocol` that strategy-framewor
 
 ```python
 class LiveMarketAccess:
-    """Adapts ExchangeGateway → MarketAccessProtocol for strategy-framework consumers."""
+    """Adapts ExchangeGateway → MarketAccessProtocol for strategy-framework consumers.
 
-    def __init__(self, gateway: ExchangeGateway, trading_pair: str, loop: asyncio.AbstractEventLoop) -> None:
+    Uses run_coroutine_threadsafe because the event loop is always running
+    in the hummingbot process — run_until_complete would raise RuntimeError.
+    """
+
+    DEFAULT_TIMEOUT: float = 30.0  # seconds — prevents indefinite blocking
+
+    def __init__(
+        self,
+        gateway: ExchangeGateway,
+        trading_pair: str,
+        loop: asyncio.AbstractEventLoop,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> None:
         self._gateway = gateway
         self._trading_pair = trading_pair
         self._loop = loop
+        self._timeout = timeout
 
     def place_order(self, order_type, side, amount, price) -> str:
-        return self._loop.run_until_complete(
-            self._gateway.place_order(self._trading_pair, order_type, side, amount, price)
+        future = asyncio.run_coroutine_threadsafe(
+            self._gateway.place_order(self._trading_pair, order_type, side, amount, price),
+            self._loop,
         )
+        return future.result(timeout=self._timeout)
+```
+
+---
+
+## Error Handling
+
+Gateway methods raise typed exceptions from a shared hierarchy in `hb-market-connector`:
+
+| Exception | When |
+|-----------|------|
+| `GatewayError` | Base class for all gateway errors |
+| `GatewayNotStartedError(GatewayError)` | Method called before `start()` |
+| `OrderRejectedError(GatewayError)` | Exchange rejects an order (insufficient funds, invalid params) |
+| `OrderNotFoundError(GatewayError)` | Cancel/query for an unknown order |
+| `RateLimitError(GatewayError)` | REST transport exhausted its rate-limit budget |
+| `SubscriptionLimitError(GatewayError)` | WS subscription cap exceeded for the exchange |
+| `AuthenticationError(GatewayError)` | Invalid or expired credentials |
+| `ExchangeUnavailableError(GatewayError)` | Exchange is down or returning 5xx |
+
+Connectors catch exchange-specific HTTP codes and re-raise the appropriate typed exception.
+Consumers never need to handle raw HTTP errors. Transport-level retries (for transient 5xx,
+timeouts) are handled inside `RestConnectorBase` before surfacing to the gateway layer.
+
+---
+
+## Trading Pair Format
+
+Gateway methods accept trading pairs in **hummingbot canonical format**: `BASE-QUOTE`
+(e.g. `BTC-USDT`, `ETH-USD`). Each connector's `converters.py` provides two functions:
+
+```python
+def to_exchange_pair(hb_pair: str) -> str:
+    """'BTC-USDT' → 'BTC_USDT' (exchange-specific format)"""
+
+def from_exchange_pair(exchange_pair: str) -> str:
+    """'BTC_USDT' → 'BTC-USDT' (hummingbot canonical format)"""
+```
+
+The gateway protocol always uses `BASE-QUOTE`. Conversion happens at the boundary —
+inside connector mixins, before sending to / after receiving from the exchange API.
+Connectors may also maintain a symbol map fetched at startup for non-trivial mappings.
+
+---
+
+## Connection Lifecycle
+
+```
+create gateway ──→ start() ──→ ready ──→ stop()
+                     │                      │
+                     │ connects transport,   │ cancels subscriptions,
+                     │ fetches symbol map,   │ closes WS, drains REST
+                     │ starts WS keep-alive  │
+```
+
+The lifecycle methods (`start()`, `stop()`, `ready`) are defined on the
+[`ExchangeGateway` protocol](#exchangegateway) above.
+
+Calling any gateway method before `start()` raises `GatewayNotStartedError`.
+`stop()` is idempotent.
+
+### Subscription Lifetime
+
+Subscription handles (the `AsyncContextManager` returned by `subscribe_*()`) **survive
+WS reconnects**. The connector's WS layer automatically re-subscribes to the exchange
+on reconnect and resumes delivering callbacks through the same handle. Consumers may
+observe a brief gap in updates during reconnection but never need to re-subscribe.
+
+If the WS connection drops and the connector re-establishes it, the connector must:
+
+1. Re-subscribe to all active channels on the exchange
+2. Re-synchronize orderbook state (snapshot + reconcile, per the orderbook contract above)
+3. Resume delivering `OrderBookUpdate` / `TradeEvent` callbacks
+
+Exiting the `async with` block (or calling the context manager's `__aexit__`) cancels
+the subscription and stops callbacks. `stop()` implicitly exits all active subscriptions.
+
+---
+
+## Rate Limiting Ownership
+
+Rate limiting is owned by the **transport layer**, not the gateway or consumer:
+
+- `RestConnectorBase` implements a per-endpoint token bucket with configurable rates
+- Each connector declares rate limits in `endpoints.py` alongside URL constants
+- The gateway layer and consumer layer are rate-limit-unaware — they issue requests
+  and receive responses (or `RateLimitError` if the budget is exhausted)
+- WS connections are not rate-limited at the transport level; exchanges enforce
+  subscription limits, which the connector validates during `subscribe_*()` calls
+  (raises `SubscriptionLimitError` if the exchange cap would be exceeded)
+
+```python
+# endpoints.py (per connector)
+ENDPOINTS = {
+    "place_order": Endpoint("/api/v3/orders", method="POST", weight=1, limit=10, window=1.0),
+    "get_orderbook": Endpoint("/api/v3/book", method="GET", weight=5, limit=10, window=1.0),
+}
 ```
 
 ---

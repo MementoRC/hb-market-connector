@@ -11,9 +11,11 @@ to satisfy the ExchangeGateway protocol's subscribe_* return types.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from market_connector.exceptions import GatewayNotStartedError, SubscriptionLimitError
 
@@ -99,13 +101,8 @@ class WsConnectorBase:
         """Register a subscription. Raises SubscriptionLimitError if cap exceeded."""
         if not self._connected:
             raise GatewayNotStartedError("WebSocket not connected")
-        if (
-            self._max_subscriptions > 0
-            and len(self._subscriptions) >= self._max_subscriptions
-        ):
-            raise SubscriptionLimitError(
-                f"subscription limit reached: {self._max_subscriptions}"
-            )
+        if self._max_subscriptions > 0 and len(self._subscriptions) >= self._max_subscriptions:
+            raise SubscriptionLimitError(f"subscription limit reached: {self._max_subscriptions}")
         sub = Subscription(channel=channel, callback=callback, _owner=self)
         self._subscriptions[channel] = sub
         return sub
@@ -155,7 +152,5 @@ class WsConnectorBase:
         while self._connected:
             await asyncio.sleep(self._heartbeat_interval)
             if self._ws and self._connected:
-                try:
+                with contextlib.suppress(Exception):
                     await self._ws.ping()
-                except Exception:
-                    pass  # reconnect loop handles recovery

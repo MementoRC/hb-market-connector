@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -12,8 +13,10 @@ from market_connector.exceptions import (
     ExchangeUnavailableError,
     RateLimitError,
 )
-from market_connector.transport.endpoint import Endpoint
 from market_connector.transport.token_bucket import TokenBucket
+
+if TYPE_CHECKING:
+    from market_connector.transport.endpoint import Endpoint
 
 AuthCallable = Callable[[dict[str, str]], Awaitable[dict[str, str]]]
 

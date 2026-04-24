@@ -5,21 +5,16 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
 import pytest
 
-from market_connector.primitives import (
-    OpenOrder,
-    OrderBookSnapshot,
-    OrderBookUpdate,
-    OrderType,
-    TradeEvent,
-    TradeType,
-)
 from market_connector.exceptions import GatewayNotStartedError
-from market_connector.protocols import ExchangeGateway
+from market_connector.primitives import OpenOrder, OrderBookSnapshot
 from market_connector.testing.contract import GatewayContractTestBase
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 
 class _InMemoryGateway:
@@ -81,12 +76,14 @@ class _InMemoryGateway:
         @asynccontextmanager
         async def _ctx() -> AsyncIterator[None]:
             yield
+
         return _ctx()
 
     async def subscribe_trades(self, trading_pair, callback):
         @asynccontextmanager
         async def _ctx() -> AsyncIterator[None]:
             yield
+
         return _ctx()
 
 

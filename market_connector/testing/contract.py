@@ -8,11 +8,14 @@ the ExchangeGateway protocol.
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import pytest
 
-from market_connector.primitives import OpenOrder, OrderBookSnapshot
-from market_connector.protocols import ExchangeGateway
+from market_connector.primitives import OrderBookSnapshot
+
+if TYPE_CHECKING:
+    from market_connector.protocols import ExchangeGateway
 
 
 class GatewayContractTestBase:
@@ -54,7 +57,9 @@ class GatewayContractTestBase:
 
     @pytest.mark.asyncio
     async def test_method_before_start_raises(
-        self, gateway: ExchangeGateway, trading_pair: str,
+        self,
+        gateway: ExchangeGateway,
+        trading_pair: str,
     ) -> None:
         """Any gateway method called before start() must raise GatewayNotStartedError."""
         from market_connector.exceptions import GatewayNotStartedError
@@ -66,29 +71,43 @@ class GatewayContractTestBase:
 
     @pytest.mark.asyncio
     async def test_place_order_returns_client_id(
-        self, gateway: ExchangeGateway, trading_pair: str,
+        self,
+        gateway: ExchangeGateway,
+        trading_pair: str,
     ) -> None:
         await gateway.start()
         order_id = await gateway.place_order(
-            trading_pair, "LIMIT", "BUY", Decimal("1.0"), Decimal("50000"),
+            trading_pair,
+            "LIMIT",
+            "BUY",
+            Decimal("1.0"),
+            Decimal("50000"),
         )
         assert isinstance(order_id, str)
         assert len(order_id) > 0
 
     @pytest.mark.asyncio
     async def test_cancel_order_returns_bool(
-        self, gateway: ExchangeGateway, trading_pair: str,
+        self,
+        gateway: ExchangeGateway,
+        trading_pair: str,
     ) -> None:
         await gateway.start()
         order_id = await gateway.place_order(
-            trading_pair, "LIMIT", "BUY", Decimal("1.0"), Decimal("50000"),
+            trading_pair,
+            "LIMIT",
+            "BUY",
+            Decimal("1.0"),
+            Decimal("50000"),
         )
         result = await gateway.cancel_order(trading_pair, order_id)
         assert isinstance(result, bool)
 
     @pytest.mark.asyncio
     async def test_get_open_orders_returns_list(
-        self, gateway: ExchangeGateway, trading_pair: str,
+        self,
+        gateway: ExchangeGateway,
+        trading_pair: str,
     ) -> None:
         await gateway.start()
         orders = await gateway.get_open_orders(trading_pair)
@@ -96,7 +115,8 @@ class GatewayContractTestBase:
 
     @pytest.mark.asyncio
     async def test_get_balance_returns_decimal(
-        self, gateway: ExchangeGateway,
+        self,
+        gateway: ExchangeGateway,
     ) -> None:
         await gateway.start()
         balance = await gateway.get_balance("USDT")
@@ -106,7 +126,9 @@ class GatewayContractTestBase:
 
     @pytest.mark.asyncio
     async def test_get_orderbook_returns_snapshot(
-        self, gateway: ExchangeGateway, trading_pair: str,
+        self,
+        gateway: ExchangeGateway,
+        trading_pair: str,
     ) -> None:
         await gateway.start()
         book = await gateway.get_orderbook(trading_pair)
@@ -115,7 +137,9 @@ class GatewayContractTestBase:
 
     @pytest.mark.asyncio
     async def test_get_mid_price_returns_decimal(
-        self, gateway: ExchangeGateway, trading_pair: str,
+        self,
+        gateway: ExchangeGateway,
+        trading_pair: str,
     ) -> None:
         await gateway.start()
         price = await gateway.get_mid_price(trading_pair)
@@ -124,7 +148,9 @@ class GatewayContractTestBase:
 
     @pytest.mark.asyncio
     async def test_get_candles_returns_list(
-        self, gateway: ExchangeGateway, trading_pair: str,
+        self,
+        gateway: ExchangeGateway,
+        trading_pair: str,
     ) -> None:
         await gateway.start()
         candles = await gateway.get_candles(trading_pair, "1m", 10)

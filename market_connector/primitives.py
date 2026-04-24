@@ -6,7 +6,7 @@ schemas to these types in their converters.py module.
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal  # noqa: TCH003
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict

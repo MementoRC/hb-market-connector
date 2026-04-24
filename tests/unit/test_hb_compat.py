@@ -23,7 +23,10 @@ def mock_gateway() -> AsyncMock:
     gw.get_balance = AsyncMock(return_value=Decimal("10000"))
     gw.get_orderbook = AsyncMock(
         return_value=OrderBookSnapshot(
-            trading_pair="BTC-USDT", bids=[], asks=[], timestamp=0.0,
+            trading_pair="BTC-USDT",
+            bids=[],
+            asks=[],
+            timestamp=0.0,
         )
     )
     return gw

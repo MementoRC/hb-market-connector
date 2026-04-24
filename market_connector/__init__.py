@@ -5,6 +5,7 @@ Public API:
     - Primitives: OpenOrder, TradeEvent, OrderBookSnapshot, OrderBookUpdate,
                   OrderType, TradeType
     - Exceptions: GatewayError and subclasses
+    - Adapters: LiveMarketAccess (hummingbot ConnectorBase adapter)
 """
 
 from market_connector.__about__ import __version__
@@ -18,6 +19,7 @@ from market_connector.exceptions import (
     RateLimitError,
     SubscriptionLimitError,
 )
+from market_connector.live_market_access import LiveMarketAccess
 from market_connector.primitives import (
     OpenOrder,
     OrderBookSnapshot,
@@ -50,4 +52,6 @@ __all__ = [
     "OrderRejectedError",
     "RateLimitError",
     "SubscriptionLimitError",
+    # Adapters
+    "LiveMarketAccess",
 ]

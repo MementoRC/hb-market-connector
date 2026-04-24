@@ -8,12 +8,14 @@ dynamic = ["version"]
 description = "Live market connector adapter for Hummingbot — implements MarketAccessProtocol + TradingRulesProtocol from hb-strategy-framework"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
-dependencies = []
+dependencies = [
+    "pydantic>=2",
+    "httpx>=0.27",
+    "websockets>=12.0",
+]
 
 [project.optional-dependencies]
-hummingbot = [
-    "hb-strategy-framework>=0.1.0",
-]
+hummingbot = ["hb-strategy-framework>=0.1.0"]
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",

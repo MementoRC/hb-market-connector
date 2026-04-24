@@ -91,9 +91,9 @@ jobs:
 
     - name: Run secrets detection
       run: |
-        detect-secrets scan --baseline .secrets.baseline --all-files
-        if [ $? -ne 0 ]; then
-          echo "::error::New secrets detected! Please review and update .secrets.baseline if legitimate."
+        detect-secrets scan --all-files > secrets-results.json
+        if detect-secrets audit --report --json secrets-results.json 2>/dev/null | grep -q '"is_secret": true'; then
+          echo "::error::Potential secrets detected! Please review secrets-results.json"
           exit 1
         fi
 

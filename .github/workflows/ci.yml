@@ -11,14 +11,14 @@ permissions: read-all
 
 jobs:
   ci:
-    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@36ff8bbc290576c8defc5e212faa3c14b6363899 # v2.9.2
+    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@1a9f71d1ebbd0b1393938a05434af724276934e1 # v2.9.5
     permissions:
       contents: write
       id-token: write
       pull-requests: write
       actions: read
       checks: write
-      security-events: write
+    secrets: inherit
     with:
       pixi-environment: "ci"
       python-versions: '["3.10", "3.11", "3.12"]'

@@ -1,0 +1,26 @@
+{
+  "order_id": "order-001",
+  "client_order_id": "client-001",
+  "product_id": "BTC-USD",
+  "user_id": "user-001",
+  "side": "BUY",
+  "status": "OPEN",
+  "time_in_force": "GOOD_UNTIL_CANCELLED",
+  "created_time": "2026-04-24T12:00:00Z",
+  "filled_size": "0",
+  "average_filled_price": "0",
+  "total_fees": "0",
+  "filled_value": "0",
+  "completion_percentage": "0",
+  "number_of_fills": "0",
+  "pending_cancel": false,
+  "settled": false,
+  "order_type": "LIMIT",
+  "order_configuration": {
+    "limit_limit_gtc": {
+      "base_size": "0.01",
+      "limit_price": "50000.00",
+      "post_only": false
+    }
+  }
+}

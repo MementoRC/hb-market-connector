@@ -1,0 +1,11 @@
+{
+  "uuid": "00000000-0000-0000-0000-000000000001",
+  "name": "BTC Wallet",
+  "currency": "BTC",
+  "available_balance": {"value": "0.5", "currency": "BTC"},
+  "hold": {"value": "0.1", "currency": "BTC"},
+  "default": true,
+  "active": true,
+  "ready": true,
+  "type": "ACCOUNT_TYPE_CRYPTO"
+}

@@ -27,6 +27,10 @@ bandit = ">=1.8.0"
 pre-commit = ">=2.15.0"
 hatchling = ">=1.18"
 
+[feature.coinbase.dependencies]
+pyjwt = ">=2.8"
+cryptography = ">=41"
+
 [feature.py310.dependencies]
 python = "3.10.*"
 [feature.py311.dependencies]
@@ -36,11 +40,12 @@ python = "3.12.*"
 
 [environments]
 default = { features = ["dev"], solve-group = "default" }
-ci = { features = ["ci", "dev"], solve-group = "default" }
-quality-ci = { features = ["ci", "dev"], solve-group = "default" }
-py310 = { features = ["py310", "dev"], solve-group = "py310" }
-py311 = { features = ["py311", "dev"], solve-group = "py311" }
-py312 = { features = ["py312", "dev"], solve-group = "py312" }
+ci = { features = ["ci", "coinbase", "dev"], solve-group = "default" }
+quality-ci = { features = ["ci", "coinbase", "dev"], solve-group = "default" }
+coinbase = { features = ["coinbase", "dev"], solve-group = "default" }
+py310 = { features = ["py310", "coinbase", "dev"], solve-group = "py310" }
+py311 = { features = ["py311", "coinbase", "dev"], solve-group = "py311" }
+py312 = { features = ["py312", "coinbase", "dev"], solve-group = "py312" }
 
 [tasks]
 test = "pytest tests/"

@@ -1,0 +1,22 @@
+{
+  "product_id": "BTC-USD",
+  "base_currency_id": "BTC",
+  "quote_currency_id": "USD",
+  "base_increment": "0.00000001",
+  "quote_increment": "0.01",
+  "base_min_size": "0.001",
+  "base_max_size": "10000",
+  "quote_min_size": "1",
+  "quote_max_size": "1000000",
+  "status": "online",
+  "trading_disabled": false,
+  "is_disabled": false,
+  "new": false,
+  "cancel_only": false,
+  "limit_only": false,
+  "post_only": false,
+  "auction_mode": false,
+  "product_type": "SPOT",
+  "price": "50000.00",
+  "volume_24h": "12345.67"
+}

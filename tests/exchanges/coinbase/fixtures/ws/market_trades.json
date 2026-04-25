@@ -1,0 +1,19 @@
+{
+  "channel": "market_trades",
+  "client_id": "",
+  "timestamp": "2026-04-24T12:00:00Z",
+  "sequence_num": 1,
+  "events": [{
+    "type": "update",
+    "trades": [
+      {
+        "trade_id": "trade-001",
+        "product_id": "BTC-USD",
+        "price": "50000.00",
+        "size": "0.01",
+        "side": "BUY",
+        "time": "2026-04-24T12:00:00Z"
+      }
+    ]
+  }]
+}

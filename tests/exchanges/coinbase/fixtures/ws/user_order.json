@@ -1,0 +1,24 @@
+{
+  "channel": "user",
+  "client_id": "",
+  "timestamp": "2026-04-24T12:00:00Z",
+  "sequence_num": 5,
+  "events": [{
+    "type": "snapshot",
+    "orders": [
+      {
+        "order_id": "order-001",
+        "client_order_id": "client-001",
+        "product_id": "BTC-USD",
+        "cumulative_quantity": "0.005",
+        "leaves_quantity": "0.005",
+        "avg_price": "50000.00",
+        "total_fees": "0.025",
+        "status": "OPEN",
+        "creation_time": "2026-04-24T11:00:00Z",
+        "order_side": "BUY",
+        "order_type": "LIMIT"
+      }
+    ]
+  }]
+}

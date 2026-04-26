@@ -26,8 +26,8 @@ class MarketDataMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
         product_id = to_exchange_pair(trading_pair)
-        raw = await self._rest.request("product_book", params={"product_id": product_id})
-        return to_orderbook_snapshot(OrderBookResponse.model_validate(raw))
+        response = await self._rest.request("product_book", params={"product_id": product_id})
+        return to_orderbook_snapshot(OrderBookResponse.model_validate(response.raw))
 
     async def get_mid_price(self: HasRest & HasReady, trading_pair: str) -> Decimal:  # type: ignore[valid-type]
         book = await self.get_orderbook(trading_pair)
@@ -46,9 +46,9 @@ class MarketDataMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
         product_id = to_exchange_pair(trading_pair)
-        raw = await self._rest.request(
+        response = await self._rest.request(
             "candles",
             params={"product_id": product_id, "granularity": interval, "limit": limit},
         )
-        response = GetProductCandlesResponse.model_validate(raw)
-        return [to_candle(c) for c in response.candles]
+        parsed = GetProductCandlesResponse.model_validate(response.raw)
+        return [to_candle(c) for c in parsed.candles]

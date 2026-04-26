@@ -33,9 +33,7 @@ class TestDecodeBody:
         assert _decode_body(r) == {"foo": "bar"}
 
     def test_application_json_with_charset_parses(self) -> None:
-        r = _make_response(
-            b'{"foo": "bar"}', content_type="application/json; charset=utf-8"
-        )
+        r = _make_response(b'{"foo": "bar"}', content_type="application/json; charset=utf-8")
         assert _decode_body(r) == {"foo": "bar"}
 
     def test_application_json_list_returns_list(self) -> None:
@@ -52,9 +50,7 @@ class TestDecodeBody:
         assert _decode_body(r) is None
 
     def test_application_problem_json_returns_none(self) -> None:
-        r = _make_response(
-            b'{"detail": "x"}', content_type="application/problem+json"
-        )
+        r = _make_response(b'{"detail": "x"}', content_type="application/problem+json")
         assert _decode_body(r) is None
 
     def test_application_json_patch_json_returns_none(self) -> None:

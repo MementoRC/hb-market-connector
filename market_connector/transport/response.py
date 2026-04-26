@@ -83,7 +83,9 @@ class Response(Generic[T]):
             self._cached = self._response_type.model_validate(self.raw)
         except ValidationError as e:
             raise MarketConnectorParseError(
-                endpoint=self._endpoint, raw=self.raw, original=e,
+                endpoint=self._endpoint,
+                raw=self.raw,
+                original=e,
             ) from e
         # Type checkers cannot narrow `_Unset` out of the `_cached` union here.
         return self._cached  # type: ignore[return-value]

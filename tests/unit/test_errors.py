@@ -22,9 +22,7 @@ def _make_validation_error() -> ValidationError:
 
 class TestMarketConnectorParseError:
     def test_inherits_gateway_error(self) -> None:
-        err = MarketConnectorParseError(
-            endpoint="x", raw={}, original=_make_validation_error()
-        )
+        err = MarketConnectorParseError(endpoint="x", raw={}, original=_make_validation_error())
         assert isinstance(err, GatewayError)
 
     def test_attrs_populated(self) -> None:

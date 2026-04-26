@@ -1,5 +1,7 @@
 """Tests for Endpoint model."""
 
+from pydantic import BaseModel
+
 from market_connector.transport.endpoint import Endpoint
 
 
@@ -23,3 +25,14 @@ class TestEndpoint:
             raise AssertionError("Should be frozen")
         except AttributeError:
             pass
+
+    def test_endpoint_response_type_defaults_to_none(self) -> None:
+        ep = Endpoint(path="/v1/x", method="GET")
+        assert ep.response_type is None
+
+    def test_endpoint_response_type_accepts_pydantic_model(self) -> None:
+        class Schema(BaseModel):
+            foo: str
+
+        ep = Endpoint(path="/v1/x", method="GET", response_type=Schema)
+        assert ep.response_type is Schema

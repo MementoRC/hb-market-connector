@@ -7,6 +7,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
+
+from market_connector.transport.response import Response
+
 
 class MockRestClient:
     """Mock REST client matching RestConnectorBase.request() interface.
@@ -16,7 +20,8 @@ class MockRestClient:
     Usage:
         mock = MockRestClient()
         mock.register("get_book", {"bids": [], "asks": []})
-        result = await mock.request("get_book")
+        result = await mock.request("get_book")  # Returns Response
+        raw = result.raw  # Access the registered dict
     """
 
     def __init__(self) -> None:
@@ -31,10 +36,16 @@ class MockRestClient:
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> Response:
         if endpoint_name not in self._responses:
             raise KeyError(f"No mock registered for endpoint '{endpoint_name}'")
-        return self._responses[endpoint_name]
+        raw_payload = self._responses[endpoint_name]
+        return Response(
+            raw=raw_payload,
+            status_code=200,
+            headers=httpx.Headers(),
+            _endpoint=endpoint_name,
+        )
 
 
 class MockWsClient:

@@ -1,10 +1,12 @@
 # tests/unit/test_rest_base.py
 from __future__ import annotations
 
+import json as _json
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from pydantic import BaseModel
 
 from market_connector.exceptions import (
     AuthenticationError,
@@ -12,6 +14,7 @@ from market_connector.exceptions import (
     RateLimitError,
 )
 from market_connector.transport.endpoint import Endpoint
+from market_connector.transport.response import Response
 from market_connector.transport.rest_base import RestConnectorBase
 
 
@@ -23,6 +26,22 @@ def endpoints() -> dict[str, Endpoint]:
     }
 
 
+def _make_httpx_response(
+    *,
+    status_code: int = 200,
+    json_body: dict | list | None = None,
+    raw_content: bytes | None = None,
+    content_type: str | None = "application/json",
+) -> httpx.Response:
+    headers = {}
+    if content_type is not None:
+        headers["content-type"] = content_type
+    if raw_content is not None:
+        return httpx.Response(status_code=status_code, content=raw_content, headers=headers)
+    body = b"" if json_body is None else _json.dumps(json_body).encode()
+    return httpx.Response(status_code=status_code, content=body, headers=headers)
+
+
 class TestRestConnectorBase:
     @pytest.mark.asyncio
     async def test_successful_request(self, endpoints: dict) -> None:
@@ -31,7 +50,8 @@ class TestRestConnectorBase:
         with patch.object(client, "_client") as mock_client:
             mock_client.request = AsyncMock(return_value=mock_response)
             result = await client.request("get_book")
-        assert result == {"status": "ok"}
+        assert isinstance(result, Response)
+        assert result.raw == {"status": "ok"}
 
     @pytest.mark.asyncio
     async def test_rate_limit_enforced(self, endpoints: dict) -> None:
@@ -74,7 +94,8 @@ class TestRestConnectorBase:
         with patch.object(client, "_client") as mock_client:
             mock_client.request = AsyncMock(side_effect=[fail, success])
             result = await client.request("get_book")
-        assert result == {"status": "ok"}
+        assert isinstance(result, Response)
+        assert result.raw == {"status": "ok"}
         assert mock_client.request.call_count == 2
 
     @pytest.mark.asyncio
@@ -99,3 +120,69 @@ class TestRestConnectorBase:
             mock_client.request = AsyncMock(return_value=mock_response)
             with pytest.raises(AuthenticationError):
                 await client.request("get_book")
+
+
+class _AccountsResp(BaseModel):
+    accounts: list[dict]
+
+
+class TestRequestReturnsResponse:
+    @pytest.mark.asyncio
+    async def test_returns_response_with_endpoint_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        endpoints = {"list_accounts": Endpoint(path="/v1/accounts", method="GET")}
+        client = RestConnectorBase(base_url="https://api.test", endpoints=endpoints)
+        fake = _make_httpx_response(json_body={"accounts": []})
+        monkeypatch.setattr(client._client, "request", AsyncMock(return_value=fake))
+
+        result = await client.request("list_accounts")
+        assert isinstance(result, Response)
+        assert result._endpoint == "list_accounts"
+        assert result._response_type is None
+        assert result.raw == {"accounts": []}
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_returns_response_with_response_type(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        endpoints = {
+            "list_accounts": Endpoint(
+                path="/v1/accounts", method="GET", response_type=_AccountsResp
+            )
+        }
+        client = RestConnectorBase(base_url="https://api.test", endpoints=endpoints)
+        fake = _make_httpx_response(json_body={"accounts": [{"id": "x"}]})
+        monkeypatch.setattr(client._client, "request", AsyncMock(return_value=fake))
+
+        result = await client.request("list_accounts")
+        parsed = result.parse()
+        assert isinstance(parsed, _AccountsResp)
+        assert parsed.accounts == [{"id": "x"}]
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_status_code_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        endpoints = {"x": Endpoint(path="/x", method="GET")}
+        client = RestConnectorBase(base_url="https://api.test", endpoints=endpoints)
+        fake = _make_httpx_response(status_code=200, json_body={"x": 1})
+        monkeypatch.setattr(client._client, "request", AsyncMock(return_value=fake))
+
+        result = await client.request("x")
+        assert result.status_code == 200
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_204_returns_response_with_none_raw(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        endpoints = {"cancel": Endpoint(path="/cancel", method="DELETE")}
+        client = RestConnectorBase(base_url="https://api.test", endpoints=endpoints)
+        fake = _make_httpx_response(status_code=204, raw_content=b"", content_type=None)
+        monkeypatch.setattr(client._client, "request", AsyncMock(return_value=fake))
+
+        result = await client.request("cancel")
+        assert result.raw is None
+        assert result.status_code == 204
+        await client.close()

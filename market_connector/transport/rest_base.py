@@ -13,12 +13,34 @@ from market_connector.exceptions import (
     ExchangeUnavailableError,
     RateLimitError,
 )
+from market_connector.transport.response import Response
 from market_connector.transport.token_bucket import TokenBucket
 
 if TYPE_CHECKING:
     from market_connector.transport.endpoint import Endpoint
 
 AuthCallable = Callable[[dict[str, str]], Awaitable[dict[str, str]]]
+
+
+def _decode_body(raw_response: httpx.Response) -> dict | list | None:
+    """Safely decode a JSON body. Returns None for empty (204) or non-JSON responses.
+
+    Content-encoding (gzip, deflate, br) is handled transparently by httpx
+    before this function is called — `raw_response.content` is already the
+    decompressed bytes.
+
+    Strict media-type matching: `application/json` only. Variants like
+    `application/problem+json` (RFC 7807) and `application/json-patch+json`
+    are intentionally NOT parsed by default — extend this function or add a
+    per-endpoint decoder if/when a connector needs them.
+    """
+    if not raw_response.content:
+        return None
+    # Strip parameters (`; charset=utf-8`) before exact match.
+    base_type = raw_response.headers.get("content-type", "").split(";")[0].strip().lower()
+    if base_type != "application/json":
+        return None
+    return raw_response.json()
 
 
 class RestConnectorBase:
@@ -60,8 +82,14 @@ class RestConnectorBase:
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Execute a rate-limited, retried request."""
+    ) -> Response:
+        """Execute a rate-limited, retried request.
+
+        Returns a typed Response wrapper with `raw` body decoded by `_decode_body`,
+        `status_code`, `headers`, `_endpoint` name, and `_response_type` from the
+        endpoint registry.  Call `.parse()` on the result to obtain a validated
+        Pydantic model when `response_type` is configured on the endpoint.
+        """
         endpoint = self._endpoints[endpoint_name]
         bucket = self._get_bucket(endpoint)
         await bucket.acquire(weight=endpoint.weight)
@@ -97,7 +125,14 @@ class RestConnectorBase:
                     continue
                 raise last_error
 
-            return response.json()
+            body = _decode_body(response)
+            return Response(
+                raw=body,
+                status_code=response.status_code,
+                headers=response.headers,
+                _endpoint=endpoint_name,
+                _response_type=endpoint.response_type,
+            )
 
         raise last_error or ExchangeUnavailableError("request failed")
 

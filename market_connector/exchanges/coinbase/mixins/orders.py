@@ -65,10 +65,10 @@ class OrdersMixin:
             "side": side if isinstance(side, str) else side.value,
             "order_configuration": cfg,
         }
-        raw = await self._rest.request("place_order", data=body)
-        response = CreateOrderResponse.model_validate(raw)
-        if not response.success:
-            raise OrderRejectedError(response.failure_reason or "order rejected")
+        response = await self._rest.request("place_order", data=body)
+        parsed = CreateOrderResponse.model_validate(response.raw)
+        if not parsed.success:
+            raise OrderRejectedError(parsed.failure_reason or "order rejected")
         return client_id
 
     async def cancel_order(
@@ -82,9 +82,9 @@ class OrdersMixin:
         # This implementation accepts client_order_id directly for the simple case where the
         # caller tracks the mapping. A follow-up should add a client→exchange ID map
         # populated by place_order and consumed here.
-        raw = await self._rest.request("cancel_orders", data={"order_ids": [client_order_id]})
-        response = CancelOrdersResponse.model_validate(raw)
-        return all(r.success for r in response.results)
+        response = await self._rest.request("cancel_orders", data={"order_ids": [client_order_id]})
+        parsed = CancelOrdersResponse.model_validate(response.raw)
+        return all(r.success for r in parsed.results)
 
     async def get_open_orders(
         self: HasRest & HasReady,  # type: ignore[valid-type]
@@ -93,9 +93,9 @@ class OrdersMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
         product_id = to_exchange_pair(trading_pair)
-        raw = await self._rest.request(
+        response = await self._rest.request(
             "list_orders",
             params={"product_id": product_id, "order_status": "OPEN"},
         )
-        response = ListOrdersResponse.model_validate(raw)
-        return [to_open_order(o) for o in response.orders]
+        parsed = ListOrdersResponse.model_validate(response.raw)
+        return [to_open_order(o) for o in parsed.orders]

@@ -51,7 +51,8 @@ async def capture_rest(gw: CoinbaseGateway, endpoint: str, output_dir: Path) -> 
         "order_status": {"order_status": "OPEN"},
     }
     try:
-        raw = await gw._rest.request(endpoint, params=params_map.get(endpoint, {}))
+        response = await gw._rest.request(endpoint, params=params_map.get(endpoint, {}))
+        raw = response.raw
         sanitized = sanitize(raw)
         output_file = output_dir / f"{endpoint}.json"
         output_file.write_text(json.dumps(sanitized, indent=2))

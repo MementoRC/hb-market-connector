@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from market_connector.exchanges.coinbase.tools.fixture_recorder import capture_rest, main, sanitize
+from market_connector.transport.response import Response
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -82,7 +83,7 @@ def mock_gateway() -> MagicMock:
 
 async def test_capture_rest_writes_sanitized_json(tmp_path: Path, mock_gateway: MagicMock) -> None:
     mock_gateway._rest.request = AsyncMock(
-        return_value={"iso": "2024-01-01T00:00:00Z", "api_key": "should-be-redacted"}
+        return_value=Response(raw={"iso": "2024-01-01T00:00:00Z", "api_key": "should-be-redacted"})
     )
 
     await capture_rest(mock_gateway, "server_time", tmp_path)
@@ -97,7 +98,7 @@ async def test_capture_rest_writes_sanitized_json(tmp_path: Path, mock_gateway: 
 async def test_capture_rest_uses_correct_params_for_product_book(
     tmp_path: Path, mock_gateway: MagicMock
 ) -> None:
-    mock_gateway._rest.request = AsyncMock(return_value={"bids": [], "asks": []})
+    mock_gateway._rest.request = AsyncMock(return_value=Response(raw={"bids": [], "asks": []}))
 
     await capture_rest(mock_gateway, "product_book", tmp_path)
 
@@ -109,7 +110,7 @@ async def test_capture_rest_uses_correct_params_for_product_book(
 async def test_capture_rest_uses_correct_params_for_candles(
     tmp_path: Path, mock_gateway: MagicMock
 ) -> None:
-    mock_gateway._rest.request = AsyncMock(return_value={"candles": []})
+    mock_gateway._rest.request = AsyncMock(return_value=Response(raw={"candles": []}))
 
     await capture_rest(mock_gateway, "candles", tmp_path)
 
@@ -121,7 +122,7 @@ async def test_capture_rest_uses_correct_params_for_candles(
 async def test_capture_rest_uses_empty_params_for_unknown_endpoint(
     tmp_path: Path, mock_gateway: MagicMock
 ) -> None:
-    mock_gateway._rest.request = AsyncMock(return_value={"data": "x"})
+    mock_gateway._rest.request = AsyncMock(return_value=Response(raw={"data": "x"}))
 
     await capture_rest(mock_gateway, "unknown_endpoint", tmp_path)
 
@@ -145,7 +146,7 @@ async def test_capture_rest_handles_exception_gracefully(
 async def test_capture_rest_creates_output_file_named_by_endpoint(
     tmp_path: Path, mock_gateway: MagicMock
 ) -> None:
-    mock_gateway._rest.request = AsyncMock(return_value={"accounts": []})
+    mock_gateway._rest.request = AsyncMock(return_value=Response(raw={"accounts": []}))
 
     await capture_rest(mock_gateway, "accounts", tmp_path)
 
@@ -176,7 +177,7 @@ async def test_main_creates_rest_dir_and_captures_endpoints(tmp_path: Path) -> N
         gw_instance = MagicMock()
         gw_instance.start = AsyncMock()
         gw_instance.stop = AsyncMock()
-        gw_instance._rest.request = AsyncMock(return_value=fake_response)
+        gw_instance._rest.request = AsyncMock(return_value=Response(raw=fake_response))
         mock_gw_cls.return_value = gw_instance
         mock_cfg_cls.return_value = MagicMock()
 

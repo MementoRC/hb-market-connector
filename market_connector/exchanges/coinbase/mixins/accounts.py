@@ -19,9 +19,9 @@ class AccountsMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        raw = await self._rest.request("accounts")
-        response = ListAccountsResponse.model_validate(raw)
-        for account in response.accounts:
+        response = await self._rest.request("accounts")
+        parsed = ListAccountsResponse.model_validate(response.raw)
+        for account in parsed.accounts:
             if account.currency == currency:
                 return to_balance(account)
         return Decimal("0")

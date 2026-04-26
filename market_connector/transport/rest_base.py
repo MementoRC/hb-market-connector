@@ -21,6 +21,27 @@ if TYPE_CHECKING:
 AuthCallable = Callable[[dict[str, str]], Awaitable[dict[str, str]]]
 
 
+def _decode_body(raw_response: httpx.Response) -> dict | list | None:
+    """Safely decode a JSON body. Returns None for empty (204) or non-JSON responses.
+
+    Content-encoding (gzip, deflate, br) is handled transparently by httpx
+    before this function is called — `raw_response.content` is already the
+    decompressed bytes.
+
+    Strict media-type matching: `application/json` only. Variants like
+    `application/problem+json` (RFC 7807) and `application/json-patch+json`
+    are intentionally NOT parsed by default — extend this function or add a
+    per-endpoint decoder if/when a connector needs them.
+    """
+    if not raw_response.content:
+        return None
+    # Strip parameters (`; charset=utf-8`) before exact match.
+    base_type = raw_response.headers.get("content-type", "").split(";")[0].strip().lower()
+    if base_type != "application/json":
+        return None
+    return raw_response.json()
+
+
 class RestConnectorBase:
     """Rate-limited REST client with retry and optional auth.
 

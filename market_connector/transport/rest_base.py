@@ -13,6 +13,7 @@ from market_connector.exceptions import (
     ExchangeUnavailableError,
     RateLimitError,
 )
+from market_connector.transport.response import Response
 from market_connector.transport.token_bucket import TokenBucket
 
 if TYPE_CHECKING:
@@ -81,8 +82,14 @@ class RestConnectorBase:
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Execute a rate-limited, retried request."""
+    ) -> Response:
+        """Execute a rate-limited, retried request.
+
+        Returns a typed Response wrapper with `raw` body decoded by `_decode_body`,
+        `status_code`, `headers`, `_endpoint` name, and `_response_type` from the
+        endpoint registry.  Call `.parse()` on the result to obtain a validated
+        Pydantic model when `response_type` is configured on the endpoint.
+        """
         endpoint = self._endpoints[endpoint_name]
         bucket = self._get_bucket(endpoint)
         await bucket.acquire(weight=endpoint.weight)
@@ -118,7 +125,14 @@ class RestConnectorBase:
                     continue
                 raise last_error
 
-            return response.json()
+            body = _decode_body(response)
+            return Response(
+                raw=body,
+                status_code=response.status_code,
+                headers=response.headers,
+                _endpoint=endpoint_name,
+                _response_type=endpoint.response_type,
+            )
 
         raise last_error or ExchangeUnavailableError("request failed")
 

@@ -9,6 +9,7 @@ import pytest
 from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.coinbase.coinbase_gateway import CoinbaseGateway
 from market_connector.exchanges.coinbase.config import CoinbaseConfig
+from market_connector.transport.response import Response
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ async def test_stop_is_idempotent(cfg: CoinbaseConfig) -> None:
 async def test_start_sets_ready(cfg: CoinbaseConfig) -> None:
     gw = CoinbaseGateway(cfg)
     with (
-        patch.object(gw._rest, "request", new=AsyncMock(return_value={})),
+        patch.object(gw._rest, "request", new=AsyncMock(return_value=Response(raw={}))),
         patch.object(gw._ws, "connect", new=AsyncMock()),
     ):
         await gw.start()
@@ -52,7 +53,7 @@ async def test_start_idempotent(cfg: CoinbaseConfig) -> None:
     gw = CoinbaseGateway(cfg)
     mock_connect = AsyncMock()
     with (
-        patch.object(gw._rest, "request", new=AsyncMock(return_value={})),
+        patch.object(gw._rest, "request", new=AsyncMock(return_value=Response(raw={}))),
         patch.object(gw._ws, "connect", new=mock_connect),
     ):
         await gw.start()
@@ -65,7 +66,7 @@ async def test_stop_after_start(cfg: CoinbaseConfig) -> None:
     """stop() after start() must disconnect WS and close REST, then ready=False."""
     gw = CoinbaseGateway(cfg)
     with (
-        patch.object(gw._rest, "request", new=AsyncMock(return_value={})),
+        patch.object(gw._rest, "request", new=AsyncMock(return_value=Response(raw={}))),
         patch.object(gw._ws, "connect", new=AsyncMock()),
     ):
         await gw.start()

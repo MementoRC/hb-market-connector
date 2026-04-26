@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import ValidationError
+if TYPE_CHECKING:
+    from pydantic import ValidationError
 
 from market_connector.exceptions import GatewayError
 
@@ -37,9 +38,7 @@ class MarketConnectorParseError(GatewayError):
                 if len(errs) > _MAX_ERRORS_IN_MSG
                 else ""
             )
-            super().__init__(
-                f"{endpoint}: {len(errs)} validation error(s); {head}{suffix}"
-            )
+            super().__init__(f"{endpoint}: {len(errs)} validation error(s); {head}{suffix}")
         else:
             # Pydantic guarantees ValidationError carries >=1 error — defensive only.
             super().__init__(f"{endpoint}: validation error (no details from pydantic)")

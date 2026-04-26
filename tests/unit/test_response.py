@@ -4,8 +4,8 @@ import httpx
 import pytest
 from pydantic import BaseModel, RootModel
 
-from market_connector.transport.response import Response
 from market_connector.transport.errors import MarketConnectorParseError
+from market_connector.transport.response import Response
 
 
 class _Schema(BaseModel):

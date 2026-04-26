@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 
 @dataclass(frozen=True)

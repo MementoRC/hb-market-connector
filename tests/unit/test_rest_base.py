@@ -128,7 +128,9 @@ class _AccountsResp(BaseModel):
 
 class TestRequestReturnsResponse:
     @pytest.mark.asyncio
-    async def test_returns_response_with_endpoint_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_response_with_endpoint_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         endpoints = {"list_accounts": Endpoint(path="/v1/accounts", method="GET")}
         client = RestConnectorBase(base_url="https://api.test", endpoints=endpoints)
         fake = _make_httpx_response(json_body={"accounts": []})
@@ -142,7 +144,9 @@ class TestRequestReturnsResponse:
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_returns_response_with_response_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_response_with_response_type(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         endpoints = {
             "list_accounts": Endpoint(
                 path="/v1/accounts", method="GET", response_type=_AccountsResp
@@ -170,7 +174,9 @@ class TestRequestReturnsResponse:
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_204_returns_response_with_none_raw(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_204_returns_response_with_none_raw(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         endpoints = {"cancel": Endpoint(path="/cancel", method="DELETE")}
         client = RestConnectorBase(base_url="https://api.test", endpoints=endpoints)
         fake = _make_httpx_response(status_code=204, raw_content=b"", content_type=None)

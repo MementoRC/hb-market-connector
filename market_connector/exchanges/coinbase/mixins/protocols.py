@@ -30,4 +30,5 @@ class HasConfig(Protocol):  # pragma: no cover
 
 class HasReady(Protocol):  # pragma: no cover
     @property
-    def ready(self) -> bool: ...
+    def ready(self) -> bool:
+        return False

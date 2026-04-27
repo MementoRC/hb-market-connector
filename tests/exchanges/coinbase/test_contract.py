@@ -13,7 +13,6 @@ from market_connector.testing.mock_transport import MockRestClient, MockWsClient
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-    from typing import Any
 
 
 class _MockRestWithLifecycle(MockRestClient):
@@ -105,7 +104,7 @@ def _build_mock_rest() -> _MockRestWithLifecycle:
 
 class TestCoinbaseGatewayContract(GatewayContractTestBase):
     @pytest.fixture
-    def gateway(self, monkeypatch: Any) -> Generator[CoinbaseGateway, None, None]:
+    def gateway(self) -> Generator[CoinbaseGateway, None, None]:
         cfg = CoinbaseConfig(api_key="k", secret_key="raw_hmac_secret", sandbox=True)
         gw = CoinbaseGateway(cfg)
         gw._rest = _build_mock_rest()

@@ -57,6 +57,18 @@ class TestIdentityMapper:
         mapper: SymbolMapper = IdentityMapper()
         assert mapper.to_exchange_pair("BTC-USD") == "BTC-USD"
 
+    def test_to_exchange_pair_invalid_raises(self) -> None:
+        """Input without exactly one dash raises UnknownPairError."""
+        mapper = IdentityMapper()
+        with pytest.raises(UnknownPairError):
+            mapper.to_exchange_pair("BTCUSD")
+
+    def test_from_exchange_pair_invalid_raises(self) -> None:
+        """Exchange pair that splits into != 2 parts raises UnknownPairError."""
+        mapper = IdentityMapper(separator="_")
+        with pytest.raises(UnknownPairError):
+            mapper.from_exchange_pair("BTCUSD")
+
 
 # ---------------------------------------------------------------------------
 # 2. TestRuleBasedMapperNoSeparator
@@ -116,6 +128,18 @@ class TestRuleBasedMapperKrakenAliases:
     def test_round_trip_aliases(self) -> None:
         pair = "BTC-USD"
         assert self.mapper.from_exchange_pair(self.mapper.to_exchange_pair(pair)) == pair
+
+    def test_to_exchange_asset_with_alias(self) -> None:
+        assert self.mapper.to_exchange_asset("BTC") == "XBT"
+
+    def test_to_exchange_asset_no_alias(self) -> None:
+        assert self.mapper.to_exchange_asset("ETH") == "ETH"
+
+    def test_from_exchange_asset_with_alias(self) -> None:
+        assert self.mapper.from_exchange_asset("XBT") == "BTC"
+
+    def test_from_exchange_asset_no_alias(self) -> None:
+        assert self.mapper.from_exchange_asset("ETH") == "ETH"
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +203,20 @@ class TestFallbackLookup:
         mapper = RuleBasedMapper(separator="-")
         with pytest.raises(UnknownPairError):
             mapper.from_exchange_pair("BTCUSD")
+
+    def test_fallback_returns_malformed_pair_raises(self) -> None:
+        """Fallback returning a string that doesn't split into 2 parts raises UnknownPairError."""
+        fallback = MagicMock(return_value="ONLYONE")
+        mapper = RuleBasedMapper(separator="-", fallback_lookup=fallback)
+        with pytest.raises(UnknownPairError):
+            mapper.from_exchange_pair("BTCUSD")
+
+    def test_no_sep_empty_base_falls_through_to_fallback(self) -> None:
+        """When quote suffix matches the entire string, base is empty → fallback/raise."""
+        mapper = RuleBasedMapper(separator=None, known_quote_assets=("USDT",))
+        # "USDT" endswith "USDT" but base would be "" → must raise
+        with pytest.raises(UnknownPairError):
+            mapper.from_exchange_pair("USDT")
 
 
 # ---------------------------------------------------------------------------

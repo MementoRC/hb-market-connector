@@ -1,4 +1,4 @@
-"""DeclarativeRestSigner — HMAC dispatch for HmacSigningSpec (spec §6.3, §6.7).
+"""DeclarativeRestSigner — HMAC, JWT, and Bearer dispatch (spec §6.3–6.5, §6.7).
 
 Reads every sub-spec field and applies:
   - KeyMaterialSpec.encoding  decode (raw_str / base64 / hex / PEM)
@@ -11,7 +11,9 @@ Reads every sub-spec field and applies:
   - SignatureRecipe.output_encoding  (hex / base64)
   - AuthOutputSpec  headers / body_inject / qs_inject injection
 
-JWT and Bearer dispatch are stubs (Task 5).
+JWT mode (Task 5): uses PyJWT to produce ES256/RS256 tokens from PEM keys.
+Bearer mode (Task 5): uses httpx AsyncClient to POST to a token endpoint with
+  an in-memory TTL cache to avoid redundant fetches.
 
 Monotonic counter scope: per-signer-instance asyncio.Lock + integer counter.
 Rationale: spec §6.7 says "framework-owned process-wide atomic counter"; a
@@ -27,11 +29,16 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import os
 import time
 import urllib.parse
 import uuid
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
+
+import httpx
+import jwt as pyjwt
 
 from market_connector.auth.spec import (
     BearerTokenSpec,
@@ -39,6 +46,7 @@ from market_connector.auth.spec import (
     BodyHashSpec,
     HashAlgorithm,
     HmacSigningSpec,
+    JwtAlgorithm,
     JwtSigningSpec,
     KeyEncoding,
     NoncePlacement,
@@ -188,7 +196,8 @@ def _expand_output_template(template: str, ctx: dict[str, str]) -> str:
 
 
 class DeclarativeRestSigner:
-    """Async signer that interprets HmacSigningSpec to produce signed Requests.
+    """Async signer that interprets HmacSigningSpec / JwtSigningSpec /
+    BearerTokenSpec to produce signed Requests.
 
     Usage::
 
@@ -201,7 +210,7 @@ class DeclarativeRestSigner:
 
     def __init__(
         self,
-        spec: HmacSigningSpec,
+        spec: HmacSigningSpec | JwtSigningSpec | BearerTokenSpec,
         *,
         api_key: str,
         secret_bytes: bytes,
@@ -223,6 +232,9 @@ class DeclarativeRestSigner:
         # Per-instance monotonic counter (see module docstring for scope rationale)
         self._counter_lock = asyncio.Lock()
         self._counter = 0
+        # Bearer token cache
+        self._bearer_token: str | None = None
+        self._bearer_fetched_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Factory
@@ -239,11 +251,7 @@ class DeclarativeRestSigner:
         _fixed_nonce: str | None = None,
         **extra_creds: str,
     ) -> DeclarativeRestSigner:
-        """Dispatch on spec type and construct the appropriate signer.
-
-        Only HmacSigningSpec is implemented here (Task 4).
-        JwtSigningSpec and BearerTokenSpec are stubs (Task 5).
-        """
+        """Dispatch on spec type and construct the appropriate signer."""
         if isinstance(spec, HmacSigningSpec):
             return cls._from_hmac_spec(
                 spec,
@@ -254,14 +262,18 @@ class DeclarativeRestSigner:
                 **extra_creds,
             )
         if isinstance(spec, JwtSigningSpec):
-            raise NotImplementedError(
-                "JwtSigningSpec dispatch is not yet implemented. "
-                "TODO(Task 5): add JWT signing logic."
+            return cls._from_jwt_spec(
+                spec,
+                api_key=api_key,
+                secret=secret,
+                **extra_creds,
             )
         if isinstance(spec, BearerTokenSpec):
-            raise NotImplementedError(
-                "BearerTokenSpec dispatch is not yet implemented. "
-                "TODO(Task 5): add Bearer token signing logic."
+            return cls._from_bearer_spec(
+                spec,
+                api_key=api_key,
+                secret=secret,
+                **extra_creds,
             )
         raise TypeError(f"Unknown spec type: {type(spec)!r}")
 
@@ -300,6 +312,42 @@ class DeclarativeRestSigner:
             _fixed_nonce=_fixed_nonce,
         )
 
+    @classmethod
+    def _from_jwt_spec(
+        cls,
+        spec: JwtSigningSpec,
+        *,
+        api_key: str,
+        secret: str,
+        **extra_creds: str,
+    ) -> DeclarativeRestSigner:
+        # secret is a PEM string; store as bytes for PyJWT
+        secret_bytes = secret.encode("utf-8") if isinstance(secret, str) else secret
+        return cls(
+            spec,
+            api_key=api_key,
+            secret_bytes=secret_bytes,
+            extra_creds=dict(extra_creds),
+            derived_creds={},
+        )
+
+    @classmethod
+    def _from_bearer_spec(
+        cls,
+        spec: BearerTokenSpec,
+        *,
+        api_key: str,
+        secret: str,
+        **extra_creds: str,
+    ) -> DeclarativeRestSigner:
+        return cls(
+            spec,
+            api_key=api_key,
+            secret_bytes=secret.encode("utf-8"),
+            extra_creds=dict(extra_creds),
+            derived_creds={},
+        )
+
     # ------------------------------------------------------------------
     # Public async interface
     # ------------------------------------------------------------------
@@ -308,6 +356,10 @@ class DeclarativeRestSigner:
         """Return a new signed Request without mutating the input."""
         if isinstance(self._spec, HmacSigningSpec):
             return await self._sign_hmac(request)
+        if isinstance(self._spec, JwtSigningSpec):
+            return await self._sign_jwt(request)
+        if isinstance(self._spec, BearerTokenSpec):
+            return await self._sign_bearer(request)
         raise TypeError(f"Unexpected spec type: {type(self._spec)!r}")
 
     # ------------------------------------------------------------------
@@ -502,3 +554,130 @@ class DeclarativeRestSigner:
         """
         input_str = body_hash_spec.input_template.format_map(ctx)
         return _hash_bytes(body_hash_spec.algorithm, input_str.encode("utf-8"))
+
+    # ------------------------------------------------------------------
+    # JWT signing pipeline (spec §6.4)
+    # ------------------------------------------------------------------
+
+    async def _sign_jwt(self, request: Request) -> Request:
+        spec = self._spec
+        assert isinstance(spec, JwtSigningSpec)
+
+        now = int(time.time())
+        parsed = urlparse(request.url)
+        host = parsed.netloc  # e.g. "api.coinbase.com"
+
+        # Build substitution context for claims and jwt_headers templates
+        rand_hex = os.urandom(16).hex()
+        ctx: dict[str, Any] = {
+            "api_key": self._api_key,
+            "method": request.method.upper(),
+            "host": host,
+            "path": request.path,
+            "rand_hex": rand_hex,
+        }
+
+        # Expand claims — values may be plain strings or lists; only expand strings
+        claims: dict[str, Any] = {}
+        for k, v in spec.claims.items():
+            if isinstance(v, str):
+                claims[k] = v.format_map(ctx)
+            else:
+                claims[k] = v
+
+        # Add standard time claims
+        claims["nbf"] = now
+        claims["exp"] = now + spec.lifetime_seconds
+
+        # Expand jwt_headers (additional headers beyond alg/typ)
+        additional_headers: dict[str, str] = {
+            k: v.format_map(ctx) for k, v in spec.jwt_headers.items()
+        }
+
+        # Select PyJWT algorithm string
+        algorithm = "ES256" if spec.algorithm is JwtAlgorithm.ES256 else "RS256"
+
+        encoded_jwt: str = pyjwt.encode(
+            claims,
+            self._secret_bytes,
+            algorithm=algorithm,
+            headers=additional_headers,
+        )
+
+        # Build auth header value
+        jwt_ctx = dict(ctx)
+        jwt_ctx["jwt"] = encoded_jwt
+        auth_value = spec.auth_header_template.format_map(jwt_ctx)
+
+        new_headers = dict(request.headers)
+        new_headers[spec.auth_header_name] = auth_value
+
+        return replace(request, headers=new_headers)
+
+    # ------------------------------------------------------------------
+    # Bearer token signing pipeline (spec §6.5)
+    # ------------------------------------------------------------------
+
+    async def _sign_bearer(self, request: Request) -> Request:
+        spec = self._spec
+        assert isinstance(spec, BearerTokenSpec)
+
+        token = await self._get_bearer_token(spec)
+
+        token_ctx: dict[str, str] = {"token": token}
+        auth_value = spec.auth_header_template.format_map(token_ctx)
+
+        new_headers = dict(request.headers)
+        new_headers[spec.auth_header_name] = auth_value
+
+        return replace(request, headers=new_headers)
+
+    async def _get_bearer_token(self, spec: BearerTokenSpec) -> str:
+        """Return a cached token, fetching a fresh one when cache is stale."""
+        now = time.time()
+        if (
+            self._bearer_token is not None
+            and (now - self._bearer_fetched_at) < spec.token_ttl_seconds
+        ):
+            return self._bearer_token
+
+        # Build POST body from template
+        cred_ctx: dict[str, str] = {
+            "api_key": self._api_key,
+            "secret": self._secret_bytes.decode("utf-8"),
+        }
+        cred_ctx.update(self._extra_creds)
+        body: dict[str, str] = {
+            k: v.format_map(cred_ctx)
+            for k, v in spec.token_request_template.items()
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(spec.token_endpoint, json=body)
+            response.raise_for_status()
+            data = response.json()
+
+        # Resolve nested response path (e.g. "data.token" or "result.access_token")
+        token = _resolve_nested_path(data, spec.token_response_path)
+
+        self._bearer_token = token
+        self._bearer_fetched_at = time.time()
+        return token
+
+
+# ---------------------------------------------------------------------------
+# Helper: resolve dot-separated path in a nested dict
+# ---------------------------------------------------------------------------
+
+
+def _resolve_nested_path(data: dict[str, Any], path: str) -> str:
+    """Walk a dot-separated path through a nested dict and return the leaf value.
+
+    E.g. ``_resolve_nested_path({"data": {"token": "x"}}, "data.token")`` → ``"x"``.
+    Raises ``KeyError`` if any segment is missing.
+    """
+    parts = path.split(".")
+    node: Any = data
+    for part in parts:
+        node = node[part]
+    return str(node)

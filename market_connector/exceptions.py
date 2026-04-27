@@ -35,3 +35,11 @@ class AuthenticationError(GatewayError):
 
 class ExchangeUnavailableError(GatewayError):
     """The exchange is down, returning 5xx, or otherwise unreachable."""
+
+
+class UnknownPairError(GatewayError):
+    """A pair string could not be mapped (no matching rule or fallback)."""
+
+    def __init__(self, pair: str) -> None:
+        super().__init__(f"Cannot map pair: {pair!r}")
+        self.pair = pair

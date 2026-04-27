@@ -1,13 +1,12 @@
 """Context-aware REST transport for Coinbase Advanced Trade API.
 
-The gateway framework's RestConnectorBase accepts an AuthCallable with
-signature ``(headers: dict) -> headers`` — it does not pass request context
-(method, path, body) to the auth hook.  Coinbase JWT/HMAC signing requires
-that context, so CoinbaseRestClient overrides ``request()`` to:
+RestConnectorBase's Signer protocol receives only headers — it does not pass
+request context (method, path, body) to the signer hook.  Coinbase JWT/HMAC
+signing requires that context, so CoinbaseRestClient overrides ``request()`` to:
 
 1. Resolve path parameters (e.g. ``{order_id}``) from ``params``.
 2. Build a full request-context dict and invoke the Coinbase signer.
-3. Merge the returned auth headers and delegate to the parent with ``auth=None``
+3. Merge the returned auth headers and delegate to the parent with ``signer=None``
    (bypassing the parent's context-free hook).
 """
 
@@ -43,7 +42,7 @@ class CoinbaseRestClient(RestConnectorBase):
         super().__init__(
             base_url,
             endpoints=endpoints,
-            auth=None,  # framework auth bypassed; signing handled in request() below
+            signer=None,  # framework signer bypassed; signing handled in request() below
             max_retries=max_retries,
             retry_delay=retry_delay,
         )

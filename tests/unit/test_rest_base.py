@@ -8,6 +8,7 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
+from market_connector.auth.protocols import Request, Signer
 from market_connector.exceptions import (
     AuthenticationError,
     ExchangeUnavailableError,
@@ -16,6 +17,54 @@ from market_connector.exceptions import (
 from market_connector.transport.endpoint import Endpoint
 from market_connector.transport.response import Response
 from market_connector.transport.rest_base import RestConnectorBase
+
+# ---------------------------------------------------------------------------
+# Minimal fake Signer implementations for unit tests
+# ---------------------------------------------------------------------------
+
+
+class _PassthroughSigner:
+    """Signer that returns the Request unchanged."""
+
+    async def sign(self, request: Request) -> Request:
+        return request
+
+
+class _HeaderInjectingSigner:
+    """Signer that adds an Authorization header."""
+
+    async def sign(self, request: Request) -> Request:
+        new_headers = {**request.headers, "Authorization": "Bearer tok"}
+        return Request(
+            method=request.method,
+            url=request.url,
+            path=request.path,
+            headers=new_headers,
+            body=request.body,
+            qs_params=request.qs_params,
+        )
+
+
+class _QsAndBodyMutatingSigner:
+    """Signer that adds a qs param and body."""
+
+    async def sign(self, request: Request) -> Request:
+        new_qs = {**request.qs_params, "sig": "abc123"}
+        return Request(
+            method=request.method,
+            url=request.url,
+            path=request.path,
+            headers=request.headers,
+            body=b"signed-body",
+            qs_params=new_qs,
+        )
+
+
+class _RaisingSigner:
+    """Signer that raises RuntimeError unconditionally."""
+
+    async def sign(self, request: Request) -> Request:
+        raise RuntimeError("signing failed")
 
 
 @pytest.fixture
@@ -66,13 +115,24 @@ class TestRestConnectorBase:
                 await client.request("place_order")
 
     @pytest.mark.asyncio
-    async def test_auth_hook_called(self, endpoints: dict) -> None:
-        # AsyncMock wraps the sync lambda — calls it synchronously, returns result as awaited value
-        auth_fn = AsyncMock(side_effect=lambda headers: {**headers, "Authorization": "Bearer tok"})
+    async def test_signer_constructor_accepted(self, endpoints: dict) -> None:
+        """RestConnectorBase accepts a Signer Protocol instance."""
+        signer = _PassthroughSigner()
         client = RestConnectorBase(
             base_url="https://api.example.com",
             endpoints=endpoints,
-            auth=auth_fn,
+            signer=signer,
+        )
+        assert isinstance(signer, Signer)
+        assert client._signer is signer
+
+    @pytest.mark.asyncio
+    async def test_signer_sign_called_and_headers_applied(self, endpoints: dict) -> None:
+        """signer.sign() is called per-request and injected headers reach httpx."""
+        client = RestConnectorBase(
+            base_url="https://api.example.com",
+            endpoints=endpoints,
+            signer=_HeaderInjectingSigner(),
         )
         mock_response = httpx.Response(200, json={})
         with patch.object(client, "_client") as mock_client:
@@ -80,6 +140,36 @@ class TestRestConnectorBase:
             await client.request("get_book")
             call_kwargs = mock_client.request.call_args
             assert "Authorization" in call_kwargs.kwargs.get("headers", {})
+            assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer tok"
+
+    @pytest.mark.asyncio
+    async def test_signer_mutates_qs_params(self, endpoints: dict) -> None:
+        """Mutated qs_params from signer.sign() reach the httpx params kwarg."""
+        client = RestConnectorBase(
+            base_url="https://api.example.com",
+            endpoints=endpoints,
+            signer=_QsAndBodyMutatingSigner(),
+        )
+        mock_response = httpx.Response(200, json={})
+        with patch.object(client, "_client") as mock_client:
+            mock_client.request = AsyncMock(return_value=mock_response)
+            await client.request("get_book", params={"symbol": "BTC-USD"})
+            call_kwargs = mock_client.request.call_args
+            sent_params = call_kwargs.kwargs.get("params")
+            assert sent_params is not None
+            assert sent_params.get("sig") == "abc123"
+            assert sent_params.get("symbol") == "BTC-USD"
+
+    @pytest.mark.asyncio
+    async def test_signer_error_propagates(self, endpoints: dict) -> None:
+        """If signer.sign() raises, the exception propagates to the caller."""
+        client = RestConnectorBase(
+            base_url="https://api.example.com",
+            endpoints=endpoints,
+            signer=_RaisingSigner(),
+        )
+        with patch.object(client, "_client"), pytest.raises(RuntimeError, match="signing failed"):
+            await client.request("get_book")
 
     @pytest.mark.asyncio
     async def test_retry_on_5xx(self, endpoints: dict) -> None:

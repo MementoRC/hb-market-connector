@@ -1,13 +1,13 @@
-"""Rate-limited async REST client with retry and auth injection."""
+"""Rate-limited async REST client with retry and Signer-based auth injection."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from market_connector.auth.protocols import Request, Signer
 from market_connector.exceptions import (
     AuthenticationError,
     ExchangeUnavailableError,
@@ -18,8 +18,6 @@ from market_connector.transport.token_bucket import TokenBucket
 
 if TYPE_CHECKING:
     from market_connector.transport.endpoint import Endpoint
-
-AuthCallable = Callable[[dict[str, str]], Awaitable[dict[str, str]]]
 
 
 def _decode_body(raw_response: httpx.Response) -> dict | list | None:
@@ -44,12 +42,12 @@ def _decode_body(raw_response: httpx.Response) -> dict | list | None:
 
 
 class RestConnectorBase:
-    """Rate-limited REST client with retry and optional auth.
+    """Rate-limited REST client with retry and optional Signer-based auth.
 
     Args:
         base_url: Base URL for the exchange API.
         endpoints: Mapping of endpoint name -> Endpoint config.
-        auth: Async callable that injects auth headers.
+        signer: Signer Protocol instance that signs a Request envelope.
         max_retries: Number of retries on transient (5xx) errors.
         retry_delay: Initial delay between retries in seconds (doubles each retry).
     """
@@ -58,13 +56,13 @@ class RestConnectorBase:
         self,
         base_url: str,
         endpoints: dict[str, Endpoint] | None = None,
-        auth: AuthCallable | None = None,
+        signer: Signer | None = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._endpoints = endpoints or {}
-        self._auth = auth
+        self._signer = signer
         self._max_retries = max_retries
         self._retry_delay = retry_delay
         self._client = httpx.AsyncClient()
@@ -94,20 +92,27 @@ class RestConnectorBase:
         bucket = self._get_bucket(endpoint)
         await bucket.acquire(weight=endpoint.weight)
 
-        req_headers = dict(headers or {})
-        if self._auth is not None:
-            req_headers = await self._auth(req_headers)
-
         url = f"{self._base_url}{endpoint.path}"
+        req = Request(
+            method=endpoint.method,
+            url=url,
+            path=endpoint.path,
+            headers=dict(headers or {}),
+            body=None,
+            qs_params=dict(params or {}),
+        )
+        if self._signer is not None:
+            req = await self._signer.sign(req)
+
         last_error: Exception | None = None
 
         for attempt in range(self._max_retries + 1):
             response = await self._client.request(
-                method=endpoint.method,
+                method=req.method,
                 url=url,
-                params=params,
+                params=req.qs_params or None,
                 json=data,
-                headers=req_headers,
+                headers=req.headers,
             )
 
             if response.status_code == 401:

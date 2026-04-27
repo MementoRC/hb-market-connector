@@ -25,7 +25,6 @@ from market_connector.auth.spec import (
     TimestampFormat,
     TimestampSpec,
     TimestampUnit,
-    TokenInjectStrategy,
 )
 
 # ---------------------------------------------------------------------------
@@ -501,10 +500,6 @@ class TestEnumCompleteness:
     def test_jwt_algorithm_values(self) -> None:
         names = {e.name for e in JwtAlgorithm}
         assert names == {"ES256", "RS256"}
-
-    def test_token_inject_strategy_defined(self) -> None:
-        # TokenInjectStrategy must be importable; exact values not mandated by §6.5
-        assert TokenInjectStrategy is not None
 
 
 # ---------------------------------------------------------------------------

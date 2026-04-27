@@ -100,13 +100,6 @@ class JwtAlgorithm(Enum):
     RS256 = "RS256"
 
 
-class TokenInjectStrategy(Enum):
-    """How the bearer token is injected into subsequent requests."""
-
-    HEADER = "HEADER"
-    QUERY_PARAM = "QUERY_PARAM"
-
-
 # ---------------------------------------------------------------------------
 # HMAC sub-specs
 # ---------------------------------------------------------------------------

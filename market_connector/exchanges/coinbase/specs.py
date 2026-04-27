@@ -75,9 +75,9 @@ COINBASE_JWT_SPEC: JwtSigningSpec = JwtSigningSpec(
         "sub": "{api_key}",
         "iss": "cdp",
         "aud": ["cdp"],
-        "nbf": "{ts}",
-        # exp is intentionally omitted: the JWT signer derives exp = nbf + lifetime_seconds
-        # and injects it directly — no substitution variable needed here.
+        # nbf and exp are injected by the JWT signer as integer timestamps (now, now+lifetime).
+        # Do not include them here as format templates — DeclarativeRestSigner._sign_jwt
+        # overwrites claims["nbf"] and adds claims["exp"] directly after claim expansion.
         "uri": "{method} {host}{path}",  # omitted for WS calls (signer checks context)
     },
     lifetime_seconds=120,

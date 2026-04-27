@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from market_connector.exchanges.coinbase.auth import coinbase_auth
+from market_connector.exchanges.coinbase.factory import coinbase_signer_factory
 from market_connector.exchanges.coinbase.endpoints import ENDPOINT_REGISTRY
 from market_connector.exchanges.coinbase.mixins.accounts import AccountsMixin
 from market_connector.exchanges.coinbase.mixins.market_data import MarketDataMixin
@@ -22,7 +22,7 @@ class CoinbaseGateway(OrdersMixin, AccountsMixin, MarketDataMixin, Subscriptions
 
     def __init__(self, config: CoinbaseConfig) -> None:
         self._config = config
-        self._auth = coinbase_auth(config.api_key, config.secret_key)
+        self._auth = coinbase_signer_factory(config.api_key, config.secret_key)
         self._endpoints = ENDPOINT_REGISTRY
         self._rest = CoinbaseRestClient(
             base_url=config.base_url,

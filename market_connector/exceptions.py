@@ -25,6 +25,10 @@ class RateLimitError(GatewayError):
     """REST transport exhausted its rate-limit budget for an endpoint."""
 
 
+class RateLimitExceeded(GatewayError):  # noqa: N818
+    """A rate-limit pool was exhausted and the request cannot proceed."""
+
+
 class SubscriptionLimitError(GatewayError):
     """WebSocket subscription cap exceeded for the exchange."""
 

@@ -5,14 +5,13 @@ from market_connector.transport.errors import MarketConnectorParseError
 from market_connector.transport.response import Response
 from market_connector.transport.rest_base import RestConnectorBase
 from market_connector.transport.token_bucket import TokenBucket
-from market_connector.transport.ws_base import Subscription, WsConnectorBase
+from market_connector.transport.ws_base import WsConnectorBase
 
 __all__ = [
     "Endpoint",
     "MarketConnectorParseError",
     "Response",
     "RestConnectorBase",
-    "Subscription",
     "TokenBucket",
     "WsConnectorBase",
 ]

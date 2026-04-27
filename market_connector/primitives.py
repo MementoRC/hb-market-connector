@@ -7,12 +7,19 @@ schemas to these types in their converters.py module.
 from __future__ import annotations
 
 from decimal import Decimal  # noqa: TCH003
-from enum import StrEnum
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict
 
 
-class OrderType(StrEnum):
+class _StrValue(str, Enum):
+    """Base mixin: str(member) returns the value, matching StrEnum behaviour on Python 3.11+."""
+
+    def __str__(self) -> str:
+        return str.__str__(self)
+
+
+class OrderType(_StrValue):
     """Order type for gateway execution methods."""
 
     LIMIT = "LIMIT"
@@ -20,7 +27,7 @@ class OrderType(StrEnum):
     LIMIT_MAKER = "LIMIT_MAKER"
 
 
-class TradeType(StrEnum):
+class TradeType(_StrValue):
     """Trade side for gateway execution methods."""
 
     BUY = "BUY"

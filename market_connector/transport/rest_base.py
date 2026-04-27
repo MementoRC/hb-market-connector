@@ -38,7 +38,7 @@ def _decode_body(raw_response: httpx.Response) -> dict | list | None:
     base_type = raw_response.headers.get("content-type", "").split(";")[0].strip().lower()
     if base_type != "application/json":
         return None
-    return raw_response.json()
+    return raw_response.json()  # type: ignore[no-any-return]
 
 
 class RestConnectorBase:

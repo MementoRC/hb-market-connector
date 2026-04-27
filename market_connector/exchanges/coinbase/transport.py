@@ -1,28 +1,25 @@
 """Context-aware REST transport for Coinbase Advanced Trade API.
 
-RestConnectorBase's Signer protocol receives only headers — it does not pass
-request context (method, path, body) to the signer hook.  Coinbase JWT/HMAC
-signing requires that context, so CoinbaseRestClient overrides ``request()`` to:
+RestConnectorBase's base signer receives a Request and returns a signed Request.
+CoinbaseRestClient overrides ``request()`` to:
 
 1. Resolve path parameters (e.g. ``{order_id}``) from ``params``.
-2. Build a full request-context dict and invoke the Coinbase signer.
+2. Build a Request envelope and invoke the Coinbase framework Signer.
 3. Merge the returned auth headers and delegate to the parent with ``signer=None``
-   (bypassing the parent's context-free hook).
+   (bypassing the parent's default signing hook).
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from market_connector.auth.protocols import Request, Signer
 from market_connector.transport.rest_base import RestConnectorBase
 
 if TYPE_CHECKING:
     from market_connector.transport.endpoint import Endpoint
-
-# Signer takes full request context and returns auth headers to merge.
-Signer = Callable[[dict[str, Any]], Awaitable[dict[str, str]]]
+    from market_connector.transport.response import Response
 
 
 class CoinbaseRestClient(RestConnectorBase):
@@ -46,7 +43,7 @@ class CoinbaseRestClient(RestConnectorBase):
             max_retries=max_retries,
             retry_delay=retry_delay,
         )
-        self._signer = signer
+        self._coinbase_signer = signer
 
     async def request(
         self,
@@ -54,7 +51,7 @@ class CoinbaseRestClient(RestConnectorBase):
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> Response:
         """Sign and execute a rate-limited, retried request.
 
         Path parameters present in ``params`` (e.g. ``order_id`` for a path
@@ -69,20 +66,20 @@ class CoinbaseRestClient(RestConnectorBase):
         query_params = {k: v for k, v in (params or {}).items() if k not in path_params}
 
         body_str = json.dumps(data) if data else ""
-        auth_headers = await self._signer(
-            {
-                "context": "rest",
-                "method": endpoint.method,
-                "path": resolved_path,
-                "body": body_str,
-            }
+        url = f"{self._base_url}{resolved_path}"
+        req = Request(
+            method=endpoint.method,
+            url=url,
+            path=resolved_path,
+            headers=dict(headers or {}),
+            body=body_str or None,
+            qs_params=dict(query_params),
         )
+        signed_req = await self._coinbase_signer.sign(req)
 
-        merged = dict(headers or {})
-        merged.update(auth_headers)
         return await super().request(
             endpoint_name,
             params=query_params or None,
             data=data,
-            headers=merged,
+            headers=dict(signed_req.headers),
         )

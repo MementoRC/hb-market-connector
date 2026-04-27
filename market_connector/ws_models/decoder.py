@@ -46,8 +46,10 @@ class WsShapeDecoder(Protocol):
 def _extract(field: str | Callable, raw: dict) -> str | None:
     """Apply a string key lookup or callable extractor against *raw*."""
     if callable(field):
-        return field(raw)
-    return raw.get(field)
+        result: str | None = field(raw)
+        return result
+    val = raw.get(field)
+    return str(val) if val is not None else None
 
 
 @dataclass(frozen=True)
@@ -64,7 +66,7 @@ class JsonEnvelopeDecoder:
     kind_dispatch: dict[str, WsMessageKind]
     error_field: str | None = None
 
-    def decode(self, raw: dict | list | str) -> NormalizedWsMessage:  # type: ignore[override]
+    def decode(self, raw: dict | list | str) -> NormalizedWsMessage:
         assert isinstance(raw, dict), "JsonEnvelopeDecoder expects a dict frame"
         channel = _extract(self.channel_field, raw)
         pair = _extract(self.pair_field, raw) if self.pair_field is not None else None
@@ -100,9 +102,9 @@ class PositionalArrayDecoder:
     heartbeat_predicate: Callable[[list], bool] | None
     subscribe_ack_predicate: Callable[[dict | list], bool] | None
 
-    def decode(self, raw: dict | list | str) -> NormalizedWsMessage:  # type: ignore[override]
+    def decode(self, raw: dict | list | str) -> NormalizedWsMessage:
         # Subscribe-ack predicate is checked first; Kraken acks are dicts.
-        if self.subscribe_ack_predicate is not None and self.subscribe_ack_predicate(raw):
+        if self.subscribe_ack_predicate is not None and self.subscribe_ack_predicate(raw):  # type: ignore[arg-type]
             return NormalizedWsMessage(
                 kind=WsMessageKind.SUBSCRIBE_ACK,
                 channel=None,

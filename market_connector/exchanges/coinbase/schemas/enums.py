@@ -1,9 +1,16 @@
 """Coinbase Advanced Trade API enum types."""
 
-from enum import StrEnum
+from enum import Enum
 
 
-class CoinbaseOrderStatus(StrEnum):
+class _StrValue(str, Enum):
+    """Base mixin: str(member) returns the value, matching StrEnum behaviour on Python 3.11+."""
+
+    def __str__(self) -> str:
+        return str.__str__(self)
+
+
+class CoinbaseOrderStatus(_StrValue):
     OPEN = "OPEN"
     FILLED = "FILLED"
     CANCELLED = "CANCELLED"
@@ -13,13 +20,13 @@ class CoinbaseOrderStatus(StrEnum):
     UNKNOWN = "UNKNOWN_ORDER_STATUS"
 
 
-class CoinbaseOrderSide(StrEnum):
+class CoinbaseOrderSide(_StrValue):
     BUY = "BUY"
     SELL = "SELL"
     UNKNOWN = "UNKNOWN_ORDER_SIDE"
 
 
-class CoinbaseOrderType(StrEnum):
+class CoinbaseOrderType(_StrValue):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
     STOP = "STOP"
@@ -27,19 +34,19 @@ class CoinbaseOrderType(StrEnum):
     UNKNOWN = "UNKNOWN_ORDER_TYPE"
 
 
-class CoinbaseTimeInForce(StrEnum):
+class CoinbaseTimeInForce(_StrValue):
     GTC = "GOOD_UNTIL_CANCELLED"
     GTD = "GOOD_UNTIL_DATE_TIME"
     IOC = "IMMEDIATE_OR_CANCEL"
     FOK = "FILL_OR_KILL"
 
 
-class CoinbaseProductType(StrEnum):
+class CoinbaseProductType(_StrValue):
     SPOT = "SPOT"
     FUTURE = "FUTURE"
 
 
-class CoinbaseGranularity(StrEnum):
+class CoinbaseGranularity(_StrValue):
     ONE_MINUTE = "ONE_MINUTE"
     FIVE_MINUTE = "FIVE_MINUTE"
     FIFTEEN_MINUTE = "FIFTEEN_MINUTE"
@@ -48,7 +55,7 @@ class CoinbaseGranularity(StrEnum):
     ONE_DAY = "ONE_DAY"
 
 
-class CoinbaseWsChannel(StrEnum):
+class CoinbaseWsChannel(_StrValue):
     LEVEL2 = "level2"
     MARKET_TRADES = "market_trades"
     USER = "user"
@@ -57,6 +64,6 @@ class CoinbaseWsChannel(StrEnum):
     STATUS = "status"
 
 
-class CoinbaseWsEventType(StrEnum):
+class CoinbaseWsEventType(_StrValue):
     SNAPSHOT = "snapshot"
     UPDATE = "update"

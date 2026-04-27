@@ -152,10 +152,11 @@ class WsConnectorBase:
     def _route_message(self, msg: NormalizedWsMessage) -> None:
         """Route a decoded NormalizedWsMessage to the appropriate handler."""
         if msg.kind == WsMessageKind.DATA:
-            handler = self._handlers.get((msg.channel, msg.pair))
+            channel = msg.channel or ""
+            handler = self._handlers.get((channel, msg.pair))
             if handler is None and msg.pair is not None:
                 # Fall back to channel-wide handler
-                handler = self._handlers.get((msg.channel, None))
+                handler = self._handlers.get((channel, None))
             if handler is not None:
                 handler(msg.payload)
             else:

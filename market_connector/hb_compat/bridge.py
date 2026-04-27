@@ -56,18 +56,18 @@ class LiveMarketAccess:
     # --- MarketAccessProtocol ---
 
     def place_order(self, order_type: str, side: str, amount: Decimal, price: Decimal) -> str:
-        return self._run(
+        return self._run(  # type: ignore[no-any-return]
             self._gateway.place_order(self._trading_pair, order_type, side, amount, price)
         )
 
     def cancel_order(self, order_id: str) -> bool:
-        return self._run(self._gateway.cancel_order(self._trading_pair, order_id))
+        return self._run(self._gateway.cancel_order(self._trading_pair, order_id))  # type: ignore[no-any-return]
 
     def get_mid_price(self) -> Decimal:
-        return self._run(self._gateway.get_mid_price(self._trading_pair))
+        return self._run(self._gateway.get_mid_price(self._trading_pair))  # type: ignore[no-any-return]
 
     def get_available_balance(self, currency: str) -> Decimal:
-        return self._run(self._gateway.get_balance(currency))
+        return self._run(self._gateway.get_balance(currency))  # type: ignore[no-any-return]
 
     # --- MarketDataProtocol ---
 
@@ -76,4 +76,4 @@ class LiveMarketAccess:
         return self._run(self._gateway.get_orderbook(pair))
 
     def get_candles(self, trading_pair: str, interval: str, limit: int) -> list:
-        return self._run(self._gateway.get_candles(trading_pair, interval, limit))
+        return self._run(self._gateway.get_candles(trading_pair, interval, limit))  # type: ignore[no-any-return]

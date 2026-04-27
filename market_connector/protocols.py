@@ -9,7 +9,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncContextManager, Callable
+    from collections.abc import Callable
+    from contextlib import AbstractAsyncContextManager as AsyncContextManager
     from decimal import Decimal
 
     from market_connector.primitives import (

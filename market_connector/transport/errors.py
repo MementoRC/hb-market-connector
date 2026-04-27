@@ -43,6 +43,6 @@ class MarketConnectorParseError(GatewayError):
             # Pydantic guarantees ValidationError carries >=1 error — defensive only.
             super().__init__(f"{endpoint}: validation error (no details from pydantic)")
 
-    def errors(self) -> list[dict]:
+    def errors(self) -> list[Any]:
         """Convenience pass-through to the underlying pydantic error list."""
         return self.original.errors()

@@ -367,7 +367,7 @@ class DeclarativeRestSigner:
     # ------------------------------------------------------------------
 
     async def _sign_hmac(self, request: Request) -> Request:
-        spec = self._spec
+        spec: HmacSigningSpec = self._spec  # type: ignore[assignment]
 
         # 1. Resolve timestamp
         ts = (

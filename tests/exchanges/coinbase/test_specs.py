@@ -46,8 +46,10 @@ class TestCoinbaseJwtSpec:
         assert COINBASE_JWT_SPEC.lifetime_seconds == 120
 
     def test_claims_has_required_keys(self) -> None:
+        # nbf and exp are computed by the JWT signer (nbf=ts, exp=nbf+lifetime_seconds),
+        # not declared as format templates in the spec.
         claims = COINBASE_JWT_SPEC.claims
-        for key in ("sub", "iss", "aud", "nbf"):
+        for key in ("sub", "iss", "aud", "uri"):
             assert key in claims, f"Missing claim: {key}"
 
     def test_claims_iss_is_cdp(self) -> None:

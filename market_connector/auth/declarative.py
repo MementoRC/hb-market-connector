@@ -648,8 +648,7 @@ class DeclarativeRestSigner:
         }
         cred_ctx.update(self._extra_creds)
         body: dict[str, str] = {
-            k: v.format_map(cred_ctx)
-            for k, v in spec.token_request_template.items()
+            k: v.format_map(cred_ctx) for k, v in spec.token_request_template.items()
         }
 
         async with httpx.AsyncClient() as client:

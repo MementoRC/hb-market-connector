@@ -8,7 +8,6 @@ Two test classes:
 
 from __future__ import annotations
 
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -63,21 +62,13 @@ class TestBearerTokenFetch:
     @pytest.mark.asyncio
     async def test_first_sign_fetches_token_and_injects_header(self) -> None:
         spec = _bearer_spec()
-        signer = DeclarativeRestSigner.from_spec(
-            spec, api_key="my-key", secret="my-secret"
-        )
+        signer = DeclarativeRestSigner.from_spec(spec, api_key="my-key", secret="my-secret")
 
-        with patch(
-            "market_connector.auth.declarative.httpx.AsyncClient"
-        ) as mock_client_cls:
+        with patch("market_connector.auth.declarative.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_client.post = AsyncMock(
-                return_value=_mock_httpx_response("abc-token-123")
-            )
+            mock_client.post = AsyncMock(return_value=_mock_httpx_response("abc-token-123"))
 
             signed = await signer.sign(_make_request())
 
@@ -87,21 +78,13 @@ class TestBearerTokenFetch:
     @pytest.mark.asyncio
     async def test_second_sign_within_ttl_reuses_cached_token(self) -> None:
         spec = _bearer_spec(ttl=300)
-        signer = DeclarativeRestSigner.from_spec(
-            spec, api_key="my-key", secret="my-secret"
-        )
+        signer = DeclarativeRestSigner.from_spec(spec, api_key="my-key", secret="my-secret")
 
-        with patch(
-            "market_connector.auth.declarative.httpx.AsyncClient"
-        ) as mock_client_cls:
+        with patch("market_connector.auth.declarative.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_client.post = AsyncMock(
-                return_value=_mock_httpx_response("cached-token")
-            )
+            mock_client.post = AsyncMock(return_value=_mock_httpx_response("cached-token"))
 
             signed1 = await signer.sign(_make_request())
             signed2 = await signer.sign(_make_request())
@@ -115,21 +98,13 @@ class TestBearerTokenFetch:
     async def test_token_request_uses_credentials(self) -> None:
         """The POST body must include expanded api_key and secret."""
         spec = _bearer_spec()
-        signer = DeclarativeRestSigner.from_spec(
-            spec, api_key="KEY123", secret="SEC456"
-        )
+        signer = DeclarativeRestSigner.from_spec(spec, api_key="KEY123", secret="SEC456")
 
-        with patch(
-            "market_connector.auth.declarative.httpx.AsyncClient"
-        ) as mock_client_cls:
+        with patch("market_connector.auth.declarative.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_client.post = AsyncMock(
-                return_value=_mock_httpx_response("tok")
-            )
+            mock_client.post = AsyncMock(return_value=_mock_httpx_response("tok"))
 
             await signer.sign(_make_request())
 
@@ -153,9 +128,7 @@ class TestBearerTtlExpiry:
     @pytest.mark.asyncio
     async def test_expired_cache_triggers_refetch(self) -> None:
         spec = _bearer_spec(ttl=1)  # 1-second TTL for fast expiry test
-        signer = DeclarativeRestSigner.from_spec(
-            spec, api_key="k", secret="s"
-        )
+        signer = DeclarativeRestSigner.from_spec(spec, api_key="k", secret="s")
 
         call_count = 0
 
@@ -164,13 +137,9 @@ class TestBearerTtlExpiry:
             call_count += 1
             return _mock_httpx_response(f"token-{call_count}")
 
-        with patch(
-            "market_connector.auth.declarative.httpx.AsyncClient"
-        ) as mock_client_cls:
+        with patch("market_connector.auth.declarative.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             mock_client.post = _fake_post
 
@@ -196,13 +165,9 @@ class TestBearerTtlExpiry:
         )
         signer = DeclarativeRestSigner.from_spec(spec, api_key="k", secret="s")
 
-        with patch(
-            "market_connector.auth.declarative.httpx.AsyncClient"
-        ) as mock_client_cls:
+        with patch("market_connector.auth.declarative.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             resp = MagicMock()
             resp.raise_for_status = MagicMock()

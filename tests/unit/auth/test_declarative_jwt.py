@@ -98,9 +98,7 @@ class TestJwtClaimsVector:
         )
 
     @pytest.mark.asyncio
-    async def test_authorization_header_set(
-        self, signer: DeclarativeRestSigner
-    ) -> None:
+    async def test_authorization_header_set(self, signer: DeclarativeRestSigner) -> None:
         request = _make_request()
         before = int(time.time())
         signed = await signer.sign(request)
@@ -109,7 +107,7 @@ class TestJwtClaimsVector:
         auth = signed.headers.get("Authorization", "")
         assert auth.startswith("Bearer "), f"Expected 'Bearer <token>', got: {auth!r}"
 
-        token = auth[len("Bearer "):]
+        token = auth[len("Bearer ") :]
         # Decode without verification to inspect claims (key is test-only)
         payload = jwt.decode(
             token,
@@ -134,13 +132,11 @@ class TestJwtClaimsVector:
         assert "nonce" in header
 
     @pytest.mark.asyncio
-    async def test_jwt_verifies_with_public_key(
-        self, signer: DeclarativeRestSigner
-    ) -> None:
+    async def test_jwt_verifies_with_public_key(self, signer: DeclarativeRestSigner) -> None:
         """Token must be verifiable using the corresponding EC public key."""
         request = _make_request()
         signed = await signer.sign(request)
-        token = signed.headers["Authorization"][len("Bearer "):]
+        token = signed.headers["Authorization"][len("Bearer ") :]
 
         # Full verification using the module-level public key — should not raise
         payload = jwt.decode(
@@ -173,8 +169,8 @@ class TestJwtNonceUniqueness:
         signed1 = await signer.sign(request)
         signed2 = await signer.sign(request)
 
-        token1 = signed1.headers["Authorization"][len("Bearer "):]
-        token2 = signed2.headers["Authorization"][len("Bearer "):]
+        token1 = signed1.headers["Authorization"][len("Bearer ") :]
+        token2 = signed2.headers["Authorization"][len("Bearer ") :]
 
         header1 = jwt.get_unverified_header(token1)
         header2 = jwt.get_unverified_header(token2)

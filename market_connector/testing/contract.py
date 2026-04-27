@@ -192,6 +192,8 @@ class SignerConformance:
     Usage (inside an async test)::
 
         await SignerConformance(signer, request, {"headers": {"X-Sig": "abc"}}).run()
+
+    ``run()`` is a coroutine — always call it with ``await``.
     """
 
     def __init__(
@@ -204,23 +206,11 @@ class SignerConformance:
         self._request = fixture_request
         self._expected = expected_output
 
-    def run(self) -> None:
+    async def run(self) -> None:
         """Sign the fixture request and assert produced fields match expected_output.
 
-        Runs synchronously via ``asyncio.get_event_loop().run_until_complete``.
-        Call from inside a sync test or an ``async def`` test (in which case
-        use ``await`` on the coroutine directly via :meth:`arun`).
+        Must be called with ``await`` from an async test.
         """
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self._run_async())
-
-    async def arun(self) -> None:
-        """Async variant — call with ``await`` from an async test."""
-        await self._run_async()
-
-    async def _run_async(self) -> None:
         signed = await self._signer.sign(self._request)
         if "headers" in self._expected:
             for key, value in self._expected["headers"].items():

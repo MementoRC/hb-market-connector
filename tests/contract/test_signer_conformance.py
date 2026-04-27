@@ -33,21 +33,21 @@ def _expected_sig() -> str:
     return hmac.new(b"test-secret", sig_input.encode(), hashlib.sha256).hexdigest()
 
 
-def test_signer_conformance_passes_with_correct_expected_sig() -> None:
+async def test_signer_conformance_passes_with_correct_expected_sig() -> None:
     """SignerConformance.run() must not raise when expected output matches."""
     signer = _make_signer()
     expected = {"headers": {"X-Signature": _expected_sig()}}
     suite = SignerConformance(
         signer=signer, fixture_request=KNOWN_HMAC_REQUEST, expected_output=expected
     )
-    suite.run()
+    await suite.run()
 
 
-def test_signer_conformance_fails_with_wrong_expected_sig() -> None:
+async def test_signer_conformance_fails_with_wrong_expected_sig() -> None:
     """SignerConformance.run() must raise AssertionError when expected sig is wrong."""
     signer = _make_signer()
     expected = {"headers": {"X-Signature": "WRONG_SIGNATURE_VALUE"}}
     with pytest.raises(AssertionError):
-        SignerConformance(
+        await SignerConformance(
             signer=signer, fixture_request=KNOWN_HMAC_REQUEST, expected_output=expected
         ).run()

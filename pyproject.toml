@@ -68,7 +68,7 @@ disallow_untyped_defs = true
 [tool.coverage.run]
 branch = true
 source_pkgs = ["market_connector"]
-omit = ["market_connector/__about__.py"]
+omit = ["market_connector/__about__.py", "market_connector/exchanges/coinbase/mixins/protocols.py"]
 
 [tool.coverage.report]
 fail_under = 90

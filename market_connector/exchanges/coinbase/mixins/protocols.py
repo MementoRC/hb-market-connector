@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:  # pragma: no cover
     from market_connector.exchanges.coinbase.config import CoinbaseConfig
     from market_connector.transport.endpoint import Endpoint
-    from market_connector.transport.rest_base import AuthCallable, RestConnectorBase
+    from market_connector.transport.rest_base import RestConnectorBase
     from market_connector.transport.ws_base import WsConnectorBase
 
 
@@ -18,10 +18,6 @@ class HasRest(Protocol):  # pragma: no cover
 
 class HasWs(Protocol):  # pragma: no cover
     _ws: WsConnectorBase
-
-
-class HasAuth(Protocol):  # pragma: no cover
-    _auth: AuthCallable
 
 
 class HasEndpoints(Protocol):  # pragma: no cover

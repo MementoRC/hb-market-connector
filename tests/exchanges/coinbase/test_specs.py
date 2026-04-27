@@ -88,9 +88,17 @@ class TestCoinbaseRateLimitSpec:
 
     def test_endpoint_pools_covers_all_endpoints(self) -> None:
         expected = {
-            "server_time", "products", "product_book", "candles",
-            "accounts", "place_order", "cancel_orders", "list_orders",
-            "order_status", "order_fills", "fee_summary",
+            "server_time",
+            "products",
+            "product_book",
+            "candles",
+            "accounts",
+            "place_order",
+            "cancel_orders",
+            "list_orders",
+            "order_status",
+            "order_fills",
+            "fee_summary",
         }
         actual = set(COINBASE_RATE_LIMIT_SPEC.endpoint_pools.keys())
         assert expected <= actual, f"Missing endpoints: {expected - actual}"
@@ -126,9 +134,7 @@ class TestCoinbaseWsShapeDecoderSpec:
         sig = inspect.signature(JsonEnvelopeDecoder.__init__)
         valid_params = set(sig.parameters.keys()) - {"self"}
         for key in COINBASE_WS_SHAPE_DECODER_SPEC:
-            assert key in valid_params, (
-                f"Key '{key}' not a JsonEnvelopeDecoder parameter"
-            )
+            assert key in valid_params, f"Key '{key}' not a JsonEnvelopeDecoder parameter"
 
     def test_can_instantiate_json_envelope_decoder(self) -> None:
         decoder = JsonEnvelopeDecoder(**COINBASE_WS_SHAPE_DECODER_SPEC)

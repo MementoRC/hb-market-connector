@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from market_connector.auth.declarative import DeclarativeRestSigner
-from market_connector.auth.protocols import Signer
 from market_connector.exchanges.coinbase._auth_helpers import _try_normalize_pem
 from market_connector.exchanges.coinbase.specs import COINBASE_HMAC_SPEC, COINBASE_JWT_SPEC
+
+if TYPE_CHECKING:
+    from market_connector.auth.protocols import Signer
 
 
 def coinbase_signer_factory(api_key: str, secret_key: str) -> Signer:

@@ -48,7 +48,7 @@ class TestCoinbaseSignerFactory:
 
         auth_header = signed.headers.get("Authorization", "")
         assert auth_header.startswith("Bearer ")
-        token = auth_header[len("Bearer "):]
+        token = auth_header[len("Bearer ") :]
 
         private_key = load_pem_private_key(ec_private_pem.encode(), password=None)
         public_key_pem = private_key.public_key().public_bytes(

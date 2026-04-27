@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from market_connector.exchanges.coinbase._auth_helpers import _try_normalize_pem
 
 

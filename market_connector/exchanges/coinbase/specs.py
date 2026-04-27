@@ -15,9 +15,9 @@ from market_connector.auth.spec import (
     JwtSigningSpec,
     KeyEncoding,
     KeyMaterialSpec,
-    NonceSpec,
-    NonceSource,
     NoncePlacement,
+    NonceSource,
+    NonceSpec,
     SigAlgorithm,
     SigEncoding,
     SignatureRecipe,
@@ -27,7 +27,7 @@ from market_connector.auth.spec import (
 )
 from market_connector.rate_limits.flat import FlatRateLimitSpec
 from market_connector.rate_limits.pool import PoolSpec
-from market_connector.ws_models.decoder import JsonEnvelopeDecoder, WsMessageKind
+from market_connector.ws_models.decoder import WsMessageKind
 
 # ---------------------------------------------------------------------------
 # HMAC signing spec (legacy API keys)

@@ -27,7 +27,9 @@ def _try_normalize_pem(secret_key: str) -> str | None:
 
     if key.startswith("-----") and "\n" in key:
         try:
-            serialization.load_pem_private_key(key.encode(), password=None, backend=default_backend())
+            serialization.load_pem_private_key(
+                key.encode(), password=None, backend=default_backend()
+            )
             return key
         except Exception:
             return None

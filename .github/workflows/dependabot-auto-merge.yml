@@ -4,15 +4,18 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
-permissions:
-  contents: write
-  pull-requests: write
+# Deny all permissions by default; job requests only what it needs.
+permissions: {}
 
 jobs:
   auto-merge:
     name: "Auto-Merge Dependabot PR"
     runs-on: ubuntu-latest
+    # Only run for Dependabot PRs — never check out PR head code in this job.
     if: github.actor == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Approve PR
         run: gh pr review --approve "$PR_URL"

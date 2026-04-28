@@ -153,6 +153,18 @@ def _qs_sorted(qs_params: dict) -> str:
 
 
 def _hash_bytes(algorithm: HashAlgorithm, data: bytes) -> bytes:
+    """Hash a signature payload for HMAC-based API request signing.
+
+    SHA-256 and SHA-512 are the correct algorithms here per RFC 2104 and
+    exchange specifications (Kraken body_hash, etc.).  This function is
+    used exclusively as a pre-hash step in the HMAC signing pipeline — it
+    is NOT used for password storage.  For password storage use a proper
+    KDF (scrypt / argon2 / bcrypt).
+
+    Security note: the secret key never passes through this function; it
+    is consumed only by _hmac_bytes() via hmac.new(), which applies the
+    HMAC construction and its associated security properties.
+    """
     if algorithm is HashAlgorithm.SHA256:
         return hashlib.sha256(data).digest()
     return hashlib.sha512(data).digest()

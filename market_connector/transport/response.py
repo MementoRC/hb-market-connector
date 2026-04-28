@@ -23,7 +23,7 @@ _UNSET: Final = _Unset()
 
 
 @dataclass
-class Response(Generic[T]):
+class Response(Generic[T]):  # noqa: UP046
     """Wraps a REST response, exposing raw payload, status, headers, and lazy parse().
 
     Construction-time invariant: if `_response_type` is set, `raw` must not be None.

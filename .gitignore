@@ -77,3 +77,6 @@ pixi.lock
 
 # Logs
 logs/
+
+# Claude Code
+.claude/

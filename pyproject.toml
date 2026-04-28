@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "hb-market-connector"
 dynamic = ["version"]
 description = "Live market connector adapter for Hummingbot — implements MarketAccessProtocol + TradingRulesProtocol from hb-strategy-framework"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
 dependencies = [
     "pydantic>=2",
@@ -49,7 +49,7 @@ timeout = 30
 addopts = "--strict-markers --strict-config -v"
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
@@ -59,7 +59,7 @@ select = ["E", "F", "I", "W", "B", "UP", "N", "SIM", "TCH"]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

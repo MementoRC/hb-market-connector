@@ -1,13 +1,10 @@
 """Coinbase Advanced Trade API enum types."""
 
-from enum import Enum
+from enum import StrEnum
 
 
-class _StrValue(str, Enum):
-    """Base mixin: str(member) returns the value, matching StrEnum behaviour on Python 3.11+."""
-
-    def __str__(self) -> str:
-        return str.__str__(self)
+class _StrValue(StrEnum):
+    """Base mixin: str(member) returns the value."""
 
 
 class CoinbaseOrderStatus(_StrValue):

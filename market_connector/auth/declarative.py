@@ -117,15 +117,11 @@ def _make_timestamp(unit: TimestampUnit, fmt: TimestampFormat) -> str:
     if fmt is TimestampFormat.ISO8601:
         import datetime
 
-        return datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%S"
-        )
+        return datetime.datetime.fromtimestamp(now, tz=datetime.UTC).strftime("%Y-%m-%dT%H:%M:%S")
     # ISO8601_Z
     import datetime
 
-    return datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    return datetime.datetime.fromtimestamp(now, tz=datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------------------------------------------------------------------------

@@ -88,4 +88,4 @@ class Response(Generic[T]):
                 original=e,
             ) from e
         # Type checkers cannot narrow `_Unset` out of the `_cached` union here.
-        return self._cached  # type: ignore[return-value]
+        return self._cached

@@ -103,7 +103,11 @@ def test_gateway_has_required_protocol_attributes(cfg: CoinbaseConfig) -> None:
     """All Protocol attributes must be present as concrete instances."""
     gw = CoinbaseGateway(cfg)
     assert hasattr(gw, "_config")
-    assert hasattr(gw, "_auth")
+    assert hasattr(gw, "_signer")
+    assert hasattr(gw, "_mapper")
+    assert hasattr(gw, "_rate_limit")
+    assert hasattr(gw, "_ws_decoder")
+    assert hasattr(gw, "_ws_auth")
     assert hasattr(gw, "_rest")
     assert hasattr(gw, "_ws")
     assert hasattr(gw, "_endpoints")

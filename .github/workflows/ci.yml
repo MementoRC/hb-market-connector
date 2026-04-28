@@ -12,7 +12,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions: read-all
+# Deny all permissions by default; each job requests only what it needs.
+permissions: {}
 
 jobs:
   ci:
@@ -37,27 +38,34 @@ jobs:
   branch-policy:
     name: "Branch Policy"
     runs-on: ubuntu-latest
+    permissions: {}
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    env:
+      # Capture untrusted ref into environment variable before use in shell
+      HEAD_REF: ${{ github.head_ref }}
     steps:
       - name: Check source branch
         run: |
-          if [ "${{ github.head_ref }}" != "development" ]; then
-            echo "❌ PRs to main must come from development branch"
-            echo "   Source: ${{ github.head_ref }}"
+          if [ "$HEAD_REF" != "development" ]; then
+            echo "PRs to main must come from development branch"
+            echo "   Source: $HEAD_REF"
             echo "   Expected: development"
             exit 1
           fi
-          echo "✅ PR from development to main - allowed"
+          echo "PR from development to main - allowed"
 
   security-scanning:
     name: "Security Scanning"
     runs-on: ubuntu-latest
+    permissions: {}
     needs: [ci]
     if: always()
     steps:
       - name: Check security status
+        env:
+          CI_RESULT: ${{ needs.ci.result }}
         run: |
-          if [ "${{ needs.ci.result }}" != "success" ]; then
+          if [ "$CI_RESULT" != "success" ]; then
             echo "Security scanning failed"
             exit 1
           fi
@@ -66,12 +74,15 @@ jobs:
   ci-success:
     name: "CI Success"
     runs-on: ubuntu-latest
+    permissions: {}
     needs: [ci]
     if: always()
     steps:
       - name: Check CI status
+        env:
+          CI_RESULT: ${{ needs.ci.result }}
         run: |
-          if [ "${{ needs.ci.result }}" != "success" ]; then
+          if [ "$CI_RESULT" != "success" ]; then
             echo "CI failed"
             exit 1
           fi

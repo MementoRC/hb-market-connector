@@ -1,6 +1,7 @@
-"""Tests for ENDPOINT_REGISTRY — verifies presence, types, and rate-limit split."""
+"""Tests for ENDPOINT_REGISTRY — verifies presence, types, and pool assignment."""
 
 from market_connector.exchanges.coinbase.endpoints import ENDPOINT_REGISTRY
+from market_connector.exchanges.coinbase.specs import COINBASE_RATE_LIMIT_SPEC
 from market_connector.transport.endpoint import Endpoint
 
 
@@ -27,8 +28,10 @@ def test_endpoint_is_endpoint_type() -> None:
 
 
 def test_rate_limits_split_public_private() -> None:
-    # Public: server_time, products, product_book, candles → limit=10
-    # Private: accounts, orders, fills, fee_summary → limit=30
-    assert ENDPOINT_REGISTRY["server_time"].limit == 10
-    assert ENDPOINT_REGISTRY["accounts"].limit == 30
-    assert ENDPOINT_REGISTRY["place_order"].limit == 30
+    """Rate-limit pool assignments live in COINBASE_RATE_LIMIT_SPEC, not on Endpoint."""
+    ep = COINBASE_RATE_LIMIT_SPEC.endpoint_pools
+    # Public endpoints are assigned to the "public" pool (capacity=10).
+    assert ep["server_time"] == [("public", 1)]
+    # Private endpoints are assigned to the "private" pool (capacity=30).
+    assert ep["accounts"] == [("private", 1)]
+    assert ep["place_order"] == [("private", 1)]

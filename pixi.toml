@@ -51,6 +51,7 @@ py312 = { features = ["py312", "coinbase", "dev"], solve-group = "py312" }
 test = "pytest tests/"
 test-unit = "pytest tests/unit/"
 test-integration = "pytest tests/integration/"
+test-conformance = "pytest tests/contract -v"
 lint = "ruff check market_connector tests"
 format = "ruff format market_connector tests"
 format-check = "ruff format --check market_connector tests"

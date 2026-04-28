@@ -6,11 +6,15 @@ on:
       - main
   workflow_dispatch:
 
-permissions: read-all
+# Deny all permissions by default; job requests only what it needs.
+permissions: {}
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Import GPG key and configure Git
         env:
@@ -27,7 +31,7 @@ jobs:
 
       - name: Release Please
         id: release
-        uses: googleapis/release-please-action@v5
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
         with:
           token: ${{ secrets.CI_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           release-type: python

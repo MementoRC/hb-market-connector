@@ -61,14 +61,17 @@ class LiveMarketAccess:
         Returns:
             The client order ID assigned by the connector.
         """
-        from hummingbot.core.data_type.common import OrderType, TradeType
+        from hummingbot.core.data_type.common import (  # type: ignore[import-not-found]
+            OrderType,
+            TradeType,
+        )
 
         ot = OrderType[order_type.upper()]
         tt = TradeType[side.upper()]
 
         if tt == TradeType.BUY:
-            return self._connector.buy(self._trading_pair, amount, ot, price)
-        return self._connector.sell(self._trading_pair, amount, ot, price)
+            return str(self._connector.buy(self._trading_pair, amount, ot, price))
+        return str(self._connector.sell(self._trading_pair, amount, ot, price))
 
     def cancel_order(self, order_id: str) -> None:
         """Cancel an open order by its client order ID.
@@ -84,7 +87,7 @@ class LiveMarketAccess:
         Returns:
             Mid price as a ``Decimal``.
         """
-        return self._connector.get_mid_price(self._trading_pair)
+        return Decimal(self._connector.get_mid_price(self._trading_pair))
 
     def get_available_balance(self, currency: str) -> Decimal:
         """Return the available (unlocked) balance for a currency.
@@ -95,7 +98,7 @@ class LiveMarketAccess:
         Returns:
             Available balance as a ``Decimal``.
         """
-        return self._connector.get_available_balance(currency)
+        return Decimal(self._connector.get_available_balance(currency))
 
     # ------------------------------------------------------------------
     # TradingRulesProtocol
@@ -117,7 +120,9 @@ class LiveMarketAccess:
         Raises:
             KeyError: If no trading rules exist for the requested pair.
         """
-        from strategy_framework.primitives.trading_rules import TradingRules
+        from strategy_framework.primitives.trading_rules import (  # type: ignore[import-not-found]
+            TradingRules,
+        )
 
         hb_rule = self._connector.trading_rules[trading_pair]
         return TradingRules(
@@ -143,7 +148,7 @@ class LiveMarketAccess:
         Returns:
             Quantized amount as a ``Decimal``.
         """
-        return self._connector.quantize_order_amount(trading_pair, amount)
+        return Decimal(self._connector.quantize_order_amount(trading_pair, amount))
 
     def quantize_order_price(self, trading_pair: str, price: Decimal) -> Decimal:
         """Quantize an order price to the exchange's minimum increment.
@@ -155,4 +160,4 @@ class LiveMarketAccess:
         Returns:
             Quantized price as a ``Decimal``.
         """
-        return self._connector.quantize_order_price(trading_pair, price)
+        return Decimal(self._connector.quantize_order_price(trading_pair, price))

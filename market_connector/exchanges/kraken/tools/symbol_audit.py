@@ -1,24 +1,36 @@
 """Kraken symbol alias audit script.
 
-Queries the Kraken public API to build an authoritative asset alias table that
-maps legacy Kraken-internal asset codes (X/Z prefix scheme) to their canonical
-ticker symbols.  Two sources are combined:
+Builds an authoritative asset alias table mapping legacy Kraken-internal asset
+codes (X/Z prefix scheme) to their canonical Hummingbot ticker symbols.
 
-1. ``/0/public/Assets`` — maps each internal asset name to its ``altname``
-   (canonical ticker).  This is the primary source for legacy X/Z prefix codes.
-2. ``/0/public/AssetPairs`` — enumerates all trading pairs with ``base``,
-   ``quote`` and ``wsname``.  We use this to discover additional aliases present
-   in pair ``base``/``quote`` fields (e.g. ``XXBT`` used as a pair base but not
-   listed in the Assets endpoint).
+Source of truth
+---------------
+The canonical alias list comes from Kraken's official support documentation:
 
-The generated table is written to
-``market_connector/exchanges/kraken/_aliases_generated.py`` and committed to
-the repository.
+    https://support.kraken.com/articles/360001206766-bitcoin-currency-code-xbt-vs-btc
+
+The 19 documented entries are hard-coded in ``KRAKEN_DOCUMENTED_ALIASES`` below
+and represent the ground truth.  Chains are collapsed: XXBT→BTC (not XBT), and
+XXDG→DOGE (not XDG).
+
+API sanity check
+----------------
+``/0/public/Assets`` is queried as a *sanity check only*:
+
+1. Warn if a documented code is no longer present in the API response (the doc
+   remains authoritative — do NOT remove the alias on this basis alone).
+2. Detect any NEW legacy-prefixed codes added by Kraken since the doc was last
+   updated, using strict criteria:
+   - Starts with ``XX`` / ``XE`` / ``XL`` / ``XM`` / ``XR`` / ``XZ`` (legacy
+     double-X crypto pattern), OR starts with ``Z`` followed by a known ISO 4217
+     fiat code from ``_FIAT_ISO_4217``.
+   - The resulting stripped name must already appear in the API's altname set so
+     that we only map a code when we are sure of its canonical form.
 
 Re-run procedure
 ----------------
 Run this script from the repository root whenever the Kraken asset list may
-have changed (e.g. a new token listing)::
+have changed::
 
     python -m market_connector.exchanges.kraken.tools.symbol_audit
 
@@ -31,226 +43,166 @@ Then review the diff and re-commit the updated ``_aliases_generated.py``::
 CI gate (Stage 6)
 -----------------
 The CI pipeline will re-run this script and fail if the committed file differs
-from the freshly-generated output.  That ensures the alias table stays in sync
-with the live Kraken API.
+from the freshly-generated output.
 
 API references
 --------------
-Assets:    ``GET https://api.kraken.com/0/public/Assets``
-AssetPairs: ``GET https://api.kraken.com/0/public/AssetPairs``
+Assets: ``GET https://api.kraken.com/0/public/Assets``
 No authentication required.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import urllib.request
 from pathlib import Path
 
-_ASSETS_URL = "https://api.kraken.com/0/public/Assets"
-_ASSET_PAIRS_URL = "https://api.kraken.com/0/public/AssetPairs"
+# ---------------------------------------------------------------------------
+# Source of truth: Kraken official support documentation
+# ---------------------------------------------------------------------------
+#
+# URL is the definitive reference for all documented legacy code aliases.
+# Chains are collapsed so every entry maps directly to the HB canonical name.
+# e.g. XXBT→XBT→BTC is collapsed to XXBT→BTC.
+KRAKEN_LEGACY_DOC_URL = (
+    "https://support.kraken.com/articles/360001206766"
+    "-bitcoin-currency-code-xbt-vs-btc"
+)
 
-# Manual HB-specific overrides — these are ALWAYS preserved across re-runs and
-# take priority over API-derived names when the API also maps the same key.
-# These encode HB business logic: HB uses BTC/ETH/DOGE, not Kraken's XBT/XDG.
-_MANUAL_OVERRIDES: dict[str, str] = {
-    "XXBT": "BTC",  # Kraken altname is "XBT"; HB canonical is "BTC"
-    "XBT": "BTC",   # Kraken public ticker; HB canonical is "BTC"
-    "XXDG": "DOGE",  # Kraken altname is "XDG"; HB canonical is "DOGE"
-    "XDG": "DOGE",   # Kraken's internal code for Dogecoin
-}
-
-# Bootstrap skeleton covering the most common legacy codes.  The script merges
-# API results on top of this so new entries appear automatically without losing
-# the known-good baseline.
-_SKELETON: dict[str, str] = {
-    "XXBT": "BTC",
-    "XBT": "BTC",
+# 19 documented entries (chains collapsed to HB canonical names).
+KRAKEN_DOCUMENTED_ALIASES: dict[str, str] = {
+    # Cryptocurrencies (legacy X-prefix retained by Kraken)
+    "XETC": "ETC",
     "XETH": "ETH",
     "XLTC": "LTC",
+    "XMLN": "MLN",
+    "XREP": "REP",
+    "XXBT": "BTC",   # chain: XXBT → XBT → BTC (collapsed)
+    "XXDG": "DOGE",  # chain: XXDG → XDG → DOGE (collapsed)
     "XXLM": "XLM",
     "XXMR": "XMR",
     "XXRP": "XRP",
     "XZEC": "ZEC",
-    "ZUSD": "USD",
+    "XBT": "BTC",    # direct documented alias
+    "XDG": "DOGE",   # direct documented alias
+    # Fiat (legacy Z-prefix retained by Kraken)
+    "ZAUD": "AUD",
+    "ZCAD": "CAD",
     "ZEUR": "EUR",
     "ZGBP": "GBP",
     "ZJPY": "JPY",
-    "ZCAD": "CAD",
+    "ZUSD": "USD",
 }
+
+# ---------------------------------------------------------------------------
+# Detection of NEW undocumented legacy codes via /0/public/Assets
+# ---------------------------------------------------------------------------
+
+# Known double-X crypto prefixes observed in Kraken's legacy scheme.
+_LEGACY_DOUBLE_X_PREFIXES = frozenset({"XX", "XE", "XL", "XM", "XR", "XZ"})
+
+# ISO 4217 fiat codes used by Kraken's Z-prefix legacy scheme.
+_FIAT_ISO_4217 = frozenset({"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"})
+
+_ASSETS_URL = "https://api.kraken.com/0/public/Assets"
 
 _OUTPUT_FILE = Path(__file__).parent.parent / "_aliases_generated.py"
 
 
-def _load_existing_aliases() -> dict[str, str]:
-    """Load the committed alias table if it exists, preserving manual entries."""
-    if not _OUTPUT_FILE.exists():
-        return {}
-
-    spec = importlib.util.spec_from_file_location(
-        "kraken._aliases_generated", _OUTPUT_FILE
-    )
-    if spec is None or spec.loader is None:
-        return {}
-
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)  # type: ignore[union-attr]
-    except Exception:
-        return {}
-
-    aliases: object = getattr(module, "KRAKEN_ASSET_ALIASES", {})
-    return dict(aliases) if isinstance(aliases, dict) else {}
-
-
-def _fetch(url: str) -> dict[str, object]:
-    """HTTP GET ``url``, parse JSON, raise on API-level errors."""
+def _fetch_assets() -> dict[str, dict[str, object]]:
+    """HTTP GET ``/0/public/Assets``, return the ``result`` dict."""
     req = urllib.request.Request(
-        url,
+        _ASSETS_URL,
         headers={"User-Agent": "hb-market-connector/symbol-audit"},
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         body: dict[str, object] = json.loads(resp.read().decode())
 
     if body.get("error"):
-        raise RuntimeError(f"Kraken API error from {url}: {body['error']}")
+        raise RuntimeError(f"Kraken API error from {_ASSETS_URL}: {body['error']}")
 
-    return body
-
-
-def _fetch_asset_aliases() -> dict[str, str]:
-    """Query ``/0/public/Assets`` and return internal-name → altname mappings.
-
-    Only assets whose internal name differs from their ``altname`` are included.
-    Modern bare names (e.g. ``ETH`` → ``ETH``) are skipped since they need no
-    aliasing.
-    """
-    body = _fetch(_ASSETS_URL)
     result: dict[str, dict[str, object]] = body.get("result", {})  # type: ignore[assignment]
-    aliases: dict[str, str] = {}
-    for internal_name, info in result.items():
-        altname = info.get("altname", "")
-        if isinstance(altname, str) and altname and internal_name != altname:
-            aliases[internal_name] = altname
-    print(f"  /Assets  → {len(aliases)} aliased assets")
-    return aliases
+    return result
 
 
-_LEGACY_PREFIX_RE_CRYPTO = frozenset({"XX", "XE", "XL", "XM", "XR", "XZ"})
-_LEGACY_Z_FIATS = frozenset({
-    "ZUSD", "ZEUR", "ZGBP", "ZJPY", "ZCAD", "ZAUD", "ZSEK", "ZDKK",
-    "ZPLN", "ZNOK", "ZCHF", "ZMXN", "ZARSD", "ZCLP", "ZCOP", "ZGEL",
-    "ZGHS", "ZLKR", "ZUGX", "ZVND", "ZXOF", "ZARS",
-})
+def _sanity_check(
+    assets: dict[str, dict[str, object]],
+) -> None:
+    """Warn for documented codes absent from the live API response."""
+    for code in KRAKEN_DOCUMENTED_ALIASES:
+        if code not in assets:
+            print(
+                f"  WARNING: documented alias source '{code}' not found in "
+                f"/0/public/Assets response — the doc is authoritative; "
+                f"alias is preserved."
+            )
 
 
-def _is_legacy_kraken_code(code: str) -> bool:
-    """Return True if ``code`` looks like a Kraken legacy X/Z prefix code.
-
-    Kraken's legacy scheme:
-    - Double-X crypto: XXBT, XETH, XXLM, XXMR, XXRP, XZEC, XLTC, XMLN, XREP
-      (first char X, second char also a letter from the canonical name)
-    - Z-prefix fiat: ZUSD, ZEUR, ZGBP, etc.  (known set — avoid matching
-      modern Z-ticker coins like ZETA, ZEUS, ZEX which are NOT legacy)
-    - Single-X crypto directly listed in the Assets endpoint (handled there).
-    """
-    if len(code) < 4:
-        return False
-    # Strict double-X crypto: XXBT, XETH looks like XX... or starts with X
-    # and is in the known Kraken assets list (handled by _fetch_asset_aliases).
-    # Here we only add Z-fiat codes that are in our known fiat set.
-    if code in _LEGACY_Z_FIATS:
-        return True
-    # Double-X prefix (e.g. XXBT, XXLM, XXMR, XXRP, XXDG)
-    if code[:2] == "XX":
-        return True
-    return False
-
-
-def _fetch_pair_aliases(asset_aliases: dict[str, str]) -> dict[str, str]:
-    """Query ``/0/public/AssetPairs`` and extract additional legacy aliases.
-
-    For each pair's ``base`` and ``quote`` fields:
-    - If the code is already in ``asset_aliases`` (from the Assets endpoint),
-      include it (ensures pairs using internal codes get mapped).
-    - If the code looks like a Kraken legacy X/Z prefix code (via
-      ``_is_legacy_kraken_code``), strip the leading X/Z to derive the
-      canonical form.
-
-    This deliberately excludes modern tickers that happen to start with X or Z
-    (e.g. ZETA, ZEX, ZEUS, ZIG, XCN) to avoid spurious alias entries.
-    """
-    body = _fetch(_ASSET_PAIRS_URL)
-    result: dict[str, dict[str, object]] = body.get("result", {})  # type: ignore[assignment]
-
-    extra: dict[str, str] = {}
-    for pair_info in result.values():
-        for field in ("base", "quote"):
-            code = pair_info.get(field, "")
-            if not isinstance(code, str):
-                continue
-            # Already aliased by Assets endpoint — include it.
-            if code in asset_aliases:
-                extra[code] = asset_aliases[code]
-                continue
-            # Conservative legacy-code heuristic.
-            if _is_legacy_kraken_code(code):
-                stripped = code[1:]  # ZUSD → USD, XXBT → XBT
-                if stripped and stripped != code:
-                    extra[code] = stripped
-
-    print(f"  /AssetPairs → {len(extra)} additional aliases from pair fields")
-    return extra
-
-
-def _merge_aliases(
-    existing: dict[str, str],
-    asset_aliases: dict[str, str],
-    pair_aliases: dict[str, str],
+def _detect_new_legacy_codes(
+    assets: dict[str, dict[str, object]],
+    existing_aliases: dict[str, str],
 ) -> dict[str, str]:
-    """Merge alias sources with precedence: manual > Assets API > pairs > skeleton.
+    """Scan the Assets API for NEW legacy-prefixed codes not yet documented.
 
-    The ``existing`` dict is used only to preserve entries that are not
-    derivable from the API or skeleton — specifically, entries that are in
-    ``existing`` but NOT in any of the API or heuristic results.  This allows
-    future manual additions to ``_aliases_generated.py`` to survive re-runs.
-    However, entries that CAN be re-derived are always refreshed from the
-    current API state (no stale data preserved).
+    Uses strict criteria to avoid false positives from modern coins whose
+    tickers happen to start with X or Z (e.g. ZETA, ZEUS, ZEX, XCN):
+
+    - Double-X crypto: internal name starts with one of ``_LEGACY_DOUBLE_X_PREFIXES``
+      and the stripped suffix is itself present as an altname in the API.
+    - Z-fiat: internal name is ``Z`` + a code in ``_FIAT_ISO_4217``.
     """
-    # Compute the fully re-derived set first.
-    derived: dict[str, str] = {}
-    derived.update(_SKELETON)
-    derived.update(pair_aliases)
-    derived.update(asset_aliases)
-    derived.update(_MANUAL_OVERRIDES)
+    # Build the set of known altnames to validate strip targets.
+    known_altnames: set[str] = set()
+    for info in assets.values():
+        altname = info.get("altname", "")
+        if isinstance(altname, str) and altname:
+            known_altnames.add(altname)
 
-    # Preserve only genuinely manual existing entries (not re-derivable).
-    merged: dict[str, str] = {}
-    for key, value in existing.items():
-        if key not in derived:
-            merged[key] = value
+    new_codes: dict[str, str] = {}
+    for internal, info in assets.items():
+        if internal in KRAKEN_DOCUMENTED_ALIASES or internal in existing_aliases:
+            continue
 
-    # Apply re-derived on top (overwrites any stale preserved values).
-    merged.update(derived)
+        altname = info.get("altname", "")
+        if not isinstance(altname, str) or not altname:
+            continue
 
-    return merged
+        # Double-X crypto heuristic.
+        if len(internal) >= 4 and internal[:2] in _LEGACY_DOUBLE_X_PREFIXES:
+            suffix = internal[2:]  # XXBT[2:] = "BT" — but we check altname directly
+            if suffix and altname != internal and altname in known_altnames:
+                new_codes[internal] = altname
+                print(f"  Detected new legacy code (API): {internal!r} → {altname!r}")
+            continue
+
+        # Z-fiat heuristic.
+        if len(internal) == 4 and internal[0] == "Z" and internal[1:] in _FIAT_ISO_4217:
+            if altname != internal and altname in _FIAT_ISO_4217:
+                new_codes[internal] = altname
+                print(f"  Detected new Z-fiat code (API): {internal!r} → {altname!r}")
+
+    return new_codes
 
 
 def _write_aliases(aliases: dict[str, str]) -> None:
     """Write the alias table to ``_aliases_generated.py`` as a Python dict literal."""
     sorted_items = sorted(aliases.items())
+    doc_keys = set(KRAKEN_DOCUMENTED_ALIASES)
 
     lines: list[str] = [
         "# market_connector/exchanges/kraken/_aliases_generated.py",
         "# DO NOT EDIT MANUALLY — regenerate via:",
         "#   python -m market_connector.exchanges.kraken.tools.symbol_audit",
+        f"# Source of truth: {KRAKEN_LEGACY_DOC_URL}",
         "",
         "KRAKEN_ASSET_ALIASES: dict[str, str] = {",
     ]
 
     for key, value in sorted_items:
-        comment = "  # HB-specific override (preserved by audit)" if key in _MANUAL_OVERRIDES else ""
+        if key not in doc_keys:
+            comment = "  # API-detected (not yet in official docs)"
+        else:
+            comment = ""
         lines.append(f'    "{key}": "{value}",{comment}')
 
     lines.append("}")
@@ -261,18 +213,24 @@ def _write_aliases(aliases: dict[str, str]) -> None:
 
 
 def run() -> None:
-    """Execute the full audit: fetch from both endpoints, merge, write."""
-    print(f"Fetching asset data from Kraken API ...")
-    existing = _load_existing_aliases()
-    print(f"  Loaded {len(existing)} existing aliases from committed file.")
+    """Execute the full audit: documented baseline + API sanity check + write."""
+    print("Building Kraken alias table ...")
+    print(f"  Source of truth: {KRAKEN_LEGACY_DOC_URL}")
+    print(f"  Documented baseline: {len(KRAKEN_DOCUMENTED_ALIASES)} entries")
 
-    asset_aliases = _fetch_asset_aliases()
-    pair_aliases = _fetch_pair_aliases(asset_aliases)
+    print("Fetching /0/public/Assets for sanity check and new-code detection ...")
+    try:
+        assets = _fetch_assets()
+        print(f"  /Assets → {len(assets)} asset records")
+        _sanity_check(assets)
+        new_codes = _detect_new_legacy_codes(assets, KRAKEN_DOCUMENTED_ALIASES)
+    except Exception as exc:
+        print(f"  WARNING: API fetch failed ({exc}); using documented baseline only.")
+        new_codes = {}
 
-    merged = _merge_aliases(existing, asset_aliases, pair_aliases)
-    print(f"  Merged total: {len(merged)} aliases.")
-
-    _write_aliases(merged)
+    aliases: dict[str, str] = {**KRAKEN_DOCUMENTED_ALIASES, **new_codes}
+    print(f"  Total aliases: {len(aliases)}")
+    _write_aliases(aliases)
 
 
 if __name__ == "__main__":

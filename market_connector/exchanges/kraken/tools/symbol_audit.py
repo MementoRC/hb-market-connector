@@ -65,8 +65,7 @@ from pathlib import Path
 # Chains are collapsed so every entry maps directly to the HB canonical name.
 # e.g. XXBT→XBT→BTC is collapsed to XXBT→BTC.
 KRAKEN_LEGACY_DOC_URL = (
-    "https://support.kraken.com/articles/360001206766"
-    "-bitcoin-currency-code-xbt-vs-btc"
+    "https://support.kraken.com/articles/360001206766-bitcoin-currency-code-xbt-vs-btc"
 )
 
 # 19 documented entries (chains collapsed to HB canonical names).
@@ -77,14 +76,14 @@ KRAKEN_DOCUMENTED_ALIASES: dict[str, str] = {
     "XLTC": "LTC",
     "XMLN": "MLN",
     "XREP": "REP",
-    "XXBT": "BTC",   # chain: XXBT → XBT → BTC (collapsed)
+    "XXBT": "BTC",  # chain: XXBT → XBT → BTC (collapsed)
     "XXDG": "DOGE",  # chain: XXDG → XDG → DOGE (collapsed)
     "XXLM": "XLM",
     "XXMR": "XMR",
     "XXRP": "XRP",
     "XZEC": "ZEC",
-    "XBT": "BTC",    # direct documented alias
-    "XDG": "DOGE",   # direct documented alias
+    "XBT": "BTC",  # direct documented alias
+    "XDG": "DOGE",  # direct documented alias
     # Fiat (legacy Z-prefix retained by Kraken)
     "ZAUD": "AUD",
     "ZCAD": "CAD",
@@ -111,11 +110,13 @@ _OUTPUT_FILE = Path(__file__).parent.parent / "_aliases_generated.py"
 
 def _fetch_assets() -> dict[str, dict[str, object]]:
     """HTTP GET ``/0/public/Assets``, return the ``result`` dict."""
+    if not _ASSETS_URL.startswith("https://"):
+        raise ValueError(f"Refusing non-HTTPS URL: {_ASSETS_URL!r}")
     req = urllib.request.Request(
         _ASSETS_URL,
         headers={"User-Agent": "hb-market-connector/symbol-audit"},
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
         body: dict[str, object] = json.loads(resp.read().decode())
 
     if body.get("error"):
@@ -176,10 +177,15 @@ def _detect_new_legacy_codes(
             continue
 
         # Z-fiat heuristic.
-        if len(internal) == 4 and internal[0] == "Z" and internal[1:] in _FIAT_ISO_4217:
-            if altname != internal and altname in _FIAT_ISO_4217:
-                new_codes[internal] = altname
-                print(f"  Detected new Z-fiat code (API): {internal!r} → {altname!r}")
+        if (
+            len(internal) == 4
+            and internal[0] == "Z"
+            and internal[1:] in _FIAT_ISO_4217
+            and altname != internal
+            and altname in _FIAT_ISO_4217
+        ):
+            new_codes[internal] = altname
+            print(f"  Detected new Z-fiat code (API): {internal!r} → {altname!r}")
 
     return new_codes
 
@@ -199,10 +205,7 @@ def _write_aliases(aliases: dict[str, str]) -> None:
     ]
 
     for key, value in sorted_items:
-        if key not in doc_keys:
-            comment = "  # API-detected (not yet in official docs)"
-        else:
-            comment = ""
+        comment = "  # API-detected (not yet in official docs)" if key not in doc_keys else ""
         lines.append(f'    "{key}": "{value}",{comment}')
 
     lines.append("}")

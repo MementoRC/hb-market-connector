@@ -1,6 +1,9 @@
 """Shared test fixtures for market_connector.exchanges.coinbase tests."""
 
 import pytest
+
+pytest.importorskip("cryptography", reason="coinbase tests require cryptography (optional dep)")
+
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, generate_private_key
 

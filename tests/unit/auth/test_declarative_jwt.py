@@ -7,10 +7,14 @@ Two test classes:
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("jwt", reason="JWT signer tests require pyjwt (optional dep)")
+pytest.importorskip("cryptography", reason="JWT signer tests require cryptography (optional dep)")
+
 import time
 
 import jwt
-import pytest
 from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, generate_private_key
 from cryptography.hazmat.primitives.serialization import (
     Encoding,

@@ -38,7 +38,6 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import httpx
-import jwt as pyjwt
 
 from market_connector.auth.spec import (
     BearerTokenSpec,
@@ -568,6 +567,8 @@ class DeclarativeRestSigner:
     # ------------------------------------------------------------------
 
     async def _sign_jwt(self, request: Request) -> Request:
+        import jwt as pyjwt  # lazy: optional dep for JWT signing
+
         spec = self._spec
         assert isinstance(spec, JwtSigningSpec)
 

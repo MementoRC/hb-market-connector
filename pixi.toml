@@ -32,6 +32,8 @@ pyjwt = ">=2.8"
 cryptography = ">=41"
 
 [feature.kraken.dependencies]
+pyjwt = ">=2.8"
+cryptography = ">=41"
 
 [feature.py312.dependencies]
 python = "3.12.*"
@@ -41,11 +43,19 @@ default = { features = ["dev"], solve-group = "default" }
 ci = { features = ["ci", "coinbase", "dev"], solve-group = "default" }
 quality-ci = { features = ["ci", "coinbase", "dev"], solve-group = "default" }
 coinbase = { features = ["coinbase", "dev"], solve-group = "default" }
-kraken = { features = ["kraken"], solve-group = "default" }
+kraken = { features = ["kraken", "dev"], solve-group = "default" }
 py312 = { features = ["py312", "coinbase", "dev"], solve-group = "py312" }
 
 [tasks]
 kraken-symbol-audit = "python -m market_connector.exchanges.kraken.tools.symbol_audit"
+test-kraken = "pytest tests/exchanges/kraken/ -v --tb=short"
+test-kraken-specs = "pytest tests/exchanges/kraken/unit/test_specs.py -v --tb=long -p no:warnings"
+test-kraken-factory = "pytest tests/exchanges/kraken/unit/test_factory.py -v --tb=long -p no:warnings"
+test-kraken-vectors = "pytest tests/exchanges/kraken/unit/test_signature_vectors.py -v --tb=long -p no:warnings"
+test-kraken-vectors-short = "pytest tests/exchanges/kraken/unit/test_signature_vectors.py -v --tb=line -p no:warnings"
+test-kraken-vectors-log = "pytest tests/exchanges/kraken/unit/test_signature_vectors.py --tb=short -p no:warnings -q --junitxml=/tmp/kraken_vectors.xml"
+lint-kraken = "ruff check market_connector/exchanges/kraken/ tests/exchanges/kraken/ --output-format=junit --output-file=/tmp/kraken_lint.xml"
+lint-kraken-fix = "ruff check market_connector/exchanges/kraken/specs.py tests/exchanges/kraken/unit/test_signature_vectors.py --select=I --fix"
 test = "pytest tests/"
 test-unit = "pytest tests/unit/"
 test-integration = "pytest tests/integration/"

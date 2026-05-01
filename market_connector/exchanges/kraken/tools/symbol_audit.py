@@ -54,8 +54,9 @@ No authentication required.
 from __future__ import annotations
 
 import json
-import urllib.request
 from pathlib import Path
+
+import httpx
 
 # ---------------------------------------------------------------------------
 # Source of truth: Kraken official support documentation
@@ -112,14 +113,14 @@ def _fetch_assets() -> dict[str, dict[str, object]]:
     """HTTP GET ``/0/public/Assets``, return the ``result`` dict."""
     if not _ASSETS_URL.startswith("https://"):
         raise ValueError(f"Refusing non-HTTPS URL: {_ASSETS_URL!r}")
-    req = urllib.request.Request(
+
+    response = httpx.get(
         _ASSETS_URL,
         headers={"User-Agent": "hb-market-connector/symbol-audit"},
+        timeout=15.0,
     )
-    # _ASSETS_URL is a module-level hardcoded https:// constant; scheme asserted above.
-    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
-        body: dict[str, object] = json.loads(resp.read().decode())
+    response.raise_for_status()
+    body: dict[str, object] = json.loads(response.text)
 
     if body.get("error"):
         raise RuntimeError(f"Kraken API error from {_ASSETS_URL}: {body['error']}")

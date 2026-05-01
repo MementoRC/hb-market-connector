@@ -41,6 +41,14 @@ class ExchangeUnavailableError(GatewayError):
     """The exchange is down, returning 5xx, or otherwise unreachable."""
 
 
+class ServiceUnavailableError(GatewayError):
+    """The exchange service is temporarily unavailable (maintenance, cancel-only mode, etc.)."""
+
+
+class ExchangePermissionError(GatewayError):
+    """The request was denied due to insufficient permissions or account restrictions."""
+
+
 class UnknownPairError(GatewayError):
     """A pair string could not be mapped (no matching rule or fallback)."""
 

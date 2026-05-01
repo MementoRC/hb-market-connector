@@ -116,6 +116,8 @@ def _fetch_assets() -> dict[str, dict[str, object]]:
         _ASSETS_URL,
         headers={"User-Agent": "hb-market-connector/symbol-audit"},
     )
+    # _ASSETS_URL is a module-level hardcoded https:// constant; scheme asserted above.
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
     with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
         body: dict[str, object] = json.loads(resp.read().decode())
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlparse
 
 from market_connector.exchanges.kraken.converters import kraken_ordertype_from_hb
 from market_connector.exchanges.kraken.hb_compat.kraken_bridge import KrakenConnectorBridge
@@ -57,12 +58,13 @@ class TestGatewayInstantiation:
 
     def test_config_urls_default_to_live(self) -> None:
         cfg = KrakenConfig(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET)
-        assert "api.kraken.com" in cfg.base_url
-        assert "ws.kraken.com" in cfg.ws_url
+        assert urlparse(cfg.base_url).hostname == "api.kraken.com"
+        assert urlparse(cfg.ws_url).hostname == "ws.kraken.com"
 
     def test_config_sandbox_url(self) -> None:
         cfg = KrakenConfig(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET, sandbox=True)
-        assert "demo" in cfg.base_url or "sandbox" in cfg.base_url or "futures" in cfg.base_url
+        hostname = urlparse(cfg.base_url).hostname or ""
+        assert "demo" in hostname or "sandbox" in hostname or "futures" in hostname
 
     async def test_start_calls_rest_and_ws(self) -> None:
         gw = KrakenGateway(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET)

@@ -47,6 +47,7 @@ python_functions = "test_*"
 markers = [
     "unit: unit tests",
     "integration: integration tests",
+    "ib_gateway: integration test requiring a running IB Gateway (Docker or local). Skipped by default; run with `-m ib_gateway`.",
 ]
 timeout = 30
 addopts = "--strict-markers --strict-config -v"

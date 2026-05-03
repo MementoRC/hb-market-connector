@@ -13,11 +13,17 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager as AsyncContextManager
     from decimal import Decimal
 
+    from market_connector.contracts.protocols import ContractResolver
     from market_connector.primitives import (
         OpenOrder,
         OrderBookSnapshot,
         OrderBookUpdate,
         TradeEvent,
+    )
+    from market_connector.transport.protocols import (
+        RequestTransport,
+        StreamTransport,
+        Transport,
     )
 
 # Note: @runtime_checkable isinstance checks verify method *names* only,
@@ -92,3 +98,19 @@ class ExchangeGateway(ExecutionGateway, MarketDataGateway, Protocol):
     @property
     def ready(self) -> bool:
         return False
+
+
+@runtime_checkable
+class TransportAwareGateway(ExchangeGateway, Protocol):
+    """Extension of ExchangeGateway for exchanges that expose typed
+    transport slots and (optionally) a structured-contract resolver.
+
+    Existing gateways (Coinbase, Kraken) that do not declare these slots
+    continue to satisfy ExchangeGateway unchanged. New gateways
+    (Interactive Brokers) implement TransportAwareGateway.
+    """
+
+    rest_transport: RequestTransport | None
+    stream_transport: StreamTransport | None
+    unified_transport: Transport | None
+    contract_resolver: ContractResolver | None

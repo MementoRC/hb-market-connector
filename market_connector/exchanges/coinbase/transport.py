@@ -12,7 +12,7 @@ CoinbaseRestClient overrides ``request()`` to:
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 from market_connector.auth.protocols import Request, Signer
 from market_connector.transport.rest_base import RestConnectorBase
@@ -45,6 +45,7 @@ class CoinbaseRestClient(RestConnectorBase):
         )
         self._coinbase_signer = signer
 
+    @override
     async def request(
         self,
         endpoint_name: str,

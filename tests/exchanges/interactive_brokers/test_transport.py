@@ -54,6 +54,17 @@ class TestProtocolConformance:
 
 
 class TestConnectionLifecycle:
+    def test_init_raises_import_error_if_ib_async_missing(self, spec):
+        """When ib_async is not installed, IB is None and __init__ raises ImportError."""
+        with (
+            patch(
+                "market_connector.exchanges.interactive_brokers.transport.IB",
+                None,
+            ),
+            pytest.raises(ImportError, match="ib_async"),
+        ):
+            IbGatewayTransport(spec)
+
     @pytest.mark.asyncio
     async def test_connect_calls_ib_connect_async(self, spec, mock_ib):
         with patch(

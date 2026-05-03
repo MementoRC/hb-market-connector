@@ -12,11 +12,13 @@ from typing import TYPE_CHECKING, Any
 from market_connector.contracts.instrument import InstrumentRef
 
 if TYPE_CHECKING:
+    from market_connector.contracts.protocols import ContractResolver
     from market_connector.primitives import ConnectorPair
+    from market_connector.protocols import ExchangeGateway
 
 
 async def native_for(
-    gateway: Any,
+    gateway: ExchangeGateway,
     target: ConnectorPair | InstrumentRef,
 ) -> Any:
     """Resolve target -> native exchange identifier.
@@ -27,7 +29,7 @@ async def native_for(
     ConnectorPair is a str type alias, so dispatch is via isinstance(InstrumentRef)
     rather than isinstance(ConnectorPair).
     """
-    resolver = getattr(gateway, "contract_resolver", None)
+    resolver: ContractResolver | None = getattr(gateway, "contract_resolver", None)
     if resolver is not None:
         if isinstance(target, InstrumentRef):
             return (await resolver.resolve(target)).native

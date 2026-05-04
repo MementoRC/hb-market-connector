@@ -35,6 +35,9 @@ cryptography = ">=41"
 pyjwt = ">=2.8"
 cryptography = ">=41"
 
+[feature.interactive-brokers.pypi-dependencies]
+ib_async = ">=1.0.1,<2.0.0"
+
 [feature.py312.dependencies]
 python = "3.12.*"
 
@@ -44,6 +47,7 @@ ci = { features = ["ci", "coinbase", "dev"], solve-group = "default" }
 quality-ci = { features = ["ci", "coinbase", "dev"], solve-group = "default" }
 coinbase = { features = ["coinbase", "dev"], solve-group = "default" }
 kraken = { features = ["kraken", "dev"], solve-group = "default" }
+interactive-brokers = { features = ["interactive-brokers", "dev"], solve-group = "default" }
 py312 = { features = ["py312", "coinbase", "dev"], solve-group = "py312" }
 
 [tasks]

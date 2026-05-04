@@ -11,6 +11,11 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
+# Trading-pair string as used throughout the exchange gateway (e.g. "BTC-USDT").
+# A type alias of str keeps existing code unchanged while giving the type checker
+# a named concept to anchor against InstrumentRef (the structured peer).
+type ConnectorPair = str
+
 
 class _StrValue(StrEnum):
     """Base mixin: str(member) returns the value."""

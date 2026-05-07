@@ -8,6 +8,8 @@ Conforms to RequestTransport and StreamTransport; held in the
 unified_transport slot of the gateway since one socket carries both
 request/response (placeOrder, reqContractDetails) and streaming
 (reqMktData callbacks) traffic.
+
+Stage 2 adds _handle_registry and _error_router; wires IB.errorEvent.
 """
 
 from __future__ import annotations
@@ -21,11 +23,15 @@ from typing import TYPE_CHECKING, Any
 try:
     from ib_async import IB  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - optional dep
-    IB = None
+    IB = None  # noqa: F841
+
+from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from market_connector.contracts.instrument import InstrumentRef
+    from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
 
@@ -33,7 +39,7 @@ class IbGatewayTransport:
     """Connection wrapper around ib_async.IB.
 
     Stage 1 scope: connect/disconnect/is_connected.
-    Stage 2 will add request() (reqContractDetails et al via reqId tracking).
+    Stage 2 adds _handle_registry, _error_router, and wires errorEvent.
     Stage 3 will add subscribe() (reqMktData / reqMktDepth event routing).
     """
 
@@ -45,6 +51,8 @@ class IbGatewayTransport:
             )
         self._spec = spec
         self._ib = IB()
+        self._handle_registry: dict[int, OrderHandle] = {}
+        self._error_router = _ErrorRouter()
 
     @property
     def is_connected(self) -> bool:
@@ -58,14 +66,38 @@ class IbGatewayTransport:
             port=self._spec.port,
             clientId=self._spec.client_id,
         )
+        self._ib.errorEvent += self._error_router.on_error
 
     async def disconnect(self) -> None:
+        self._ib.errorEvent -= self._error_router.on_error
         self._ib.disconnect()
 
     async def request(self, method: str, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
-            "request() is implemented in Stage 2 (reqContractDetails, placeOrder, etc.)"
+            "IbGatewayTransport does not implement request(); "
+            "use typed methods on IbGatewayTransport directly"
         )
+
+    async def _resolve_via_ib(self, ref: InstrumentRef) -> list:
+        """Call ib_async.reqContractDetailsAsync with a Contract template built from ref.
+
+        Returns the raw list of ContractDetails objects. Ambiguity checking and
+        ResolvedContract construction live in IbContractResolver; this method is
+        a thin I/O wrapper.
+        """
+        from ib_async import Contract  # noqa: PLC0415 — lazy, ib_async is optional
+
+        from market_connector.exchanges.interactive_brokers.contract_resolver import (  # noqa: PLC0415
+            _INSTRUMENT_TYPE_TO_SECTYPE,
+        )
+
+        template = Contract(
+            symbol=ref.symbol,
+            secType=_INSTRUMENT_TYPE_TO_SECTYPE.get(ref.instrument_type, "STK"),
+            currency=ref.quote_currency or "USD",
+            exchange=getattr(ref, "exchange_hint", None) or "SMART",
+        )
+        return await self._ib.reqContractDetailsAsync(template)  # type: ignore[no-any-return]
 
     def subscribe(
         self,

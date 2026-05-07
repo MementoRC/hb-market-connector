@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from market_connector.auth.passthrough import PassThroughSigner
+from market_connector.exchanges.interactive_brokers.contract_resolver import IbContractResolver
 from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayGateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
@@ -50,12 +51,12 @@ class TestBuildIbGateway:
             g = build_ib_gateway(spec)
         assert isinstance(g.signer, PassThroughSigner)
 
-    def test_contract_resolver_none_in_stage1(self):
-        # Stage 1 has no resolver yet; Stage 2 adds IbContractResolver.
+    def test_contract_resolver_is_ib_resolver(self):
+        # Stage 2 injects IbContractResolver; Stage 1's None is replaced.
         spec = IbConnectionSpec()
         with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
             g = build_ib_gateway(spec)
-        assert g.contract_resolver is None
+        assert isinstance(g.contract_resolver, IbContractResolver)
 
     @pytest.mark.asyncio
     async def test_lifecycle(self, mock_ib):
@@ -75,3 +76,21 @@ class TestBuildIbGateway:
 
             await g.stop()
             mock_ib.disconnect.assert_called_once()
+
+
+class TestFactoryResolverWiring:
+    def test_resolver_shares_transport_reference(self):
+        """The injected resolver must wrap the same transport instance as the gateway."""
+        spec = IbConnectionSpec()
+        with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
+            g = build_ib_gateway(spec)
+        # resolver._transport is the identical object stored in gateway.unified_transport
+        assert g.contract_resolver._transport is g.unified_transport
+
+    def test_resolver_accessible_via_gateway_slot(self):
+        spec = IbConnectionSpec()
+        with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
+            g = build_ib_gateway(spec)
+        # contract_resolver is a non-None IbContractResolver on the gateway.
+        assert g.contract_resolver is not None
+        assert isinstance(g.contract_resolver, IbContractResolver)

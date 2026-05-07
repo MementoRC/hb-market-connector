@@ -33,6 +33,53 @@ if TYPE_CHECKING:
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+    from market_connector.orders import HBOrder
+
+
+def _hb_to_ib_order(hb_order: HBOrder) -> Any:
+    """Map an HBOrder to an ib_async Order. Stage 2 supports MARKET and LIMIT only.
+
+    LIMIT_MAKER and any future conditional order types raise NotImplementedError —
+    they land in Stage 4 when conditional order routing is implemented.
+
+    Args:
+        hb_order: Immutable order placement request with order_type, side,
+            amount, and optional price.
+
+    Returns:
+        An ``ib_async.Order`` instance ready to pass to ``IB.placeOrder``.
+
+    Raises:
+        ValueError: When a LIMIT order is submitted without a price.
+        NotImplementedError: When an order type beyond MARKET/LIMIT is requested.
+    """
+    from ib_async import Order  # noqa: PLC0415 — lazy, ib_async is optional
+
+    from market_connector.orders import OrderType, TradeType  # noqa: PLC0415
+
+    action = "BUY" if hb_order.side == TradeType.BUY else "SELL"
+
+    if hb_order.order_type == OrderType.MARKET:
+        return Order(
+            action=action,
+            orderType="MKT",
+            totalQuantity=float(hb_order.amount),
+        )
+
+    if hb_order.order_type == OrderType.LIMIT:
+        if hb_order.price is None:
+            raise ValueError("LIMIT order requires non-None price")
+        return Order(
+            action=action,
+            orderType="LMT",
+            totalQuantity=float(hb_order.amount),
+            lmtPrice=float(hb_order.price),
+        )
+
+    raise NotImplementedError(
+        f"Order type {hb_order.order_type!r} not supported in Stage 2. "
+        f"Conditional order types (LIMIT_MAKER, etc.) land in Stage 4."
+    )
 
 
 class IbGatewayTransport:

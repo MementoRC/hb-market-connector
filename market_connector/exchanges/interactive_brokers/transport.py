@@ -14,6 +14,7 @@ Stage 2 adds _handle_registry and _error_router; wires IB.errorEvent.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 # ib_async is an optional dependency; import is inside __init__ so that the
@@ -100,6 +101,7 @@ class IbGatewayTransport:
         self._ib = IB()
         self._handle_registry: dict[int, OrderHandle] = {}
         self._error_router = _ErrorRouter()
+        self._first_status_timeout: float = 30.0
 
     @property
     def is_connected(self) -> bool:
@@ -145,6 +147,69 @@ class IbGatewayTransport:
             exchange=getattr(ref, "exchange_hint", None) or "SMART",
         )
         return await self._ib.reqContractDetailsAsync(template)  # type: ignore[no-any-return]
+
+    async def place_order(self, native_contract: Any, hb_order: HBOrder) -> OrderHandle:
+        """Submit an order to IB and await the first non-PendingSubmit status update.
+
+        The caller (gateway) is responsible for pre-resolving the contract; this
+        method receives the raw ib_async Contract object directly.
+
+        Returns an OrderHandle snapshot reflecting the first meaningful status.
+        Raises ConnectionLostError if not connected, OrderRejectedError if IB
+        rejects the order before statusEvent fires, or asyncio.TimeoutError if
+        no status arrives within _first_status_timeout seconds.
+        """
+        if not self._error_router.is_connected:
+            from market_connector.exchanges.interactive_brokers.exceptions import (  # noqa: PLC0415
+                ConnectionLostError,
+            )
+
+            raise ConnectionLostError(1100, "transport not connected")
+
+        from market_connector.exchanges.interactive_brokers.order_handle import (  # noqa: PLC0415
+            OrderHandle,
+        )
+
+        ib_order = _hb_to_ib_order(hb_order)
+        trade = self._ib.placeOrder(native_contract, ib_order)
+        initial = OrderHandle.from_trade(trade)
+        self._handle_registry[trade.order.orderId] = initial
+
+        new_handle = await self._wait_first_status_update(trade)
+        self._handle_registry[trade.order.orderId] = new_handle
+        return new_handle
+
+    async def _wait_first_status_update(self, trade: Any) -> OrderHandle:
+        """Await the first meaningful status update for a submitted trade.
+
+        Either statusEvent resolves the future (success path) or the error router
+        sets an exception on it (error-before-status race). The try/finally block
+        guarantees cleanup of both the statusEvent hook and the pending waiter entry.
+        """
+        from market_connector.exchanges.interactive_brokers.order_handle import (  # noqa: PLC0415
+            OrderHandle,
+        )
+
+        fut: asyncio.Future[OrderHandle] = asyncio.get_running_loop().create_future()
+        self._error_router._pending_order_waiters[trade.order.orderId] = fut
+
+        def _on_status(*_args: Any) -> None:
+            try:
+                new_handle = OrderHandle.from_trade(trade)
+            except ValueError:
+                return
+            # Ignore the initial PendingSubmit echo — wait for a real status.
+            if new_handle.raw_status == "PendingSubmit":
+                return
+            if not fut.done():
+                fut.set_result(new_handle)
+
+        trade.statusEvent += _on_status
+        try:
+            return await asyncio.wait_for(fut, timeout=self._first_status_timeout)
+        finally:
+            trade.statusEvent -= _on_status
+            self._error_router._pending_order_waiters.pop(trade.order.orderId, None)
 
     def subscribe(
         self,

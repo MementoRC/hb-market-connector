@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ib_async import Trade
@@ -62,3 +63,40 @@ class OrderHandle:
             avg_fill_price=Decimal(str(avg_px)) if avg_px else None,
             _trade=trade,
         )
+
+    async def wait_for(
+        self,
+        *,
+        status: OrderState | set[OrderState],
+        timeout: float,
+    ) -> OrderHandle:
+        """Await until the trade reaches one of the target states.
+
+        Raises asyncio.TimeoutError on timeout. Raises RuntimeError if
+        a terminal state is reached that is not in the awaited set.
+        """
+        targets = {status} if isinstance(status, OrderState) else set(status)
+        terminals = {OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED}
+
+        fut: asyncio.Future[OrderHandle] = asyncio.get_running_loop().create_future()
+
+        def _on_status(*_: Any) -> None:
+            try:
+                new_handle = OrderHandle.from_trade(self._trade)
+            except ValueError:
+                return
+            if new_handle.status in targets:
+                if not fut.done():
+                    fut.set_result(new_handle)
+            elif new_handle.status in terminals and not fut.done():
+                fut.set_exception(
+                    RuntimeError(
+                        f"Awaited {targets} but order reached terminal state {new_handle.status}"
+                    )
+                )
+
+        self._trade.statusEvent += _on_status
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        finally:
+            self._trade.statusEvent -= _on_status

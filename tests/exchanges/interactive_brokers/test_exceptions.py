@@ -1,4 +1,5 @@
 """Tests for IB domain exceptions (Stage 2)."""
+
 from __future__ import annotations
 
 import pytest

@@ -1,4 +1,5 @@
 """Tests for OrderState enum and OrderHandle frozen dataclass."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -7,9 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from market_connector.exchanges.interactive_brokers.order_handle import (
+    _TRADE_STATUS_MAP,
     OrderHandle,
     OrderState,
-    _TRADE_STATUS_MAP,
 )
 
 

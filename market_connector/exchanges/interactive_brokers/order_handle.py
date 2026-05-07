@@ -1,4 +1,5 @@
 """IB order state model and handle wrapper for Stage 2."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,10 +40,10 @@ class OrderHandle:
     raw_status: str
     filled_qty: Decimal
     avg_fill_price: Decimal | None
-    _trade: "Trade"
+    _trade: Trade
 
     @classmethod
-    def from_trade(cls, trade: "Trade") -> "OrderHandle":
+    def from_trade(cls, trade: Trade) -> OrderHandle:
         raw = trade.orderStatus.status
         try:
             base_state = _TRADE_STATUS_MAP[raw]

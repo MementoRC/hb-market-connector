@@ -70,9 +70,7 @@ class IbGatewayGateway:
 
     # --- ExecutionGateway (Stage 2) ---
 
-    async def place_order(
-        self, ref: "InstrumentRef", hb_order: "HBOrder"
-    ) -> "OrderHandle":
+    async def place_order(self, ref: InstrumentRef, hb_order: HBOrder) -> OrderHandle:
         """Resolve contract then delegate to transport.place_order.
 
         The gateway is responsible for contract resolution so that the transport
@@ -88,11 +86,11 @@ class IbGatewayGateway:
         resolved = await self.contract_resolver.resolve(ref)
         return await self._transport.place_order(resolved.native, hb_order)
 
-    async def cancel_order(self, handle: "OrderHandle") -> "OrderHandle":
+    async def cancel_order(self, handle: OrderHandle) -> OrderHandle:
         """Delegate cancel to transport (idempotent on terminal orders)."""
         return await self._transport.cancel_order(handle)
 
-    def get_open_orders(self) -> "list[OrderHandle]":
+    def get_open_orders(self) -> list[OrderHandle]:
         """Return a snapshot of open orders from the transport's local cache."""
         return self._transport.open_orders()
 

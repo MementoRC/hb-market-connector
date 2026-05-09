@@ -103,12 +103,11 @@ class TestGatewayDelegation:
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from market_connector.contracts.instrument import InstrumentRef, InstrumentType
+        from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
         from market_connector.exchanges.interactive_brokers.order_handle import (
             OrderHandle,
-            OrderState,
         )
         from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
-        from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 
         spec = IbConnectionSpec()
         with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
@@ -123,7 +122,9 @@ class TestGatewayDelegation:
         expected_handle = MagicMock(spec=OrderHandle)
         g.unified_transport.place_order = AsyncMock(return_value=expected_handle)
 
-        ref = InstrumentRef(symbol="AAPL", instrument_type=InstrumentType.STOCK, quote_currency="USD")
+        ref = InstrumentRef(
+            symbol="AAPL", instrument_type=InstrumentType.STOCK, quote_currency="USD"
+        )
         hb_order = MagicMock()
 
         result = await g.place_order(ref, hb_order)
@@ -137,15 +138,17 @@ class TestGatewayDelegation:
         from unittest.mock import patch
 
         from market_connector.contracts.instrument import InstrumentRef, InstrumentType
-        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
         from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
         spec = IbConnectionSpec()
         with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
             g = build_ib_gateway(spec)
 
         g.contract_resolver = None  # simulate Stage 1 condition
-        ref = InstrumentRef(symbol="AAPL", instrument_type=InstrumentType.STOCK, quote_currency="USD")
+        ref = InstrumentRef(
+            symbol="AAPL", instrument_type=InstrumentType.STOCK, quote_currency="USD"
+        )
 
         with pytest.raises(RuntimeError, match="contract_resolver"):
             await g.place_order(ref, MagicMock())
@@ -154,8 +157,8 @@ class TestGatewayDelegation:
     async def test_cancel_order_delegates_to_transport(self):
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
         from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
         spec = IbConnectionSpec()
         with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
@@ -173,8 +176,8 @@ class TestGatewayDelegation:
     def test_get_open_orders_delegates_to_transport(self):
         from unittest.mock import MagicMock, patch
 
-        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
         from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
         spec = IbConnectionSpec()
         with patch("market_connector.exchanges.interactive_brokers.transport.IB"):

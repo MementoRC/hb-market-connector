@@ -15,8 +15,11 @@ if TYPE_CHECKING:
     from decimal import Decimal
 
     from market_connector.auth.passthrough import PassThroughSigner
+    from market_connector.contracts.instrument import InstrumentRef
     from market_connector.contracts.protocols import ContractResolver
+    from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
+    from market_connector.orders import HBOrder
     from market_connector.transport.protocols import (
         RequestTransport,
         StreamTransport,
@@ -65,23 +68,33 @@ class IbGatewayGateway:
     async def stop(self) -> None:
         await self._transport.disconnect()
 
-    # --- ExecutionGateway stubs (Stage 2) ---
+    # --- ExecutionGateway (Stage 2) ---
 
     async def place_order(
-        self,
-        trading_pair: str,
-        order_type: str,
-        side: str,
-        amount: Decimal,
-        price: Decimal | None,
-    ) -> str:
-        raise NotImplementedError("place_order() is implemented in Stage 2")
+        self, ref: "InstrumentRef", hb_order: "HBOrder"
+    ) -> "OrderHandle":
+        """Resolve contract then delegate to transport.place_order.
 
-    async def cancel_order(self, trading_pair: str, client_order_id: str) -> bool:
-        raise NotImplementedError("cancel_order() is implemented in Stage 2")
+        The gateway is responsible for contract resolution so that the transport
+        remains free of resolver dependencies. Raises RuntimeError if no
+        contract_resolver has been wired (Stage 1 condition; should not occur
+        in Stage 2+ when factory is used).
+        """
+        if self.contract_resolver is None:
+            raise RuntimeError(
+                "Gateway has no contract_resolver; cannot place orders. "
+                "Use build_ib_gateway() to construct a fully-wired gateway."
+            )
+        resolved = await self.contract_resolver.resolve(ref)
+        return await self._transport.place_order(resolved.native, hb_order)
 
-    async def get_open_orders(self, trading_pair: str) -> list[Any]:
-        raise NotImplementedError("get_open_orders() is implemented in Stage 2")
+    async def cancel_order(self, handle: "OrderHandle") -> "OrderHandle":
+        """Delegate cancel to transport (idempotent on terminal orders)."""
+        return await self._transport.cancel_order(handle)
+
+    def get_open_orders(self) -> "list[OrderHandle]":
+        """Return a snapshot of open orders from the transport's local cache."""
+        return self._transport.open_orders()
 
     async def get_balance(self, currency: str) -> Decimal:
         raise NotImplementedError("get_balance() is implemented in Stage 2")

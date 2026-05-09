@@ -94,3 +94,96 @@ class TestFactoryResolverWiring:
         # contract_resolver is a non-None IbContractResolver on the gateway.
         assert g.contract_resolver is not None
         assert isinstance(g.contract_resolver, IbContractResolver)
+
+
+class TestGatewayDelegation:
+    @pytest.mark.asyncio
+    async def test_place_order_delegates_to_transport(self):
+        """place_order resolves via contract_resolver then delegates to transport."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from market_connector.contracts.instrument import InstrumentRef, InstrumentType
+        from market_connector.exchanges.interactive_brokers.order_handle import (
+            OrderHandle,
+            OrderState,
+        )
+        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+        from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+
+        spec = IbConnectionSpec()
+        with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
+            g = build_ib_gateway(spec)
+
+        # Replace resolver and transport with mocks.
+        resolved = MagicMock()
+        resolved.native = MagicMock()
+        g.contract_resolver = MagicMock()
+        g.contract_resolver.resolve = AsyncMock(return_value=resolved)
+
+        expected_handle = MagicMock(spec=OrderHandle)
+        g.unified_transport.place_order = AsyncMock(return_value=expected_handle)
+
+        ref = InstrumentRef(symbol="AAPL", instrument_type=InstrumentType.STOCK, quote_currency="USD")
+        hb_order = MagicMock()
+
+        result = await g.place_order(ref, hb_order)
+
+        g.contract_resolver.resolve.assert_awaited_once_with(ref)
+        g.unified_transport.place_order.assert_awaited_once_with(resolved.native, hb_order)
+        assert result is expected_handle
+
+    @pytest.mark.asyncio
+    async def test_place_order_raises_when_no_resolver(self):
+        from unittest.mock import patch
+
+        from market_connector.contracts.instrument import InstrumentRef, InstrumentType
+        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+        from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+
+        spec = IbConnectionSpec()
+        with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
+            g = build_ib_gateway(spec)
+
+        g.contract_resolver = None  # simulate Stage 1 condition
+        ref = InstrumentRef(symbol="AAPL", instrument_type=InstrumentType.STOCK, quote_currency="USD")
+
+        with pytest.raises(RuntimeError, match="contract_resolver"):
+            await g.place_order(ref, MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_cancel_order_delegates_to_transport(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+        from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+
+        spec = IbConnectionSpec()
+        with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
+            g = build_ib_gateway(spec)
+
+        handle = MagicMock()
+        cancelled = MagicMock()
+        g.unified_transport.cancel_order = AsyncMock(return_value=cancelled)
+
+        result = await g.cancel_order(handle)
+
+        g.unified_transport.cancel_order.assert_awaited_once_with(handle)
+        assert result is cancelled
+
+    def test_get_open_orders_delegates_to_transport(self):
+        from unittest.mock import MagicMock, patch
+
+        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+        from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+
+        spec = IbConnectionSpec()
+        with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
+            g = build_ib_gateway(spec)
+
+        handles = [MagicMock(), MagicMock()]
+        g.unified_transport.open_orders = MagicMock(return_value=handles)
+
+        result = g.get_open_orders()
+
+        g.unified_transport.open_orders.assert_called_once()
+        assert result is handles

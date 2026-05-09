@@ -59,3 +59,57 @@ async def test_paper_gateway_round_trip(paper_spec: IbConnectionSpec) -> None:
         await g.stop()
 
     assert not g.ready
+
+
+@pytest.mark.asyncio
+async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> None:
+    """Resolve AAPL, place a paper MARKET BUY 1 share, await SUBMITTED, cancel.
+
+    Verifies the full Stage 2 path end-to-end:
+      - IbContractResolver.resolve() returns a non-empty contract_id
+      - transport.place_order() returns SUBMITTED or FILLED
+      - transport.cancel_order() returns CANCELLED (or FILLED if it filled first)
+
+    Requires a running IB Gateway in paper mode. Set IB_GATEWAY_HOST to enable.
+    Skipped automatically in CI (IB_GATEWAY_HOST is never set in CI).
+    """
+    from decimal import Decimal
+
+    from market_connector.contracts.instrument import InstrumentRef, InstrumentType
+    from market_connector.exchanges.interactive_brokers.order_handle import OrderState
+    from market_connector.orders import HBOrder, OrderType, TradeType
+
+    spec = paper_spec
+    gateway = build_ib_gateway(spec)
+
+    try:
+        await gateway.start()
+
+        # 1. Resolve AAPL — must return a valid contract_id (non-empty conId string).
+        ref = InstrumentRef(
+            symbol="AAPL",
+            instrument_type=InstrumentType.STOCK,
+            quote_currency="USD",
+        )
+        resolved = await gateway.contract_resolver.resolve(ref)
+        assert resolved.contract_id, "Expected non-empty contract_id for AAPL"
+
+        # 2. Place a paper MARKET BUY 1 share.
+        hb_order = HBOrder(
+            order_type=OrderType.MARKET,
+            side=TradeType.BUY,
+            amount=Decimal("1"),
+            price=None,
+        )
+        handle = await gateway.place_order(ref, hb_order)
+        assert handle.status in {OrderState.SUBMITTED, OrderState.FILLED}, (
+            f"Unexpected status after place_order: {handle.status!r}"
+        )
+
+        # 3. Cancel (idempotent if already FILLED).
+        cancelled = await gateway.cancel_order(handle)
+        assert cancelled.status in {OrderState.CANCELLED, OrderState.FILLED}, (
+            f"Unexpected status after cancel_order: {cancelled.status!r}"
+        )
+    finally:
+        await gateway.stop()

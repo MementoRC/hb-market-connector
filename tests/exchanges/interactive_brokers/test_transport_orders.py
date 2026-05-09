@@ -1,0 +1,486 @@
+"""Tests for transport.place_order — lifecycle, error race, registry, timeout."""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from market_connector.exchanges.interactive_brokers.exceptions import (
+    ConnectionLostError,
+    OrderRejectedError,
+)
+from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle, OrderState
+from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
+
+
+@pytest.fixture(autouse=True)
+def _patch_ib_async_module():
+    """Inject a MagicMock for ib_async so lazy imports inside transport succeed.
+
+    ib_async is an optional extra not installed in the default pixi env.  Every
+    call path exercised here goes through _hb_to_ib_order which does
+    ``from ib_async import Order`` at call time.  Patching sys.modules satisfies
+    that import without requiring the real package.
+    """
+    mock_ib_async = MagicMock()
+    with patch.dict(sys.modules, {"ib_async": mock_ib_async}):
+        yield mock_ib_async
+
+
+def _make_spec() -> IbConnectionSpec:
+    return IbConnectionSpec(host="127.0.0.1", port=4002, client_id=1, paper=True)
+
+
+def _make_trade(
+    order_id: int = 1,
+    perm_id: int = 0,
+    status: str = "Submitted",
+    filled: float = 0.0,
+    avg_fill_price: float = 0.0,
+) -> MagicMock:
+    trade = MagicMock()
+    trade.order.orderId = order_id
+    trade.order.permId = perm_id
+    trade.orderStatus.status = status
+    trade.orderStatus.filled = filled
+    trade.orderStatus.avgFillPrice = avg_fill_price
+
+    _handlers: list = []
+
+    def iadd(_self, cb):
+        _handlers.append(cb)
+        return trade.statusEvent
+
+    def isub(_self, cb):
+        if cb in _handlers:
+            _handlers.remove(cb)
+        return trade.statusEvent
+
+    def call(*args):
+        for h in list(_handlers):
+            h(*args)
+
+    trade.statusEvent.__iadd__ = iadd
+    trade.statusEvent.__isub__ = isub
+    # side_effect is invoked by MagicMock.__call__, so calling
+    # trade.statusEvent(trade) dispatches to all registered handlers.
+    trade.statusEvent.side_effect = call
+    trade._handlers = _handlers
+    return trade
+
+
+@pytest.fixture
+def mock_ib() -> MagicMock:
+    ib = MagicMock()
+    ib.connectAsync = AsyncMock()
+    ib.disconnect = MagicMock()
+    ib.isConnected = MagicMock(return_value=True)
+    ib.errorEvent = MagicMock()
+    ib.errorEvent.__iadd__ = MagicMock()
+    ib.errorEvent.__isub__ = MagicMock()
+    return ib
+
+
+@pytest.fixture
+def mock_hb_order() -> MagicMock:
+    from market_connector.orders import HBOrder, OrderType, TradeType  # noqa: PLC0415
+
+    return HBOrder(
+        order_type=OrderType.MARKET, side=TradeType.BUY, amount=Decimal("10"), price=None
+    )
+
+
+class TestPlaceOrderHappyPath:
+    @pytest.mark.asyncio
+    async def test_place_order_returns_submitted_handle(
+        self, mock_ib: MagicMock, mock_hb_order: MagicMock
+    ) -> None:
+        trade = _make_trade(order_id=42, status="Submitted")
+        mock_ib.placeOrder = MagicMock(return_value=trade)
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+            native = MagicMock()
+
+            async def delayed_fire() -> None:
+                await asyncio.sleep(0.01)
+                trade.statusEvent(trade)
+
+            asyncio.create_task(delayed_fire())
+            handle = await t.place_order(native, mock_hb_order)
+
+        assert handle.status == OrderState.SUBMITTED
+        assert handle.order_id == 42
+
+    @pytest.mark.asyncio
+    async def test_place_order_registers_handle_in_registry(
+        self, mock_ib: MagicMock, mock_hb_order: MagicMock
+    ) -> None:
+        trade = _make_trade(order_id=7, status="Submitted")
+        mock_ib.placeOrder = MagicMock(return_value=trade)
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+            native = MagicMock()
+
+            async def delayed_fire() -> None:
+                await asyncio.sleep(0.01)
+                trade.statusEvent(trade)
+
+            asyncio.create_task(delayed_fire())
+            await t.place_order(native, mock_hb_order)
+
+        assert 7 in t._handle_registry
+
+
+class TestPlaceOrderErrorRace:
+    @pytest.mark.asyncio
+    async def test_error_before_status_raises_order_rejected(
+        self, mock_ib: MagicMock, mock_hb_order: MagicMock
+    ) -> None:
+        """Error router fires OrderRejectedError before statusEvent — place_order raises."""
+        trade = _make_trade(order_id=55, status="Submitted")
+        mock_ib.placeOrder = MagicMock(return_value=trade)
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+            native = MagicMock()
+
+            async def fire_error() -> None:
+                await asyncio.sleep(0.01)
+                # Signature is req_id (snake_case), not reqId.
+                t._error_router.on_error(req_id=55, code=201, msg="order rejected")
+
+            asyncio.create_task(fire_error())
+
+            with pytest.raises(OrderRejectedError):
+                await t.place_order(native, mock_hb_order)
+
+    @pytest.mark.asyncio
+    async def test_not_connected_raises_connection_lost(
+        self, mock_ib: MagicMock, mock_hb_order: MagicMock
+    ) -> None:
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = False
+            native = MagicMock()
+
+            with pytest.raises(ConnectionLostError):
+                await t.place_order(native, mock_hb_order)
+
+
+class TestPlaceOrderTimeout:
+    @pytest.mark.asyncio
+    async def test_no_status_event_raises_timeout(
+        self, mock_ib: MagicMock, mock_hb_order: MagicMock
+    ) -> None:
+        trade = _make_trade(order_id=99, status="PendingSubmit")
+        mock_ib.placeOrder = MagicMock(return_value=trade)
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+            t._first_status_timeout = 0.05  # override for test speed
+            native = MagicMock()
+
+            with pytest.raises(asyncio.TimeoutError):
+                await t.place_order(native, mock_hb_order)
+
+    @pytest.mark.asyncio
+    async def test_pending_submit_status_does_not_resolve_future(
+        self, mock_ib: MagicMock, mock_hb_order: MagicMock
+    ) -> None:
+        """A PendingSubmit statusEvent echo must be ignored; timeout must still fire."""
+        trade = _make_trade(order_id=88, status="PendingSubmit")
+        mock_ib.placeOrder = MagicMock(return_value=trade)
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+            t._first_status_timeout = 0.05
+            native = MagicMock()
+
+            async def fire_pending_submit() -> None:
+                await asyncio.sleep(0.01)
+                # Fire PendingSubmit — should be ignored by _on_status.
+                trade.statusEvent(trade)
+
+            asyncio.create_task(fire_pending_submit())
+
+            with pytest.raises(asyncio.TimeoutError):
+                await t.place_order(native, mock_hb_order)
+
+
+class TestPlaceOrderHandleOrderId:
+    @pytest.mark.asyncio
+    async def test_handle_uses_perm_id_when_nonzero(
+        self, mock_ib: MagicMock, mock_hb_order: MagicMock
+    ) -> None:
+        """OrderHandle.from_trade prefers permId over orderId when permId != 0."""
+        trade = _make_trade(order_id=10, perm_id=9999, status="Submitted")
+        mock_ib.placeOrder = MagicMock(return_value=trade)
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+            native = MagicMock()
+
+            async def delayed_fire() -> None:
+                await asyncio.sleep(0.01)
+                trade.statusEvent(trade)
+
+            asyncio.create_task(delayed_fire())
+            handle = await t.place_order(native, mock_hb_order)
+
+        # Registry is keyed by orderId (10); handle.order_id is permId (9999).
+        assert 10 in t._handle_registry
+        assert handle.order_id == 9999
+
+    @pytest.mark.asyncio
+    async def test_handle_falls_back_to_order_id_when_perm_id_zero(
+        self, mock_ib: MagicMock, mock_hb_order: MagicMock
+    ) -> None:
+        trade = _make_trade(order_id=21, perm_id=0, status="Submitted")
+        mock_ib.placeOrder = MagicMock(return_value=trade)
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+            native = MagicMock()
+
+            async def delayed_fire() -> None:
+                await asyncio.sleep(0.01)
+                trade.statusEvent(trade)
+
+            asyncio.create_task(delayed_fire())
+            handle = await t.place_order(native, mock_hb_order)
+
+        assert handle.order_id == 21
+
+
+class TestCancelOrder:
+    @pytest.mark.asyncio
+    async def test_already_cancelled_returns_same_handle(self, mock_ib):
+        """cancel_order on a CANCELLED handle is idempotent — no IB call made."""
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            trade = _make_trade(order_id=1, status="Cancelled")
+            handle = OrderHandle.from_trade(trade)
+
+            result = await t.cancel_order(handle)
+
+            mock_ib.cancelOrder.assert_not_called()
+            assert result is handle
+
+    @pytest.mark.asyncio
+    async def test_already_filled_returns_same_handle(self, mock_ib):
+        """cancel_order on a FILLED handle is idempotent — no IB call made."""
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            trade = _make_trade(order_id=2, status="Filled", filled=10.0, avg_fill_price=99.0)
+            handle = OrderHandle.from_trade(trade)
+
+            result = await t.cancel_order(handle)
+
+            mock_ib.cancelOrder.assert_not_called()
+            assert result is handle
+
+    @pytest.mark.asyncio
+    async def test_already_rejected_returns_same_handle(self, mock_ib):
+        """cancel_order on a REJECTED handle is idempotent — no IB call made."""
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            trade = _make_trade(order_id=3, status="Inactive")
+            handle = OrderHandle.from_trade(trade)
+
+            result = await t.cancel_order(handle)
+
+            mock_ib.cancelOrder.assert_not_called()
+            assert result is handle
+
+    @pytest.mark.asyncio
+    async def test_active_order_calls_ib_cancel_and_returns_cancelled(self, mock_ib):
+        """Active order: cancelOrder called; awaits statusEvent; returns CANCELLED handle."""
+        mock_ib.cancelOrder = MagicMock()
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            trade = _make_trade(order_id=10, status="Submitted")
+            handle = OrderHandle.from_trade(trade)
+
+            async def fire_cancelled():
+                await asyncio.sleep(0.01)
+                trade.orderStatus.status = "Cancelled"
+                trade.statusEvent(trade)
+
+            asyncio.create_task(fire_cancelled())
+            result = await t.cancel_order(handle)
+
+        mock_ib.cancelOrder.assert_called_once_with(trade.order)
+        assert result.status == OrderState.CANCELLED
+
+    @pytest.mark.asyncio
+    async def test_cancel_updates_handle_registry(self, mock_ib):
+        mock_ib.cancelOrder = MagicMock()
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            trade = _make_trade(order_id=11, status="Submitted")
+            handle = OrderHandle.from_trade(trade)
+            t._handle_registry[11] = handle
+
+            async def fire_cancelled():
+                await asyncio.sleep(0.01)
+                trade.orderStatus.status = "Cancelled"
+                trade.statusEvent(trade)
+
+            asyncio.create_task(fire_cancelled())
+            result = await t.cancel_order(handle)
+
+        assert t._handle_registry[11] is result
+        assert t._handle_registry[11].status == OrderState.CANCELLED
+
+
+class TestOpenOrders:
+    def test_empty_list_when_no_open_orders(self, mock_ib):
+        mock_ib.openTrades = MagicMock(return_value=[])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+
+            result = t.open_orders()
+
+        assert result == []
+
+    def test_snapshot_returns_one_handle_per_trade(self, mock_ib):
+        trade_a = _make_trade(order_id=1, status="Submitted")
+        trade_b = _make_trade(order_id=2, status="Submitted")
+        mock_ib.openTrades = MagicMock(return_value=[trade_a, trade_b])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+
+            result = t.open_orders()
+
+        assert len(result) == 2
+
+    def test_handle_order_id_matches_trade_order_id(self, mock_ib):
+        trade = _make_trade(order_id=77, status="Submitted")
+        mock_ib.openTrades = MagicMock(return_value=[trade])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+
+            result = t.open_orders()
+
+        assert result[0].order_id == 77
+
+    def test_registry_populated_as_side_effect(self, mock_ib):
+        """open_orders populates _handle_registry for all returned trades."""
+        trade_a = _make_trade(order_id=10, status="Submitted")
+        trade_b = _make_trade(order_id=20, status="Submitted")
+        mock_ib.openTrades = MagicMock(return_value=[trade_a, trade_b])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+
+            t.open_orders()
+
+        assert 10 in t._handle_registry
+        assert 20 in t._handle_registry
+
+    def test_order_id_consistent_across_place_then_snapshot(self, mock_ib, mock_hb_order):
+        """order_id is stable: place returns it, then open_orders carries it through."""
+        trade = _make_trade(order_id=55, status="Submitted")
+        mock_ib.placeOrder = MagicMock(return_value=trade)
+        mock_ib.openTrades = MagicMock(return_value=[trade])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+            # Manually seed registry as place_order would after its await.
+            t._handle_registry[55] = OrderHandle.from_trade(trade)
+
+            result = t.open_orders()
+
+        assert result[0].order_id == 55
+        assert 55 in t._handle_registry
+
+    def test_not_connected_raises_connection_lost(self, mock_ib):
+        mock_ib.openTrades = MagicMock(return_value=[])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = False
+
+            with pytest.raises(ConnectionLostError):
+                t.open_orders()

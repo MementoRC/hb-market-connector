@@ -211,6 +211,55 @@ class IbGatewayTransport:
             trade.statusEvent -= _on_status
             self._error_router._pending_order_waiters.pop(trade.order.orderId, None)
 
+    async def cancel_order(self, handle: OrderHandle) -> OrderHandle:
+        """Cancel an active order and await the first non-PendingCancel status update.
+
+        Idempotent on terminal orders (FILLED, CANCELLED, REJECTED) — returns the
+        same handle without calling IB. Active orders call ib.cancelOrder and await
+        statusEvent until a non-PendingCancel status is received.
+
+        Args:
+            handle: The OrderHandle returned by place_order.
+
+        Returns:
+            The updated OrderHandle reflecting the post-cancel status.
+
+        Raises:
+            asyncio.TimeoutError: If no decisive status arrives within 10 seconds.
+        """
+        from market_connector.exchanges.interactive_brokers.order_handle import (  # noqa: PLC0415
+            OrderHandle,
+            OrderState,
+        )
+
+        terminals = {OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED}
+        if handle.status in terminals:
+            return handle
+
+        self._ib.cancelOrder(handle._trade.order)
+
+        fut: asyncio.Future[OrderHandle] = asyncio.get_running_loop().create_future()
+
+        def _on_status(*_args: Any) -> None:
+            try:
+                new_handle = OrderHandle.from_trade(handle._trade)
+            except ValueError:
+                return
+            # Ignore intermediate PendingCancel — wait for a decisive status.
+            if new_handle.raw_status == "PendingCancel":
+                return
+            if not fut.done():
+                fut.set_result(new_handle)
+
+        handle._trade.statusEvent += _on_status
+        try:
+            new_handle = await asyncio.wait_for(fut, timeout=10.0)
+        finally:
+            handle._trade.statusEvent -= _on_status
+
+        self._handle_registry[handle._trade.order.orderId] = new_handle
+        return new_handle
+
     def subscribe(
         self,
         channel: str,

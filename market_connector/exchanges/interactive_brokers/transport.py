@@ -260,6 +260,37 @@ class IbGatewayTransport:
         self._handle_registry[handle._trade.order.orderId] = new_handle
         return new_handle
 
+    def open_orders(self) -> list[OrderHandle]:
+        """Return a snapshot of currently-open orders from the ib_async local cache.
+
+        This method is synchronous — ib_async maintains a local in-memory cache of
+        active trades; no network round-trip occurs. For each trade returned by
+        openTrades(), the handle registry is updated so that callers who hold
+        references from place_order() continue to have consistent order_ids.
+
+        Raises ConnectionLostError if the transport is not connected.
+        """
+        if not self._error_router.is_connected:
+            from market_connector.exchanges.interactive_brokers.exceptions import (  # noqa: PLC0415
+                ConnectionLostError,
+            )
+
+            raise ConnectionLostError(1100, "transport not connected")
+
+        from market_connector.exchanges.interactive_brokers.order_handle import (  # noqa: PLC0415
+            OrderHandle,
+        )
+
+        trades = self._ib.openTrades()
+        result: list[OrderHandle] = []
+        for trade in trades:
+            order_id = trade.order.orderId
+            # Reconstruct to get current status snapshot; registry slot is preserved.
+            handle = OrderHandle.from_trade(trade)
+            self._handle_registry[order_id] = handle
+            result.append(handle)
+        return result
+
     def subscribe(
         self,
         channel: str,

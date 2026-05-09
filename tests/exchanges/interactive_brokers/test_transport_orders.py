@@ -386,3 +386,101 @@ class TestCancelOrder:
 
         assert t._handle_registry[11] is result
         assert t._handle_registry[11].status == OrderState.CANCELLED
+
+
+class TestOpenOrders:
+    def test_empty_list_when_no_open_orders(self, mock_ib):
+        mock_ib.openTrades = MagicMock(return_value=[])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+
+            result = t.open_orders()
+
+        assert result == []
+
+    def test_snapshot_returns_one_handle_per_trade(self, mock_ib):
+        trade_a = _make_trade(order_id=1, status="Submitted")
+        trade_b = _make_trade(order_id=2, status="Submitted")
+        mock_ib.openTrades = MagicMock(return_value=[trade_a, trade_b])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+
+            result = t.open_orders()
+
+        assert len(result) == 2
+
+    def test_handle_order_id_matches_trade_order_id(self, mock_ib):
+        trade = _make_trade(order_id=77, status="Submitted")
+        mock_ib.openTrades = MagicMock(return_value=[trade])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+
+            result = t.open_orders()
+
+        assert result[0].order_id == 77
+
+    def test_registry_populated_as_side_effect(self, mock_ib):
+        """open_orders populates _handle_registry for all returned trades."""
+        trade_a = _make_trade(order_id=10, status="Submitted")
+        trade_b = _make_trade(order_id=20, status="Submitted")
+        mock_ib.openTrades = MagicMock(return_value=[trade_a, trade_b])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+
+            t.open_orders()
+
+        assert 10 in t._handle_registry
+        assert 20 in t._handle_registry
+
+    def test_order_id_consistent_across_place_then_snapshot(self, mock_ib, mock_hb_order):
+        """order_id is stable: place returns it, then open_orders carries it through."""
+        trade = _make_trade(order_id=55, status="Submitted")
+        mock_ib.placeOrder = MagicMock(return_value=trade)
+        mock_ib.openTrades = MagicMock(return_value=[trade])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = True
+            # Manually seed registry as place_order would after its await.
+            t._handle_registry[55] = OrderHandle.from_trade(trade)
+
+            result = t.open_orders()
+
+        assert result[0].order_id == 55
+        assert 55 in t._handle_registry
+
+    def test_not_connected_raises_connection_lost(self, mock_ib):
+        mock_ib.openTrades = MagicMock(return_value=[])
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            t = IbGatewayTransport(_make_spec())
+            t._error_router._is_connected = False
+
+            with pytest.raises(ConnectionLostError):
+                t.open_orders()

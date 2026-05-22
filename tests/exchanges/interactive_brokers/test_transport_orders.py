@@ -13,7 +13,10 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     OrderRejectedError,
 )
-from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle, OrderState
+from market_connector.exchanges.interactive_brokers.order_handle import (
+    IBOrderState,
+    OrderHandle,
+)
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
 
@@ -118,7 +121,7 @@ class TestPlaceOrderHappyPath:
             asyncio.create_task(delayed_fire())
             handle = await t.place_order(native, mock_hb_order)
 
-        assert handle.status == OrderState.SUBMITTED
+        assert handle.status == IBOrderState.SUBMITTED
         assert handle.order_id == 42
 
     @pytest.mark.asyncio
@@ -361,7 +364,7 @@ class TestCancelOrder:
             result = await t.cancel_order(handle)
 
         mock_ib.cancelOrder.assert_called_once_with(trade.order)
-        assert result.status == OrderState.CANCELLED
+        assert result.status == IBOrderState.CANCELLED
 
     @pytest.mark.asyncio
     async def test_cancel_updates_handle_registry(self, mock_ib):
@@ -385,7 +388,7 @@ class TestCancelOrder:
             result = await t.cancel_order(handle)
 
         assert t._handle_registry[11] is result
-        assert t._handle_registry[11].status == OrderState.CANCELLED
+        assert t._handle_registry[11].status == IBOrderState.CANCELLED
 
 
 class TestOpenOrders:

@@ -76,7 +76,7 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
     from decimal import Decimal
 
     from market_connector.contracts.instrument import InstrumentRef, InstrumentType
-    from market_connector.exchanges.interactive_brokers.order_handle import OrderState
+    from market_connector.exchanges.interactive_brokers.order_handle import IBOrderState
     from market_connector.orders import HBOrder, OrderType, TradeType
 
     spec = paper_spec
@@ -102,13 +102,13 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
             price=None,
         )
         handle = await gateway.place_order(ref, hb_order)
-        assert handle.status in {OrderState.SUBMITTED, OrderState.FILLED}, (
+        assert handle.status in {IBOrderState.SUBMITTED, IBOrderState.FILLED}, (
             f"Unexpected status after place_order: {handle.status!r}"
         )
 
         # 3. Cancel (idempotent if already FILLED).
         cancelled = await gateway.cancel_order(handle)
-        assert cancelled.status in {OrderState.CANCELLED, OrderState.FILLED}, (
+        assert cancelled.status in {IBOrderState.CANCELLED, IBOrderState.FILLED}, (
             f"Unexpected status after cancel_order: {cancelled.status!r}"
         )
     finally:

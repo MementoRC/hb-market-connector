@@ -228,11 +228,11 @@ class IbGatewayTransport:
             asyncio.TimeoutError: If no decisive status arrives within 10 seconds.
         """
         from market_connector.exchanges.interactive_brokers.order_handle import (  # noqa: PLC0415
+            IBOrderState,
             OrderHandle,
-            OrderState,
         )
 
-        terminals = {OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED}
+        terminals = {IBOrderState.FILLED, IBOrderState.CANCELLED, IBOrderState.REJECTED}
         if handle.status in terminals:
             return handle
 

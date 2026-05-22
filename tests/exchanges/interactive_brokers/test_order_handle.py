@@ -1,4 +1,4 @@
-"""Tests for OrderState enum and OrderHandle frozen dataclass."""
+"""Tests for IBOrderState enum and OrderHandle frozen dataclass."""
 
 from __future__ import annotations
 
@@ -9,37 +9,37 @@ import pytest
 
 from market_connector.exchanges.interactive_brokers.order_handle import (
     _TRADE_STATUS_MAP,
+    IBOrderState,
     OrderHandle,
-    OrderState,
 )
 
 
-class TestOrderState:
+class TestIBOrderState:
     def test_is_str_enum(self):
-        assert isinstance(OrderState.PENDING, str)
+        assert isinstance(IBOrderState.PENDING, str)
 
     def test_all_six_values_exist(self):
-        assert OrderState.PENDING == "pending"
-        assert OrderState.SUBMITTED == "submitted"
-        assert OrderState.PARTIALLY_FILLED == "partially_filled"
-        assert OrderState.FILLED == "filled"
-        assert OrderState.CANCELLED == "cancelled"
-        assert OrderState.REJECTED == "rejected"
+        assert IBOrderState.PENDING == "pending"
+        assert IBOrderState.SUBMITTED == "submitted"
+        assert IBOrderState.PARTIALLY_FILLED == "partially_filled"
+        assert IBOrderState.FILLED == "filled"
+        assert IBOrderState.CANCELLED == "cancelled"
+        assert IBOrderState.REJECTED == "rejected"
 
 
 class TestTradeStatusMap:
     @pytest.mark.parametrize(
         "raw,expected",
         [
-            ("PendingSubmit", OrderState.PENDING),
-            ("PreSubmitted", OrderState.PENDING),
-            ("PendingCancel", OrderState.PENDING),
-            ("Submitted", OrderState.SUBMITTED),
-            ("ApiPending", OrderState.SUBMITTED),
-            ("Filled", OrderState.FILLED),
-            ("Cancelled", OrderState.CANCELLED),
-            ("ApiCancelled", OrderState.CANCELLED),
-            ("Inactive", OrderState.REJECTED),
+            ("PendingSubmit", IBOrderState.PENDING),
+            ("PreSubmitted", IBOrderState.PENDING),
+            ("PendingCancel", IBOrderState.PENDING),
+            ("Submitted", IBOrderState.SUBMITTED),
+            ("ApiPending", IBOrderState.SUBMITTED),
+            ("Filled", IBOrderState.FILLED),
+            ("Cancelled", IBOrderState.CANCELLED),
+            ("ApiCancelled", IBOrderState.CANCELLED),
+            ("Inactive", IBOrderState.REJECTED),
         ],
     )
     def test_known_statuses_map_correctly(self, raw, expected):
@@ -80,32 +80,32 @@ class TestOrderHandleFromTrade:
     def test_submitted_no_fills(self):
         trade = self._make_trade(status="Submitted", filled=0.0)
         handle = OrderHandle.from_trade(trade)
-        assert handle.status == OrderState.SUBMITTED
+        assert handle.status == IBOrderState.SUBMITTED
         assert handle.filled_qty == Decimal("0")
         assert handle.avg_fill_price is None
 
     def test_partially_filled_promoted_from_submitted(self):
         trade = self._make_trade(status="Submitted", filled=5.0, avg_fill_price=100.0)
         handle = OrderHandle.from_trade(trade)
-        assert handle.status == OrderState.PARTIALLY_FILLED
+        assert handle.status == IBOrderState.PARTIALLY_FILLED
         assert handle.filled_qty == Decimal("5")
         assert handle.avg_fill_price == Decimal("100.0")
 
     def test_filled_status(self):
         trade = self._make_trade(status="Filled", filled=10.0, avg_fill_price=99.5)
         handle = OrderHandle.from_trade(trade)
-        assert handle.status == OrderState.FILLED
+        assert handle.status == IBOrderState.FILLED
         assert handle.avg_fill_price == Decimal("99.5")
 
     def test_cancelled_status(self):
         trade = self._make_trade(status="Cancelled")
         handle = OrderHandle.from_trade(trade)
-        assert handle.status == OrderState.CANCELLED
+        assert handle.status == IBOrderState.CANCELLED
 
     def test_rejected_via_inactive(self):
         trade = self._make_trade(status="Inactive")
         handle = OrderHandle.from_trade(trade)
-        assert handle.status == OrderState.REJECTED
+        assert handle.status == IBOrderState.REJECTED
 
     def test_unknown_status_raises_value_error(self):
         trade = self._make_trade(status="NewUnknownStatus")
@@ -116,13 +116,13 @@ class TestOrderHandleFromTrade:
         trade = self._make_trade(status="ApiPending")
         handle = OrderHandle.from_trade(trade)
         assert handle.raw_status == "ApiPending"
-        assert handle.status == OrderState.SUBMITTED
+        assert handle.status == IBOrderState.SUBMITTED
 
     def test_handle_is_frozen(self):
         trade = self._make_trade()
         handle = OrderHandle.from_trade(trade)
         with pytest.raises((AttributeError, TypeError)):
-            handle.status = OrderState.FILLED  # type: ignore[misc]
+            handle.status = IBOrderState.FILLED  # type: ignore[misc]
 
     def test_trade_reference_stored(self):
         trade = self._make_trade()
@@ -178,10 +178,10 @@ class TestOrderHandleWaitFor:
             trade.statusEvent(trade)
 
         task = asyncio.create_task(fire_status_after_delay())
-        result = await handle.wait_for(status=OrderState.FILLED, timeout=1.0)
+        result = await handle.wait_for(status=IBOrderState.FILLED, timeout=1.0)
         await task
 
-        assert result.status == OrderState.FILLED
+        assert result.status == IBOrderState.FILLED
         assert result.filled_qty == Decimal("10")
 
     @pytest.mark.asyncio
@@ -193,7 +193,7 @@ class TestOrderHandleWaitFor:
         handle = OrderHandle.from_trade(trade)
 
         with pytest.raises(asyncio.TimeoutError):
-            await handle.wait_for(status=OrderState.FILLED, timeout=0.05)
+            await handle.wait_for(status=IBOrderState.FILLED, timeout=0.05)
 
     @pytest.mark.asyncio
     async def test_wait_for_terminal_mismatch_raises(self):
@@ -210,7 +210,7 @@ class TestOrderHandleWaitFor:
 
         task = asyncio.create_task(fire_rejected())
         with pytest.raises(RuntimeError, match="terminal"):
-            await handle.wait_for(status=OrderState.FILLED, timeout=1.0)
+            await handle.wait_for(status=IBOrderState.FILLED, timeout=1.0)
         await task
 
     @pytest.mark.asyncio
@@ -228,11 +228,11 @@ class TestOrderHandleWaitFor:
 
         task = asyncio.create_task(fire_cancelled())
         result = await handle.wait_for(
-            status={OrderState.FILLED, OrderState.CANCELLED}, timeout=1.0
+            status={IBOrderState.FILLED, IBOrderState.CANCELLED}, timeout=1.0
         )
         await task
 
-        assert result.status == OrderState.CANCELLED
+        assert result.status == IBOrderState.CANCELLED
 
     @pytest.mark.asyncio
     async def test_wait_for_unhooks_on_timeout(self):
@@ -243,7 +243,7 @@ class TestOrderHandleWaitFor:
         handle = OrderHandle.from_trade(trade)
 
         with pytest.raises(asyncio.TimeoutError):
-            await handle.wait_for(status=OrderState.FILLED, timeout=0.02)
+            await handle.wait_for(status=IBOrderState.FILLED, timeout=0.02)
 
         # No handlers should remain after timeout
         assert len(trade._handlers) == 0

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from ib_async import Trade
 
 
-class OrderState(StrEnum):
+class IBOrderState(StrEnum):
     PENDING = "pending"
     SUBMITTED = "submitted"
     PARTIALLY_FILLED = "partially_filled"
@@ -21,23 +21,23 @@ class OrderState(StrEnum):
     REJECTED = "rejected"
 
 
-_TRADE_STATUS_MAP: dict[str, OrderState] = {
-    "PendingSubmit": OrderState.PENDING,
-    "PreSubmitted": OrderState.PENDING,
-    "PendingCancel": OrderState.PENDING,
-    "Submitted": OrderState.SUBMITTED,
-    "ApiPending": OrderState.SUBMITTED,
-    "Filled": OrderState.FILLED,
-    "Cancelled": OrderState.CANCELLED,
-    "ApiCancelled": OrderState.CANCELLED,
-    "Inactive": OrderState.REJECTED,
+_TRADE_STATUS_MAP: dict[str, IBOrderState] = {
+    "PendingSubmit": IBOrderState.PENDING,
+    "PreSubmitted": IBOrderState.PENDING,
+    "PendingCancel": IBOrderState.PENDING,
+    "Submitted": IBOrderState.SUBMITTED,
+    "ApiPending": IBOrderState.SUBMITTED,
+    "Filled": IBOrderState.FILLED,
+    "Cancelled": IBOrderState.CANCELLED,
+    "ApiCancelled": IBOrderState.CANCELLED,
+    "Inactive": IBOrderState.REJECTED,
 }
 
 
 @dataclass(frozen=True)
 class OrderHandle:
     order_id: int
-    status: OrderState
+    status: IBOrderState
     raw_status: str
     filled_qty: Decimal
     avg_fill_price: Decimal | None
@@ -52,8 +52,8 @@ class OrderHandle:
             raise ValueError(f"Unknown IB order status: {raw}") from exc
         filled = Decimal(str(trade.orderStatus.filled))
         # promote to PARTIALLY_FILLED if fills present but base state is SUBMITTED
-        if base_state is OrderState.SUBMITTED and filled > 0:
-            base_state = OrderState.PARTIALLY_FILLED
+        if base_state is IBOrderState.SUBMITTED and filled > 0:
+            base_state = IBOrderState.PARTIALLY_FILLED
         avg_px = trade.orderStatus.avgFillPrice
         return cls(
             order_id=trade.order.permId if trade.order.permId else trade.order.orderId,
@@ -67,7 +67,7 @@ class OrderHandle:
     async def wait_for(
         self,
         *,
-        status: OrderState | set[OrderState],
+        status: IBOrderState | set[IBOrderState],
         timeout: float,
     ) -> OrderHandle:
         """Await until the trade reaches one of the target states.
@@ -75,8 +75,8 @@ class OrderHandle:
         Raises asyncio.TimeoutError on timeout. Raises RuntimeError if
         a terminal state is reached that is not in the awaited set.
         """
-        targets = {status} if isinstance(status, OrderState) else set(status)
-        terminals = {OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED}
+        targets = {status} if isinstance(status, IBOrderState) else set(status)
+        terminals = {IBOrderState.FILLED, IBOrderState.CANCELLED, IBOrderState.REJECTED}
 
         fut: asyncio.Future[OrderHandle] = asyncio.get_running_loop().create_future()
 

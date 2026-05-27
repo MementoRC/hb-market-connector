@@ -75,9 +75,6 @@ cryptography = ">=41"
 pyjwt = ">=2.8"
 cryptography = ">=41"
 
-[tool.pixi.feature.interactive-brokers.pypi-dependencies]
-ib_async = ">=1.0.1,<2.0.0"
-
 [tool.pixi.feature.py312.dependencies]
 python = "3.12.*"
 

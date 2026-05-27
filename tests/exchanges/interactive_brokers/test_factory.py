@@ -190,3 +190,35 @@ class TestGatewayDelegation:
 
         g.unified_transport.open_orders.assert_called_once()
         assert result is handles
+
+
+class TestGatewayComposition:
+    def test_gateway_has_all_market_data_methods(self) -> None:
+        from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+
+        with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
+            gateway = build_ib_gateway(IbConnectionSpec())
+        assert callable(getattr(gateway, "get_orderbook", None))
+        assert callable(getattr(gateway, "get_mid_price", None))
+        assert callable(getattr(gateway, "get_candles", None))
+
+    def test_gateway_has_subscription_methods(self) -> None:
+        from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+        from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+
+        with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
+            gateway = build_ib_gateway(IbConnectionSpec())
+        assert callable(getattr(gateway, "subscribe_orderbook", None))
+        assert callable(getattr(gateway, "subscribe_trades", None))
+
+    def test_stub_methods_no_longer_raise_not_implemented(self) -> None:
+        """Verifies the five stubs were removed (mixin methods provide them now)."""
+        from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayGateway
+        from market_connector.exchanges.interactive_brokers.mixins import (
+            MarketDataMixin,
+            SubscriptionsMixin,
+        )
+
+        assert issubclass(IbGatewayGateway, MarketDataMixin)
+        assert issubclass(IbGatewayGateway, SubscriptionsMixin)

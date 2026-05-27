@@ -31,7 +31,7 @@ class TestToIbBarSize:
         ["2m", "3h", "1w", "M1", "", "1M", "daily", "60m"],
     )
     def test_unknown_interval_raises_invalid_interval_error(self, bad_interval: str) -> None:
-        with pytest.raises(InvalidIntervalError, match=bad_interval or "interval"):
+        with pytest.raises(InvalidIntervalError, match=bad_interval or "Interval"):
             to_ib_bar_size(bad_interval)
 
     def test_invalid_interval_error_is_value_error(self) -> None:

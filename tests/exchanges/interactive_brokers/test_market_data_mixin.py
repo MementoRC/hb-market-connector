@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from market_connector.exchanges.interactive_brokers.exceptions import ContractNotFoundError
+from market_connector.exchanges.interactive_brokers.exceptions import (
+    ContractNotFoundError,
+    MarketDataPermissionError,
+)
 from market_connector.exchanges.interactive_brokers.mixins.market_data import MarketDataMixin
 
 
@@ -126,3 +129,44 @@ class TestGetOrderbook:
 
         assert snapshot.bids == []
         assert snapshot.asks == []
+
+
+class TestGetMidPrice:
+    @pytest.mark.asyncio
+    async def test_mid_price_from_one_level_snapshot(self) -> None:
+        ticker = _make_fake_ticker(
+            bids=[(150.00, 100.0)],
+            asks=[(150.10, 50.0)],
+        )
+        transport = FakeTransport(ticker)
+        host = ConcreteMarketDataHost(transport, FakeResolver())
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            mid = await host.get_mid_price("AAPL-USD")
+
+        expected = (Decimal("150.00") + Decimal("150.10")) / 2
+        assert mid == expected
+
+    @pytest.mark.asyncio
+    async def test_empty_bids_raises_market_data_permission_error(self) -> None:
+        ticker = _make_fake_ticker(bids=[], asks=[(150.01, 50.0)])
+        transport = FakeTransport(ticker)
+        host = ConcreteMarketDataHost(transport, FakeResolver())
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(MarketDataPermissionError, match="no market data"),
+        ):
+            await host.get_mid_price("AAPL-USD")
+
+    @pytest.mark.asyncio
+    async def test_empty_asks_raises_market_data_permission_error(self) -> None:
+        ticker = _make_fake_ticker(bids=[(150.00, 100.0)], asks=[])
+        transport = FakeTransport(ticker)
+        host = ConcreteMarketDataHost(transport, FakeResolver())
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(MarketDataPermissionError, match="no market data"),
+        ):
+            await host.get_mid_price("AAPL-USD")

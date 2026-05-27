@@ -13,6 +13,10 @@ if TYPE_CHECKING:
         HasIbTransport,
     )
 
+from market_connector.exchanges.interactive_brokers.exceptions import (
+    MarketDataPermissionError,
+)
+
 # Time to allow IB depth snapshot to populate after reqMktDepth (event-driven, not awaitable).
 _DEPTH_SETTLE_SECS: float = 0.1
 
@@ -41,6 +45,23 @@ class MarketDataMixin:
             asks=asks,
             timestamp=time.time(),
         )
+
+    async def get_mid_price(
+        self: HasIbTransport & HasContractResolver,  # type: ignore[valid-type]
+        trading_pair: str,
+    ) -> Decimal:
+        """Return (best_bid + best_ask) / 2.
+
+        Raises MarketDataPermissionError if either side empty.
+        """
+        contract = await self._contract_resolver.resolve_from_pair(trading_pair)
+        bids, asks = await _snapshot_depth(self._transport._ib, contract)
+
+        if not bids or not asks:
+            raise MarketDataPermissionError(
+                0, f"no market data for {trading_pair}: empty {'bids' if not bids else 'asks'}"
+            )
+        return (bids[0][0] + asks[0][0]) / 2
 
 
 async def _snapshot_depth(

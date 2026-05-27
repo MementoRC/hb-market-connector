@@ -1,6 +1,6 @@
 # Interactive Brokers Integration
 
-**Status:** Stage 1 (skeleton + connect)
+**Status:** Stages 1–3 LANDED (framework, transport, market data); Stages 4–6 planned
 
 ## Architecture
 
@@ -42,12 +42,12 @@ services:
 
 | Stage | Scope | Status |
 |---|---|---|
-| 1 | Skeleton + connect | this PR |
-| 2 | Contract resolution + reqContractDetails | TODO |
-| 3 | Market data + subscriptions | TODO |
-| 4 | Orders gateway-level (LIMIT/MARKET) | TODO |
-| 5 | Bridge + conditional orders (STOP/TRAIL) | TODO |
-| 6 | Operational hardening (daily reset, cache TTL) | TODO |
+| 1 | Framework promotion + connector skeleton | ✅ LANDED (#25) |
+| 2 | Transport + orders + contract resolver | ✅ LANDED (#26) |
+| 3 | Market data + subscriptions mixins | ✅ LANDED (merged) |
+| 4 | Accounts mixin (get_balance + subscribe_orders) | Planned |
+| 5 | Non-STOCK contracts + subscription multiplexing | Planned |
+| 6 | Reconnection / hardening / production polish | Planned |
 
 ## Running tests
 

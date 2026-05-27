@@ -98,4 +98,4 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         return self._transport.open_orders()
 
     async def get_balance(self, currency: str) -> Decimal:
-        raise NotImplementedError("get_balance() is implemented in Stage 2")
+        raise NotImplementedError("get_balance() is implemented in Stage 4")

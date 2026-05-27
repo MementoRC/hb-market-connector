@@ -40,3 +40,31 @@ class TestIbConnectionSpec:
         live = IbConnectionSpec(port=4001, paper=False)
         assert paper.port == 4002
         assert live.port == 4001
+
+
+class TestResolvedMarketDataType:
+    def test_paper_true_no_explicit_type_returns_3(self):
+        spec = IbConnectionSpec(paper=True)
+        assert spec.resolved_market_data_type == 3
+
+    def test_paper_false_no_explicit_type_returns_1(self):
+        spec = IbConnectionSpec(paper=False)
+        assert spec.resolved_market_data_type == 1
+
+    def test_explicit_type_2_passes_through_regardless_of_paper(self):
+        spec_paper = IbConnectionSpec(paper=True, market_data_type=2)
+        spec_live = IbConnectionSpec(paper=False, market_data_type=2)
+        assert spec_paper.resolved_market_data_type == 2
+        assert spec_live.resolved_market_data_type == 2
+
+    def test_explicit_type_4_passes_through(self):
+        spec = IbConnectionSpec(paper=True, market_data_type=4)
+        assert spec.resolved_market_data_type == 4
+
+    def test_explicit_type_1_live_passes_through(self):
+        spec = IbConnectionSpec(paper=False, market_data_type=1)
+        assert spec.resolved_market_data_type == 1
+
+    def test_invalid_value_raises_value_error(self):
+        with pytest.raises(ValueError, match="market_data_type"):
+            IbConnectionSpec(market_data_type=99)

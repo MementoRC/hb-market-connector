@@ -170,3 +170,82 @@ class TestGetMidPrice:
             pytest.raises(MarketDataPermissionError, match="no market data"),
         ):
             await host.get_mid_price("AAPL-USD")
+
+
+class TestGetCandles:
+    def _make_bar(
+        self,
+        date: str = "20240101 09:30:00",
+        open: float = 150.0,
+        high: float = 151.0,
+        low: float = 149.5,
+        close: float = 150.5,
+        volume: float = 1000.0,
+    ) -> MagicMock:
+        bar = MagicMock()
+        bar.date = date
+        bar.open = open
+        bar.high = high
+        bar.low = low
+        bar.close = close
+        bar.volume = volume
+        return bar
+
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_candle_list(self) -> None:
+        from market_connector.primitives import CandleData
+
+        bars = [
+            self._make_bar(
+                date="20240101 09:30:00",
+                open=150.0,
+                high=151.0,
+                low=149.5,
+                close=150.5,
+                volume=1000.0,
+            ),
+            self._make_bar(
+                date="20240101 09:31:00",
+                open=150.5,
+                high=152.0,
+                low=150.0,
+                close=151.5,
+                volume=800.0,
+            ),
+        ]
+
+        resolver = FakeResolver()
+        transport = FakeTransport(_make_fake_ticker([], []))
+        transport._ib.reqHistoricalDataAsync = AsyncMock(return_value=bars)
+        host = ConcreteMarketDataHost(transport, resolver)
+
+        candles = await host.get_candles("AAPL-USD", interval="1m", limit=60)
+
+        assert len(candles) == 2
+        assert all(isinstance(c, CandleData) for c in candles)
+        assert candles[0].open == Decimal("150.0")
+        assert candles[0].interval == "1m"
+        assert candles[0].trading_pair == "AAPL-USD"
+
+    @pytest.mark.asyncio
+    async def test_negative_one_volume_coerced_to_zero(self) -> None:
+        bars = [self._make_bar(volume=-1.0)]
+        resolver = FakeResolver()
+        transport = FakeTransport(_make_fake_ticker([], []))
+        transport._ib.reqHistoricalDataAsync = AsyncMock(return_value=bars)
+        host = ConcreteMarketDataHost(transport, resolver)
+
+        candles = await host.get_candles("AAPL-USD", interval="1m", limit=5)
+
+        assert candles[0].volume == Decimal("0")
+
+    @pytest.mark.asyncio
+    async def test_invalid_interval_raises(self) -> None:
+        from market_connector.exchanges.interactive_brokers.interval_map import InvalidIntervalError
+
+        resolver = FakeResolver()
+        transport = FakeTransport(_make_fake_ticker([], []))
+        host = ConcreteMarketDataHost(transport, resolver)
+
+        with pytest.raises(InvalidIntervalError):
+            await host.get_candles("AAPL-USD", interval="99m", limit=5)

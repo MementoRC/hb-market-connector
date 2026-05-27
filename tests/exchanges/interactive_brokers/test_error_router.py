@@ -11,6 +11,8 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     ConnectionTerminatedError,
     ContractNotFoundError,
+    HistoricalDataError,
+    MarketDataPermissionError,
     OrderRejectedError,
 )
 
@@ -133,3 +135,49 @@ class TestFailAllPending:
         # Registries cleared
         assert len(router._pending_request_waiters) == 0
         assert len(router._pending_order_waiters) == 0
+
+
+class TestMarketDataErrorCodes:
+    @pytest.mark.parametrize("code", [354, 10089])
+    def test_market_data_permission_codes_raise(self, code: int) -> None:
+        router = _ErrorRouter()
+        loop = asyncio.get_event_loop()
+        fut = loop.create_future()
+        router._pending_request_waiters[1] = fut
+        router.on_error(req_id=1, code=code, msg="market data error")
+        assert fut.done()
+        with pytest.raises(MarketDataPermissionError):
+            fut.result()
+
+    @pytest.mark.parametrize("code", [165])
+    def test_historical_data_codes_raise(self, code: int) -> None:
+        router = _ErrorRouter()
+        loop = asyncio.get_event_loop()
+        fut = loop.create_future()
+        router._pending_request_waiters[1] = fut
+        router.on_error(req_id=1, code=code, msg="historical error")
+        assert fut.done()
+        with pytest.raises(HistoricalDataError):
+            fut.result()
+
+    def test_code_200_raises_contract_not_found(self) -> None:
+        router = _ErrorRouter()
+        loop = asyncio.get_event_loop()
+        fut = loop.create_future()
+        router._pending_request_waiters[1] = fut
+        router.on_error(req_id=1, code=200, msg="No security definition")
+        assert fut.done()
+        with pytest.raises(ContractNotFoundError):
+            fut.result()
+
+    def test_code_10090_logs_warning_does_not_raise(self, caplog) -> None:
+        import logging
+
+        router = _ErrorRouter()
+        with caplog.at_level(logging.WARNING):
+            router.on_error(
+                req_id=1,
+                code=10090,
+                msg="Part of requested market data is not subscribed",
+            )
+        assert "10090" in caplog.text or "market data" in caplog.text.lower()

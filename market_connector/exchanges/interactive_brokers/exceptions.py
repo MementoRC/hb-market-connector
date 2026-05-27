@@ -30,6 +30,20 @@ class ConnectionTerminatedError(IbError):
     """IB error 1300 — connection terminated, requires explicit reconnect."""
 
 
+class MarketDataPermissionError(IbError):
+    """IB account does not have a subscription for the requested market data.
+
+    IB codes: 354 (not subscribed), 10089 (requires additional subscription).
+    """
+
+
+class HistoricalDataError(IbError):
+    """IB historical data request failed or the farm is temporarily disconnected.
+
+    IB codes: 162 (service error), 165 (farm disconnected — transient; caller may retry).
+    """
+
+
 class AmbiguousContractError(Exception):
     """reqContractDetails returned more than one match. NOT an IB error code; a domain decision."""
 

@@ -9,7 +9,9 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     ConnectionTerminatedError,
     ContractNotFoundError,
+    HistoricalDataError,
     IbError,
+    MarketDataPermissionError,
     OrderRejectedError,
 )
 
@@ -24,12 +26,15 @@ logger = logging.getLogger(__name__)
 
 _ERROR_TABLE: dict[int, type[IbError]] = {
     162: ContractNotFoundError,
+    165: HistoricalDataError,
     200: ContractNotFoundError,
     201: OrderRejectedError,
     321: OrderRejectedError,
     325: OrderRejectedError,
+    354: MarketDataPermissionError,
     1100: ConnectionLostError,
     1300: ConnectionTerminatedError,
+    10089: MarketDataPermissionError,
 }
 
 
@@ -60,6 +65,11 @@ class _ErrorRouter:
             self._notify_connection(True)
             return
 
+        # Code 10090: market data partially unavailable — log warning, do not raise.
+        if code == 10090:
+            logger.warning("IB error %d (partial data): %s", code, msg)
+            return
+
         exc_cls = _ERROR_TABLE.get(code)
 
         if exc_cls is ConnectionLostError:
@@ -81,6 +91,18 @@ class _ErrorRouter:
         if exc_cls is OrderRejectedError:
             # IB protocol invariant: req_id == orderId for order-related errors.
             fut = self._pending_order_waiters.pop(req_id, None)
+            if fut is not None and not fut.done():
+                fut.set_exception(exc_cls(code, msg))
+            return
+
+        if exc_cls is MarketDataPermissionError:
+            fut = self._pending_request_waiters.pop(req_id, None)
+            if fut is not None and not fut.done():
+                fut.set_exception(exc_cls(code, msg))
+            return
+
+        if exc_cls is HistoricalDataError:
+            fut = self._pending_request_waiters.pop(req_id, None)
             if fut is not None and not fut.done():
                 fut.set_exception(exc_cls(code, msg))
             return

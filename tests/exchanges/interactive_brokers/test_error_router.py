@@ -30,9 +30,9 @@ class TestErrorTable:
             (1300, ConnectionTerminatedError),
         ],
     )
-    def test_mapped_codes_route_correctly(self, code, exc_cls):
+    async def test_mapped_codes_route_correctly(self, code, exc_cls):
         router = _ErrorRouter()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         if exc_cls in (ContractNotFoundError,):
             fut = loop.create_future()
             router._pending_request_waiters[1] = fut
@@ -116,8 +116,8 @@ class TestConnectionState:
 
 
 class TestFailAllPending:
-    def test_1100_fails_all_pending_futures(self):
-        loop = asyncio.get_event_loop()
+    async def test_1100_fails_all_pending_futures(self):
+        loop = asyncio.get_running_loop()
         router = _ErrorRouter()
         req_fut = loop.create_future()
         ord_fut = loop.create_future()
@@ -139,9 +139,9 @@ class TestFailAllPending:
 
 class TestMarketDataErrorCodes:
     @pytest.mark.parametrize("code", [354, 10089])
-    def test_market_data_permission_codes_raise(self, code: int) -> None:
+    async def test_market_data_permission_codes_raise(self, code: int) -> None:
         router = _ErrorRouter()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fut = loop.create_future()
         router._pending_request_waiters[1] = fut
         router.on_error(req_id=1, code=code, msg="market data error")
@@ -150,9 +150,9 @@ class TestMarketDataErrorCodes:
             fut.result()
 
     @pytest.mark.parametrize("code", [165])
-    def test_historical_data_codes_raise(self, code: int) -> None:
+    async def test_historical_data_codes_raise(self, code: int) -> None:
         router = _ErrorRouter()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fut = loop.create_future()
         router._pending_request_waiters[1] = fut
         router.on_error(req_id=1, code=code, msg="historical error")
@@ -160,9 +160,9 @@ class TestMarketDataErrorCodes:
         with pytest.raises(HistoricalDataError):
             fut.result()
 
-    def test_code_200_raises_contract_not_found(self) -> None:
+    async def test_code_200_raises_contract_not_found(self) -> None:
         router = _ErrorRouter()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fut = loop.create_future()
         router._pending_request_waiters[1] = fut
         router.on_error(req_id=1, code=200, msg="No security definition")

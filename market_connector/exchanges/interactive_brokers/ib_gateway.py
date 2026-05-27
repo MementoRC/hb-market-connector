@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from market_connector.transport.protocols import (
         RequestTransport,
         StreamTransport,
-        Transport,
     )
 
 from market_connector.exchanges.interactive_brokers.mixins import (
@@ -56,7 +55,7 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         self._tick_counter: dict[tuple[int, int], int] = {}
 
     @property
-    def unified_transport(self) -> Transport | None:
+    def unified_transport(self) -> IbGatewayTransport | None:
         """Protocol slot: exposes the concrete transport as Transport | None."""
         return self._transport
 

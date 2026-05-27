@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     from market_connector.contracts.protocols import ContractResolver
     from market_connector.primitives import (
+        CandleData,
         OpenOrder,
         OrderBookSnapshot,
         OrderBookUpdate,
@@ -28,9 +29,6 @@ if TYPE_CHECKING:
 
 # Note: @runtime_checkable isinstance checks verify method *names* only,
 # not parameter types or return types. Use mypy for full type checking.
-# CandleData is intentionally not imported here — get_candles returns list
-# and each connector defines its own candle type. The hb_compat bridge
-# handles conversion to strategy-framework's CandleData.
 
 
 @runtime_checkable
@@ -64,7 +62,7 @@ class MarketDataGateway(Protocol):
     async def get_orderbook(self, trading_pair: str) -> OrderBookSnapshot:
         pass
 
-    async def get_candles(self, trading_pair: str, interval: str, limit: int) -> list:
+    async def get_candles(self, trading_pair: str, interval: str, limit: int) -> list[CandleData]:
         pass
 
     async def get_mid_price(self, trading_pair: str) -> Decimal:

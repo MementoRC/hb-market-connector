@@ -15,6 +15,7 @@ Stage 2 adds _handle_registry and _error_router; wires IB.errorEvent.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 # ib_async is an optional dependency; import is inside __init__ so that the
@@ -29,7 +30,7 @@ except ImportError:  # pragma: no cover - optional dep
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
 
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
@@ -81,6 +82,22 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
         f"Order type {hb_order.order_type!r} not supported in Stage 2. "
         f"Conditional order types (LIMIT_MAKER, etc.) land in Stage 4."
     )
+
+
+@dataclass
+class SubscriptionHandle:
+    """Handle returned by IbGatewayTransport.subscribe(). Owns cleanup on close()."""
+
+    channel: str
+    contract: object
+    _cleanup: Callable[[], None]
+    _closed: bool = field(default=False, init=False)
+
+    def close(self) -> None:
+        """Unregister event handler and cancel IB stream. Idempotent."""
+        if not self._closed:
+            self._closed = True
+            self._cleanup()
 
 
 class IbGatewayTransport:
@@ -294,9 +311,57 @@ class IbGatewayTransport:
     def subscribe(
         self,
         channel: str,
-        key: Any,
-        callback: Callable[[Any], Awaitable[None]],
-    ) -> None:
-        raise NotImplementedError(
-            "subscribe() is implemented in Stage 3 (reqMktData, reqMktDepth, etc.)"
-        )
+        contract: object,
+        callback: Callable[[Any], None],
+    ) -> SubscriptionHandle:
+        """Register a synchronous callback for IB event-driven market data.
+
+        Args:
+            channel: "depth" (DOM updates via reqMktDepth) or "trades"
+                (tick-by-tick via reqTickByTickData).
+            callback: sync Callable[[ticker_or_tick], None]. Exceptions are
+                caught and logged at WARNING.
+
+        Returns:
+            SubscriptionHandle whose .close() unregisters the handler and
+            cancels the IB stream.
+        """
+        import logging  # noqa: PLC0415
+
+        _log = logging.getLogger(__name__)
+
+        if channel == "depth":
+            ticker = self._ib.reqMktDepth(contract, numRows=10, isSmartDepth=True)
+
+            def _dispatch_depth(t: object) -> None:
+                try:
+                    callback(t)
+                except Exception:
+                    _log.warning("Unhandled exception in depth callback", exc_info=True)
+
+            ticker.updateEvent += _dispatch_depth
+
+            def _cleanup_depth() -> None:
+                ticker.updateEvent -= _dispatch_depth
+                self._ib.cancelMktDepth(contract, isSmartDepth=True)
+
+            return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup_depth)
+
+        if channel == "trades":
+            ticker = self._ib.reqTickByTickData(contract, "AllLast", 0, False)
+
+            def _dispatch_trades(t: object) -> None:
+                try:
+                    callback(t)
+                except Exception:
+                    _log.warning("Unhandled exception in trades callback", exc_info=True)
+
+            ticker.tickByTickAllLastEvent += _dispatch_trades
+
+            def _cleanup_trades() -> None:
+                ticker.tickByTickAllLastEvent -= _dispatch_trades
+                self._ib.cancelTickByTickData(contract, "AllLast")
+
+            return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup_trades)
+
+        raise ValueError(f"Unknown subscribe channel {channel!r}; expected 'depth' or 'trades'")

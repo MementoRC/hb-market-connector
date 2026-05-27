@@ -6,6 +6,7 @@ schemas to these types in their converters.py module.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal  # noqa: TCH003
 from enum import StrEnum
 
@@ -81,3 +82,17 @@ class OrderBookUpdate(BaseModel):
     bids: list[tuple[Decimal, Decimal]]
     asks: list[tuple[Decimal, Decimal]]
     update_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class CandleData:
+    """Single OHLCV candle bar. Frozen and slot-based for immutability and memory efficiency."""
+
+    trading_pair: str
+    timestamp: float  # bar open time, epoch seconds
+    interval: str  # canonical interval label e.g. "1m", "5m", "1h", "1d"
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal  # 0 if exchange reports no volume for the bar

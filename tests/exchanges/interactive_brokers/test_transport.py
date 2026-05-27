@@ -153,17 +153,6 @@ class TestConnectionLifecycle:
             ):
                 await t.request("reqContractDetails")
 
-    def test_subscribe_not_implemented_in_stage1(
-        self, spec: IbConnectionSpec, mock_ib: MagicMock
-    ) -> None:
-        with patch(
-            "market_connector.exchanges.interactive_brokers.transport.IB",
-            return_value=mock_ib,
-        ):
-            t = IbGatewayTransport(spec)
-            with pytest.raises(NotImplementedError, match="Stage 3"):
-                t.subscribe("ticker", "AAPL", lambda x: None)
-
 
 class TestRegistries:
     def test_handle_registry_initially_empty(self, spec: IbConnectionSpec) -> None:
@@ -175,3 +164,96 @@ class TestRegistries:
         with patch("market_connector.exchanges.interactive_brokers.transport.IB"):
             t = IbGatewayTransport(spec)
             assert isinstance(t._error_router, _ErrorRouter)
+
+
+class TestSubscribe:
+    def test_subscribe_depth_returns_handle(self, spec: IbConnectionSpec) -> None:
+        from ._doubles import MockIb
+
+        mock_ib = MockIb()
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            transport = IbGatewayTransport(spec)
+        contract = MagicMock()
+        transport._ib._depth_ticker.domBids = []
+        transport._ib._depth_ticker.domAsks = []
+
+        handle = transport.subscribe("depth", contract, lambda ticker: None)
+
+        assert handle is not None
+        assert hasattr(handle, "close")
+
+    def test_subscribe_depth_registers_update_event(self, spec: IbConnectionSpec) -> None:
+        from ._doubles import MockIb
+
+        mock_ib = MockIb()
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            transport = IbGatewayTransport(spec)
+        contract = MagicMock()
+        received: list[object] = []
+
+        def on_update(ticker: object) -> None:
+            received.append(ticker)
+
+        handle = transport.subscribe("depth", contract, on_update)
+
+        # Simulate IB firing the updateEvent
+        transport._ib._depth_ticker.updateEvent(transport._ib._depth_ticker)
+        assert len(received) == 1
+
+        handle.close()
+        # After close, firing again should NOT call the callback
+        transport._ib._depth_ticker.updateEvent(transport._ib._depth_ticker)
+        assert len(received) == 1  # still 1
+
+    def test_close_is_idempotent(self, spec: IbConnectionSpec) -> None:
+        from ._doubles import MockIb
+
+        mock_ib = MockIb()
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            transport = IbGatewayTransport(spec)
+        contract = MagicMock()
+        handle = transport.subscribe("depth", contract, lambda t: None)
+        handle.close()
+        handle.close()  # must not raise
+
+    def test_close_calls_cancel_mkt_depth(self, spec: IbConnectionSpec) -> None:
+        from ._doubles import MockIb
+
+        mock_ib = MockIb()
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            transport = IbGatewayTransport(spec)
+        contract = MagicMock()
+        handle = transport.subscribe("depth", contract, lambda t: None)
+        handle.close()
+        assert len(transport._ib._cancel_mkt_depth_calls) == 1
+
+    def test_subscribe_trades_returns_handle(self, spec: IbConnectionSpec) -> None:
+        from ._doubles import MockIb
+
+        mock_ib = MockIb()
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=mock_ib,
+        ):
+            transport = IbGatewayTransport(spec)
+        contract = MagicMock()
+        transport._ib._tick_ticker = MagicMock()
+        transport._ib.reqTickByTickData = MagicMock(return_value=transport._ib._tick_ticker)
+        transport._ib.cancelTickByTickData = MagicMock()
+
+        handle = transport.subscribe("trades", contract, lambda tick: None)
+        assert handle is not None
+        handle.close()
+        transport._ib.cancelTickByTickData.assert_called_once()

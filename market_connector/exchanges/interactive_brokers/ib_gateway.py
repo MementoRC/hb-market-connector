@@ -7,11 +7,9 @@ MarketData, Subscriptions) and the contract_resolver.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
     from decimal import Decimal
 
     from market_connector.auth.passthrough import PassThroughSigner
@@ -23,11 +21,15 @@ if TYPE_CHECKING:
     from market_connector.transport.protocols import (
         RequestTransport,
         StreamTransport,
-        Transport,
     )
 
+from market_connector.exchanges.interactive_brokers.mixins import (
+    MarketDataMixin,
+    SubscriptionsMixin,
+)
 
-class IbGatewayGateway:
+
+class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
     """Composition root for IB integration.
 
     Conforms structurally to TransportAwareGateway (which extends ExchangeGateway).
@@ -50,9 +52,10 @@ class IbGatewayGateway:
         self.rest_transport: RequestTransport | None = None
         self.stream_transport: StreamTransport | None = None
         self.contract_resolver: ContractResolver | None = contract_resolver
+        self._tick_counter: dict[tuple[int, int], int] = {}
 
     @property
-    def unified_transport(self) -> Transport | None:
+    def unified_transport(self) -> IbGatewayTransport | None:
         """Protocol slot: exposes the concrete transport as Transport | None."""
         return self._transport
 
@@ -96,32 +99,3 @@ class IbGatewayGateway:
 
     async def get_balance(self, currency: str) -> Decimal:
         raise NotImplementedError("get_balance() is implemented in Stage 2")
-
-    # --- MarketDataGateway stubs (Stage 3) ---
-
-    async def get_orderbook(self, trading_pair: str) -> Any:
-        raise NotImplementedError("get_orderbook() is implemented in Stage 3")
-
-    async def get_candles(self, trading_pair: str, interval: str, limit: int) -> list[Any]:
-        raise NotImplementedError("get_candles() is implemented in Stage 3")
-
-    async def get_mid_price(self, trading_pair: str) -> Decimal:
-        raise NotImplementedError("get_mid_price() is implemented in Stage 3")
-
-    @asynccontextmanager
-    async def subscribe_orderbook(
-        self,
-        trading_pair: str,
-        callback: Callable[[Any], None],
-    ) -> AsyncIterator[None]:
-        raise NotImplementedError("subscribe_orderbook() is implemented in Stage 3")
-        yield  # pragma: no cover
-
-    @asynccontextmanager
-    async def subscribe_trades(
-        self,
-        trading_pair: str,
-        callback: Callable[[Any], None],
-    ) -> AsyncIterator[None]:
-        raise NotImplementedError("subscribe_trades() is implemented in Stage 3")
-        yield  # pragma: no cover

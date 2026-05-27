@@ -9,7 +9,9 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     ConnectionTerminatedError,
     ContractNotFoundError,
+    HistoricalDataError,
     IbError,
+    MarketDataPermissionError,
     OrderRejectedError,
 )
 
@@ -60,3 +62,23 @@ class TestAmbiguousContractError:
         exc = AmbiguousContractError([])
         assert isinstance(exc, Exception)
         assert not isinstance(exc, IbError)
+
+
+class TestMarketDataExceptions:
+    def test_market_data_permission_error_exists(self):
+        exc = MarketDataPermissionError(354, "market data not subscribed")
+        assert isinstance(exc, IbError)
+        assert exc.error_code == 354
+
+    def test_historical_data_error_exists(self):
+        exc = HistoricalDataError(165, "historical data service error")
+        assert isinstance(exc, IbError)
+        assert exc.error_code == 165
+
+    def test_can_catch_market_data_as_ib_error(self):
+        with pytest.raises(IbError):
+            raise MarketDataPermissionError(354, "not subscribed")
+
+    def test_can_catch_historical_as_ib_error(self):
+        with pytest.raises(IbError):
+            raise HistoricalDataError(165, "service error")

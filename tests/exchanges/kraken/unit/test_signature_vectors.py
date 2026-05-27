@@ -170,7 +170,11 @@ def _compute_new_signature(
         qs_params={},
     )
 
-    signed = asyncio.get_event_loop().run_until_complete(pinned_signer.sign(request))
+    loop = asyncio.new_event_loop()
+    try:
+        signed = loop.run_until_complete(pinned_signer.sign(request))
+    finally:
+        loop.close()
     return signed.headers["API-Sign"]
 
 

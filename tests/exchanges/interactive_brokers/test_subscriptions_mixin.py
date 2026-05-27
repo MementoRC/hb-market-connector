@@ -43,6 +43,7 @@ class FakeTicker:
         self.domBids: list = []
         self.domAsks: list = []
         self.updateEvent = FakeEvent()
+        self.tickByTickAllLastEvent = FakeEvent()
 
 
 class FakeHandle:
@@ -63,8 +64,11 @@ class FakeTransport:
         self._subscriptions: list = []
 
     def subscribe(self, channel: str, contract, callback) -> FakeHandle:
-        # Register the callback on updateEvent so we can fire it synthetically.
-        self._ticker.updateEvent += callback
+        # Register the callback on appropriate event based on channel.
+        if channel == "depth":
+            self._ticker.updateEvent += callback
+        elif channel == "trades":
+            self._ticker.tickByTickAllLastEvent += callback
         self._subscriptions.append((channel, contract, callback))
         return self._handle
 
@@ -167,3 +171,107 @@ class TestSubscribeOrderbook:
         subscriptions_module._active_subscriptions = 0
 
         assert any("80" in r.message or "subscription" in r.message.lower() for r in caplog.records)
+
+
+class TestSubscribeTrades:
+    @pytest.fixture(autouse=True)
+    def reset_state(self) -> None:
+        """Reset module state before each test."""
+        import sys
+
+        subscriptions_module = sys.modules[
+            "market_connector.exchanges.interactive_brokers.mixins.subscriptions"
+        ]
+        subscriptions_module._active_subscriptions = 0
+        subscriptions_module._TRADE_ID_COUNTERS.clear()
+
+    @pytest.mark.asyncio
+    async def test_subscribe_trades_fires_callback_with_trade_event(self) -> None:
+        """subscribe_trades calls callback with a TradeEvent."""
+        from datetime import datetime
+
+        host = ConcreteSubscriptionsHost()
+        received = []
+
+        def on_trade(event) -> None:
+            received.append(event)
+
+        async with host.subscribe_trades("AAPL-USD", on_trade):
+            # Simulate IB firing the tick event
+            ticker = host._transport._ticker
+            tick = MagicMock()
+            tick.time = datetime(2024, 1, 1, 9, 30, 0)
+            tick.price = 150.5
+            tick.size = 10
+            ticker.tickByTickAllLastEvent(tick)
+
+        assert len(received) == 1
+        event = received[0]
+        # Verify TradeEvent structure
+        assert event.trading_pair == "AAPL-USD"
+        assert event.price == 150.5
+        assert event.amount == 10
+        # Synthetic ID format: f"{conId}:{tick_ns}:{counter}"
+        assert "265598:" in event.exchange_trade_id
+
+    @pytest.mark.asyncio
+    async def test_synthetic_id_counter_increments_within_same_second(self) -> None:
+        """Synthetic ID counter increments within the same nanosecond epoch."""
+        from datetime import datetime
+
+        host = ConcreteSubscriptionsHost()
+        received = []
+
+        def on_trade(event) -> None:
+            received.append(event)
+
+        async with host.subscribe_trades("AAPL-USD", on_trade):
+            ticker = host._transport._ticker
+            # Emit two ticks with the same second
+            for i in range(2):
+                tick = MagicMock()
+                tick.time = datetime(2024, 1, 1, 9, 30, 0)
+                tick.price = 150.5 + i
+                tick.size = 10 + i
+                ticker.tickByTickAllLastEvent(tick)
+
+        assert len(received) == 2
+        # Extract counter suffixes from synthetic IDs
+        id1_counter = int(received[0].exchange_trade_id.split(":")[-1])
+        id2_counter = int(received[1].exchange_trade_id.split(":")[-1])
+        assert id1_counter == 0
+        assert id2_counter == 1
+
+    @pytest.mark.asyncio
+    async def test_synthetic_id_counter_resets_across_seconds(self) -> None:
+        """Synthetic ID counter resets when moving to a new second."""
+        from datetime import datetime
+
+        host = ConcreteSubscriptionsHost()
+        received = []
+
+        def on_trade(event) -> None:
+            received.append(event)
+
+        async with host.subscribe_trades("AAPL-USD", on_trade):
+            ticker = host._transport._ticker
+            # Emit tick at second 1
+            tick1 = MagicMock()
+            tick1.time = datetime(2024, 1, 1, 9, 30, 0)
+            tick1.price = 150.5
+            tick1.size = 10
+            ticker.tickByTickAllLastEvent(tick1)
+
+            # Emit tick at second 2
+            tick2 = MagicMock()
+            tick2.time = datetime(2024, 1, 1, 9, 30, 1)
+            tick2.price = 150.6
+            tick2.size = 11
+            ticker.tickByTickAllLastEvent(tick2)
+
+        assert len(received) == 2
+        # Both should have counter = 0 (reset across seconds)
+        id1_counter = int(received[0].exchange_trade_id.split(":")[-1])
+        id2_counter = int(received[1].exchange_trade_id.split(":")[-1])
+        assert id1_counter == 0
+        assert id2_counter == 0

@@ -146,7 +146,7 @@ class MarketDataMixin:
                     volume=Decimal("0") if vol == -1 else Decimal(str(vol)),
                 )
             )
-        return cast(list[object], result)
+        return cast("list[object]", result)
 
 
 async def _snapshot_depth(

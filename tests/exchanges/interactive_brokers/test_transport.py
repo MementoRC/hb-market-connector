@@ -153,17 +153,6 @@ class TestConnectionLifecycle:
             ):
                 await t.request("reqContractDetails")
 
-    def test_subscribe_not_implemented_in_stage1(
-        self, spec: IbConnectionSpec, mock_ib: MagicMock
-    ) -> None:
-        with patch(
-            "market_connector.exchanges.interactive_brokers.transport.IB",
-            return_value=mock_ib,
-        ):
-            t = IbGatewayTransport(spec)
-            with pytest.raises(NotImplementedError, match="Stage 3"):
-                t.subscribe("ticker", "AAPL", lambda x: None)
-
 
 class TestRegistries:
     def test_handle_registry_initially_empty(self, spec: IbConnectionSpec) -> None:

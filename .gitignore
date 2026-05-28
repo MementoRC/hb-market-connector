@@ -80,3 +80,7 @@ logs/
 
 # Claude Code
 .claude/
+.claude.json
+.mcp.json
+CLAUDE.local.md
+claude.local.md

@@ -73,6 +73,10 @@ class SubscriptionsMixin:
             normalized = KRAKEN_WS_DECODER.decode(raw)
             if normalized.kind != WsMessageKind.DATA:
                 return
+            # Kraken book-snapshot payload is always a dict; guard the list arm
+            # for mypy (NormalizedWsMessage.payload is typed as dict | list).
+            if not isinstance(normalized.payload, dict):
+                return
             callback(BookSnapshot.from_payload(normalized.payload))
 
         @asynccontextmanager

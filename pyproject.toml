@@ -30,6 +30,7 @@ dev = [
     "pytest-timeout>=2.4.0",
     "ruff>=0.15.10",
     "mypy>=1.20.0",
+    "types-PyJWT",
 ]
 
 [tool.hatch.version]
@@ -143,6 +144,16 @@ disallow_untyped_defs = true
 # Suppress [type-arg] globally; a dedicated annotation cleanup pass will follow
 # once the Python 3.12 baseline transition is done.
 disable_error_code = ["type-arg"]
+
+# cryptography ships partial stubs; hazmat layer is not covered — ignore missing imports.
+[[tool.mypy.overrides]]
+module = "cryptography.*"
+ignore_missing_imports = true
+
+# ib_async is an optional dep (Interactive Brokers); no stubs available on PyPI.
+[[tool.mypy.overrides]]
+module = "ib_async.*"
+ignore_missing_imports = true
 
 [tool.coverage.run]
 branch = true

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from asyncio import Future
     from collections.abc import Callable
 
-    from ib_async import Contract  # type: ignore[import-not-found]
+    from ib_async import Contract
 
 logger = logging.getLogger(__name__)
 

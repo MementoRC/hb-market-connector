@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 # that don't actually instantiate the transport. Tests patch IB at the
 # module level.
 try:
-    from ib_async import IB  # type: ignore[import-not-found]
+    from ib_async import IB
 except ImportError:  # pragma: no cover - optional dep
     IB = None  # noqa: F841
 

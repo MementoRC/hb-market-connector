@@ -606,7 +606,7 @@ class DeclarativeRestSigner:
         # Select PyJWT algorithm string
         algorithm = "ES256" if spec.algorithm is JwtAlgorithm.ES256 else "RS256"
 
-        encoded_jwt: str = pyjwt.encode(
+        encoded_jwt: str = pyjwt.encode(  # type: ignore[assignment]  # PyJWT >=2.x returns str; stubs may lag
             claims,
             self._secret_bytes,
             algorithm=algorithm,

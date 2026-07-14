@@ -61,10 +61,7 @@ class LiveMarketAccess:
         Returns:
             The client order ID assigned by the connector.
         """
-        from hummingbot.core.data_type.common import (  # type: ignore[import-not-found]
-            OrderType,
-            TradeType,
-        )
+        from market_connector.hb_compat.common import OrderType, TradeType
 
         ot = OrderType[order_type.upper()]
         tt = TradeType[side.upper()]

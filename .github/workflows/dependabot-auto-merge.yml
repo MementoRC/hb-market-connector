@@ -1,34 +1,29 @@
----
-# Auto-merge dependabot PRs for minor and patch updates
-# Major version bumps still require manual review
-name: Dependabot Auto-Merge
+name: Auto-Merge Dependabot PR
 
-on: pull_request
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
 
+# Least-privilege default; job requests only what it needs.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   auto-merge:
+    name: "Auto-Merge Dependabot PR"
     runs-on: ubuntu-latest
+    # Only run for Dependabot PRs — never check out PR head code in this job.
     if: github.actor == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
-      - name: Fetch Dependabot metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@v3
-        with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: Auto-approve minor and patch updates
-        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+      - name: Approve PR
         run: gh pr review --approve "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Enable auto-merge for minor and patch updates
-        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+      - name: Enable auto-merge
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}

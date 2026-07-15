@@ -4,8 +4,9 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
-# Deny all permissions by default; job requests only what it needs.
-permissions: {}
+# Least-privilege default; job requests only what it needs.
+permissions:
+  contents: read
 
 jobs:
   auto-merge:

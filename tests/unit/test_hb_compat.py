@@ -9,8 +9,10 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
+from logger import HummingbotLogger
 
 from market_connector.hb_compat.bridge import LiveMarketAccess
+from market_connector.hb_compat.logging import get_logger
 from market_connector.primitives import OrderBookSnapshot
 
 
@@ -96,3 +98,26 @@ class TestLiveMarketAccess:
         )
         balance = bridge.get_available_balance("USDT")
         assert balance == Decimal("10000")
+
+
+class TestGetLogger:
+    """Tests for the hb-logger-backed logger factory (ADR 0001 Group D)."""
+
+    def test_returns_hummingbot_logger(self) -> None:
+        log = get_logger(__name__)
+        assert isinstance(log, HummingbotLogger)
+
+    def test_name_is_preserved(self) -> None:
+        log = get_logger("market_connector.some.module")
+        assert log.name == "market_connector.some.module"
+
+    def test_same_name_returns_same_instance(self) -> None:
+        first = get_logger("market_connector.hb_compat.test_singleton")
+        second = get_logger("market_connector.hb_compat.test_singleton")
+        assert first is second
+
+    def test_supports_standard_logging_api(self, caplog) -> None:
+        log = get_logger("market_connector.hb_compat.test_logging_api")
+        with caplog.at_level("INFO", logger=log.name):
+            log.info("hb-logger migration smoke test")
+        assert any("hb-logger migration smoke test" in r.message for r in caplog.records)

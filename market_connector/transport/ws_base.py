@@ -18,19 +18,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import websockets
 
 from market_connector.exceptions import GatewayNotStartedError
+from market_connector.hb_compat.logging import get_logger
 from market_connector.ws_models.decoder import NormalizedWsMessage, WsMessageKind, WsShapeDecoder
 
 if TYPE_CHECKING:
     from market_connector.ws_models.auth_models import WsAuthModel
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 MessageCallback = Callable[[Any], None]
 

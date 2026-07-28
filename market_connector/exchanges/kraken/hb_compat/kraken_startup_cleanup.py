@@ -28,13 +28,14 @@ Design notes:
 from __future__ import annotations
 
 import contextlib
-import logging
 from typing import TYPE_CHECKING, Any
+
+from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
     from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def reconcile_stale_orders(

@@ -9,6 +9,7 @@ description = "Live market connector adapter for Hummingbot — implements Marke
 requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
 dependencies = [
+    "hb-logger @ git+https://github.com/MementoRC/hb-logger.git@06534b7708a13b4425a06dd154976db96c2c45be",
     "pydantic>=2",
     "httpx>=0.27",
     "websockets>=12.0",
@@ -144,6 +145,11 @@ disallow_untyped_defs = true
 # Suppress [type-arg] globally; a dedicated annotation cleanup pass will follow
 # once the Python 3.12 baseline transition is done.
 disable_error_code = ["type-arg"]
+
+# hb-logger (git dependency) ships no py.typed marker yet — ignore missing imports.
+[[tool.mypy.overrides]]
+module = "logger.*"
+ignore_missing_imports = true
 
 # cryptography ships partial stubs; hazmat layer is not covered — ignore missing imports.
 [[tool.mypy.overrides]]

@@ -326,9 +326,9 @@ class IbGatewayTransport:
             SubscriptionHandle whose .close() unregisters the handler and
             cancels the IB stream.
         """
-        import logging  # noqa: PLC0415
+        from market_connector.hb_compat.logging import get_logger  # noqa: PLC0415
 
-        _log = logging.getLogger(__name__)
+        _log = get_logger(__name__)
 
         if channel == "depth":
             ticker = self._ib.reqMktDepth(contract, numRows=10, isSmartDepth=True)

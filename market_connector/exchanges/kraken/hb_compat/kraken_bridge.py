@@ -33,7 +33,6 @@ Usage::
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 from market_connector.exchanges.kraken.converters import kraken_ordertype_from_hb
@@ -42,13 +41,14 @@ from market_connector.exchanges.kraken.hb_compat.kraken_startup_cleanup import (
 )
 from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
 from market_connector.exchanges.kraken.schemas.enums import KrakenAPITier
+from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
     from decimal import Decimal
 
     from market_connector.primitives import OrderBookSnapshot
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class KrakenConnectorBridge:

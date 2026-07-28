@@ -9,6 +9,7 @@ description = "Live market connector adapter for Hummingbot — implements Marke
 requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
 dependencies = [
+    "hb-data-type-primitives @ git+https://github.com/MementoRC/hb-data-type-primitives.git@4eaf3d555aa99a1f96f113cf5a914491584ff8fc",
     "pydantic>=2",
     "httpx>=0.27",
     "websockets>=12.0",
@@ -32,6 +33,9 @@ dev = [
     "mypy>=1.20.0",
     "types-PyJWT",
 ]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.version]
 path = "market_connector/__about__.py"
@@ -153,6 +157,12 @@ ignore_missing_imports = true
 # ib_async is an optional dep (Interactive Brokers); no stubs available on PyPI.
 [[tool.mypy.overrides]]
 module = "ib_async.*"
+ignore_missing_imports = true
+
+# hb-data-type-primitives is a git dependency (ADR 0001 Group D); it ships no
+# py.typed marker yet, so mypy cannot resolve its inline types.
+[[tool.mypy.overrides]]
+module = "data_type_primitives.*"
 ignore_missing_imports = true
 
 [tool.coverage.run]

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING
+
+from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
         HasIbTransport,
     )
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 # IB hard-limits concurrent subscriptions; warn early at 80% of the 100-line limit.
 _SUBSCRIPTION_WARN_THRESHOLD: int = 80

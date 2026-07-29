@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 from market_connector.exchanges.interactive_brokers.exceptions import (
@@ -14,6 +13,7 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     MarketDataPermissionError,
     OrderRejectedError,
 )
+from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
     from asyncio import Future
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
     from ib_async import Contract
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 _ERROR_TABLE: dict[int, type[IbError]] = {

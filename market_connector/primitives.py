@@ -8,33 +8,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal  # noqa: TCH003
-from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
+
+from market_connector.hb_compat.primitives import OrderType, TradeType
 
 # Trading-pair string as used throughout the exchange gateway (e.g. "BTC-USDT").
 # A type alias of str keeps existing code unchanged while giving the type checker
 # a named concept to anchor against InstrumentRef (the structured peer).
 type ConnectorPair = str
 
-
-class _StrValue(StrEnum):
-    """Base mixin: str(member) returns the value."""
-
-
-class OrderType(_StrValue):
-    """Order type for gateway execution methods."""
-
-    LIMIT = "LIMIT"
-    MARKET = "MARKET"
-    LIMIT_MAKER = "LIMIT_MAKER"
-
-
-class TradeType(_StrValue):
-    """Trade side for gateway execution methods."""
-
-    BUY = "BUY"
-    SELL = "SELL"
+__all__ = [
+    "CandleData",
+    "ConnectorPair",
+    "OpenOrder",
+    "OrderBookSnapshot",
+    "OrderBookUpdate",
+    "OrderType",
+    "TradeEvent",
+    "TradeType",
+]
 
 
 class OpenOrder(BaseModel):

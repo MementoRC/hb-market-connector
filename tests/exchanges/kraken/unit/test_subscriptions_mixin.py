@@ -41,8 +41,9 @@ class _MockWs:
     """Minimal WS stub that captures subscribe registrations.
 
     - subscribe(channel, pair, handler): synchronous registration
+    - unsubscribe(channel, pair): mirrors WsConnectorBase.unsubscribe
     - send(msg): async no-op (captured via AsyncMock)
-    - _handlers: mirrors WsConnectorBase routing table
+    - _handlers: mirrors WsConnectorBase's routing-table contents
     - deliver(channel, pair, raw): calls the registered handler with raw
     """
 
@@ -52,6 +53,9 @@ class _MockWs:
 
     def subscribe(self, channel: str, pair: str | None, handler: Any) -> None:
         self._handlers[(channel, pair)] = handler
+
+    def unsubscribe(self, channel: str, pair: str | None) -> None:
+        self._handlers.pop((channel, pair), None)
 
     def deliver(self, channel: str, pair: str | None, raw: Any) -> None:
         """Invoke the registered handler for *(channel, pair)* with *raw*."""

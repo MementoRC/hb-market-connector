@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import websockets
 
 from market_connector.exceptions import GatewayNotStartedError
+from market_connector.hb_compat.event_bus import WsRoutingTable
 from market_connector.hb_compat.logging import get_logger
 from market_connector.ws_models.decoder import NormalizedWsMessage, WsMessageKind, WsShapeDecoder
 
@@ -70,8 +71,9 @@ class WsConnectorBase:
         self._refresh_interval = refresh_interval
         self._ws: Any = None
         self._connected = False
-        # Routing table: (channel, pair | None) -> handler
-        self._handlers: dict[tuple[str, str | None], MessageCallback] = {}
+        # Routing table: (channel, pair | None) -> handler, backed by hb-event-bus
+        # (ADR 0001 Group D, issue #44).
+        self._routing_table: WsRoutingTable = WsRoutingTable(name=f"ws-base:{url}")
         self._listen_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._refresh_task: asyncio.Task[None] | None = None
@@ -100,7 +102,7 @@ class WsConnectorBase:
     async def disconnect(self) -> None:
         """Disconnect and cancel all background tasks."""
         self._connected = False
-        self._handlers.clear()
+        self._routing_table.clear()
         for task in (self._listen_task, self._heartbeat_task, self._refresh_task):
             if task is not None and not task.done():
                 task.cancel()
@@ -121,11 +123,20 @@ class WsConnectorBase:
             pair: Trading pair to match, or None for channel-wide handler.
             handler: Callable invoked with msg.payload on DATA frames.
         """
-        if self._max_subscriptions > 0 and len(self._handlers) >= self._max_subscriptions:
+        if self._max_subscriptions > 0 and len(self._routing_table) >= self._max_subscriptions:
             from market_connector.exceptions import SubscriptionLimitError
 
             raise SubscriptionLimitError(f"subscription limit reached: {self._max_subscriptions}")
-        self._handlers[(channel, pair)] = handler
+        self._routing_table.subscribe(channel, pair, handler)
+
+    def unsubscribe(self, channel: str, pair: str | None) -> None:
+        """Remove the handler registered for ``(channel, pair)``. Idempotent.
+
+        Public counterpart to :meth:`subscribe`; callers (e.g. exchange
+        subscription mixins) should use this instead of reaching into the
+        routing table directly.
+        """
+        self._routing_table.unsubscribe(channel, pair)
 
     async def send(self, message: dict[str, Any]) -> None:
         """Send a message to the WebSocket server.
@@ -153,13 +164,8 @@ class WsConnectorBase:
         """Route a decoded NormalizedWsMessage to the appropriate handler."""
         if msg.kind == WsMessageKind.DATA:
             channel = msg.channel or ""
-            handler = self._handlers.get((channel, msg.pair))
-            if handler is None and msg.pair is not None:
-                # Fall back to channel-wide handler
-                handler = self._handlers.get((channel, None))
-            if handler is not None:
-                handler(msg.payload)
-            else:
+            routed = self._routing_table.route(channel, msg.pair, msg.payload)
+            if not routed:
                 logger.debug("No handler for (%s, %s) — frame dropped", msg.channel, msg.pair)
         elif msg.kind == WsMessageKind.HEARTBEAT:
             pass  # silently absorbed

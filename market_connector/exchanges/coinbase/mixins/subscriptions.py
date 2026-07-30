@@ -1,4 +1,10 @@
-"""SubscriptionsMixin: WebSocket orderbook and trade subscriptions via Coinbase WS API."""
+"""SubscriptionsMixin: WebSocket orderbook and trade subscriptions via Coinbase WS API.
+
+Handler registration routes through :class:`~market_connector.transport.ws_base.WsConnectorBase`'s
+``subscribe``/``unsubscribe`` pair (event-bus-backed routing table, ADR 0001
+Group D, issue #44) — the same synchronous 3-arg contract used by the Kraken
+subscriptions mixin.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +36,7 @@ class SubscriptionsMixin:
             raise GatewayNotStartedError("Gateway not started")
 
         product_id = to_exchange_pair(trading_pair)
+        channel = "level2"
         update_id_counter = [0]
 
         def _dispatch(msg: dict[str, Any]) -> None:
@@ -41,12 +48,12 @@ class SubscriptionsMixin:
                 callback(to_orderbook_update(level2_evt, update_id=update_id_counter[0]))
 
         @asynccontextmanager
-        async def _ctx() -> AsyncGenerator[Any, None]:
-            sub = await self._ws.subscribe(f"level2:{product_id}", _dispatch)
+        async def _ctx() -> AsyncGenerator[None, None]:
+            self._ws.subscribe(channel, product_id, _dispatch)
             try:
-                yield sub
+                yield
             finally:
-                await sub.cancel()
+                self._ws.unsubscribe(channel, product_id)
 
         return _ctx()
 
@@ -59,6 +66,7 @@ class SubscriptionsMixin:
             raise GatewayNotStartedError("Gateway not started")
 
         product_id = to_exchange_pair(trading_pair)
+        channel = "market_trades"
 
         def _dispatch(msg: dict[str, Any]) -> None:
             for evt in msg.get("events", []):
@@ -69,11 +77,11 @@ class SubscriptionsMixin:
                     callback(to_trade_event(trade))
 
         @asynccontextmanager
-        async def _ctx() -> AsyncGenerator[Any, None]:
-            sub = await self._ws.subscribe(f"market_trades:{product_id}", _dispatch)
+        async def _ctx() -> AsyncGenerator[None, None]:
+            self._ws.subscribe(channel, product_id, _dispatch)
             try:
-                yield sub
+                yield
             finally:
-                await sub.cancel()
+                self._ws.unsubscribe(channel, product_id)
 
         return _ctx()

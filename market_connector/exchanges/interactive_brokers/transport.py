@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - optional dep
     IB = None  # noqa: F841
 
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
+from market_connector.hb_compat.event_bus import EventBus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -105,7 +106,12 @@ class IbGatewayTransport:
 
     Stage 1 scope: connect/disconnect/is_connected.
     Stage 2 adds _handle_registry, _error_router, and wires errorEvent.
-    Stage 3 will add subscribe() (reqMktData / reqMktDepth event routing).
+    Stage 3 adds subscribe() (reqMktData / reqMktDepth event routing), fanned
+    out through a canonical :class:`event_bus.EventBus` instance instead of a
+    bespoke closure-based dispatch (ADR 0001 Group D, issue #44). ib_async's
+    own Event objects (``ticker.updateEvent`` etc.) remain the upstream
+    trigger — that part is ib_async's API surface, not ours to replace — but
+    the fan-out to the caller's callback is bridged through the bus.
     """
 
     def __init__(self, spec: IbConnectionSpec) -> None:
@@ -119,6 +125,8 @@ class IbGatewayTransport:
         self._handle_registry: dict[int, OrderHandle] = {}
         self._error_router = _ErrorRouter()
         self._first_status_timeout: float = 30.0
+        self._event_bus = EventBus(name="ib-ws")
+        self._subscribe_seq: int = 0
 
     @property
     def is_connected(self) -> bool:
@@ -316,50 +324,54 @@ class IbGatewayTransport:
     ) -> SubscriptionHandle:
         """Register a synchronous callback for IB event-driven market data.
 
+        The callback is registered on a canonical :class:`event_bus.EventBus`
+        instance (ADR 0001 Group D, issue #44); ib_async's native
+        ``ticker.updateEvent``/``tickByTickAllLastEvent`` objects remain the
+        upstream trigger (ib_async's own API — not reinvented here) and are
+        bridged into a publish() call per subscription. EventBus.publish
+        isolates and logs handler exceptions, replacing the previous
+        try/except-around-callback pattern.
+
         Args:
             channel: "depth" (DOM updates via reqMktDepth) or "trades"
                 (tick-by-tick via reqTickByTickData).
-            callback: sync Callable[[ticker_or_tick], None]. Exceptions are
-                caught and logged at WARNING.
+            callback: sync Callable[[ticker_or_tick], None].
 
         Returns:
             SubscriptionHandle whose .close() unregisters the handler and
             cancels the IB stream.
         """
-        from market_connector.hb_compat.logging import get_logger  # noqa: PLC0415
-
-        _log = get_logger(__name__)
+        self._subscribe_seq += 1
+        event_key = f"{channel}:{self._subscribe_seq}"
 
         if channel == "depth":
             ticker = self._ib.reqMktDepth(contract, numRows=10, isSmartDepth=True)
+            subscription = self._event_bus.subscribe(event_key, callback)
 
             def _dispatch_depth(t: object) -> None:
-                try:
-                    callback(t)
-                except Exception:
-                    _log.warning("Unhandled exception in depth callback", exc_info=True)
+                self._event_bus.publish(event_key, t)
 
             ticker.updateEvent += _dispatch_depth
 
             def _cleanup_depth() -> None:
                 ticker.updateEvent -= _dispatch_depth
+                self._event_bus.unsubscribe(subscription)
                 self._ib.cancelMktDepth(contract, isSmartDepth=True)
 
             return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup_depth)
 
         if channel == "trades":
             ticker = self._ib.reqTickByTickData(contract, "AllLast", 0, False)
+            subscription = self._event_bus.subscribe(event_key, callback)
 
             def _dispatch_trades(t: object) -> None:
-                try:
-                    callback(t)
-                except Exception:
-                    _log.warning("Unhandled exception in trades callback", exc_info=True)
+                self._event_bus.publish(event_key, t)
 
             ticker.tickByTickAllLastEvent += _dispatch_trades
 
             def _cleanup_trades() -> None:
                 ticker.tickByTickAllLastEvent -= _dispatch_trades
+                self._event_bus.unsubscribe(subscription)
                 self._ib.cancelTickByTickData(contract, "AllLast")
 
             return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup_trades)

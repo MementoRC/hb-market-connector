@@ -100,7 +100,7 @@ class SubscriptionsMixin:
                             "subscription": {"name": "book", "depth": depth},
                         }
                     )
-                self._ws._handlers.pop((channel, trading_pair), None)
+                self._ws.unsubscribe(channel, trading_pair)
 
         return _ctx()
 
@@ -154,7 +154,7 @@ class SubscriptionsMixin:
                             "subscription": {"name": "trade"},
                         }
                     )
-                self._ws._handlers.pop((channel, trading_pair), None)
+                self._ws.unsubscribe(channel, trading_pair)
 
         return _ctx()
 
@@ -211,7 +211,7 @@ class SubscriptionsMixin:
                             "subscription": {"name": "ownTrades"},
                         }
                     )
-                self._ws._handlers.pop((channel, None), None)
+                self._ws.unsubscribe(channel, None)
 
         return _ctx()
 
@@ -268,6 +268,6 @@ class SubscriptionsMixin:
                             "subscription": {"name": "openOrders"},
                         }
                     )
-                self._ws._handlers.pop((channel, None), None)
+                self._ws.unsubscribe(channel, None)
 
         return _ctx()

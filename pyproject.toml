@@ -108,13 +108,14 @@ test = "pytest tests/"
 test-unit = "pytest tests/unit/"
 test-integration = "pytest tests/integration/"
 test-conformance = "pytest tests/contract -v"
+coverage = "pytest tests/ --cov=market_connector --cov-report=term-missing"
 lint = "ruff check market_connector tests"
 format = "ruff format market_connector tests"
 format-check = "ruff format --check market_connector tests"
 typecheck = "mypy market_connector"
 build = "hatchling build"
 quality = { depends-on = ["lint", "format-check"] }
-check = { depends-on = ["quality", "typecheck", "test"] }
+check = { depends-on = ["quality", "typecheck", "coverage"] }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

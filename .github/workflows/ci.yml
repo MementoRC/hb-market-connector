@@ -17,7 +17,7 @@ permissions: {}
 
 jobs:
   ci:
-    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@0483e3dcb80aa9b0a7e06f9df8f8128fc73c0746 # v2.9.9
+    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@8fcfe680187b5cdd3ebaaf6bacf4dcc1a9194d3d # v3.0.0
     permissions:
       contents: write
       id-token: write

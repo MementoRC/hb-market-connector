@@ -24,7 +24,7 @@ coinbase = [
     "cryptography>=41",
 ]
 interactive-brokers = [
-    "ib_async>=1.0.1,<2.0.0",
+    "ib_async>=2.1.0,<3.0.0",
 ]
 dev = [
     "pytest>=9.0.3",
@@ -82,13 +82,16 @@ cryptography = ">=41"
 pyjwt = ">=2.8"
 cryptography = ">=41"
 
+[tool.pixi.feature.interactive-brokers.dependencies]
+ib_async = ">=2.1.0,<3.0.0"
+
 [tool.pixi.feature.py312.dependencies]
 python = "3.12.*"
 
 [tool.pixi.environments]
-default = { features = ["py312", "dev"], solve-group = "default" }
-ci = { features = ["py312", "ci", "coinbase", "dev"], solve-group = "default" }
-quality-ci = { features = ["py312", "ci", "coinbase", "dev"], solve-group = "default" }
+default = { features = ["py312", "interactive-brokers", "dev"], solve-group = "default" }
+ci = { features = ["py312", "ci", "coinbase", "interactive-brokers", "dev"], solve-group = "default" }
+quality-ci = { features = ["py312", "ci", "coinbase", "interactive-brokers", "dev"], solve-group = "default" }
 coinbase = { features = ["py312", "coinbase", "dev"], solve-group = "default" }
 kraken = { features = ["py312", "kraken", "dev"], solve-group = "default" }
 interactive-brokers = { features = ["py312", "interactive-brokers", "dev"], solve-group = "default" }

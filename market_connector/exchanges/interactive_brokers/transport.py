@@ -18,20 +18,25 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-# ib_async is an optional dependency; import is inside __init__ so that the
-# module can be imported without the package installed when running tests
-# that don't actually instantiate the transport. Tests patch IB at the
-# module level.
-try:
+if TYPE_CHECKING:
     from ib_async import IB
-except ImportError:  # pragma: no cover - optional dep
-    IB = None  # noqa: F841
+else:
+    # ib_async is an optional dependency; the runtime import is guarded so the
+    # module can be imported without the package installed when running tests
+    # that don't actually instantiate the transport. Tests patch IB at the
+    # module level.
+    try:
+        from ib_async import IB
+    except ImportError:  # pragma: no cover - optional dep
+        IB = None  # noqa: F841
 
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 from market_connector.hb_compat.event_bus import EventBus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from ib_async import Contract
 
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
@@ -171,7 +176,7 @@ class IbGatewayTransport:
             currency=ref.quote_currency or "USD",
             exchange=getattr(ref, "exchange_hint", None) or "SMART",
         )
-        return await self._ib.reqContractDetailsAsync(template)  # type: ignore[no-any-return]
+        return await self._ib.reqContractDetailsAsync(template)
 
     async def place_order(self, native_contract: Any, hb_order: HBOrder) -> OrderHandle:
         """Submit an order to IB and await the first non-PendingSubmit status update.
@@ -319,7 +324,7 @@ class IbGatewayTransport:
     def subscribe(
         self,
         channel: str,
-        contract: object,
+        contract: Contract,
         callback: Callable[[Any], None],
     ) -> SubscriptionHandle:
         """Register a synchronous callback for IB event-driven market data.
@@ -367,10 +372,10 @@ class IbGatewayTransport:
             def _dispatch_trades(t: object) -> None:
                 self._event_bus.publish(event_key, t)
 
-            ticker.tickByTickAllLastEvent += _dispatch_trades
+            ticker.tickByTickAllLastEvent += _dispatch_trades  # type: ignore[attr-defined]  # see #61
 
             def _cleanup_trades() -> None:
-                ticker.tickByTickAllLastEvent -= _dispatch_trades
+                ticker.tickByTickAllLastEvent -= _dispatch_trades  # type: ignore[attr-defined]  # see #61
                 self._event_bus.unsubscribe(subscription)
                 self._ib.cancelTickByTickData(contract, "AllLast")
 

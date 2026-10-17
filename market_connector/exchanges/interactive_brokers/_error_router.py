@@ -51,12 +51,23 @@ class _ErrorRouter:
         self.market_data_type = market_data_type
         self._pending_request_waiters: dict[int, Future[Any]] = {}
         self._pending_order_waiters: dict[int, Future[Any]] = {}
-        self._is_connected: bool = True
+        # Starts False: the transport flips it after a successful connect.
+        self._is_connected: bool = False
         self._connection_listeners: list[Callable[[bool], None]] = []
+        # Called as cb(code, msg) on 1101 (connectivity restored, data lost).
+        self._data_lost_listeners: list[Callable[[int, str], None]] = []
 
     @property
     def is_connected(self) -> bool:
         return self._is_connected
+
+    def set_connected(self, is_up: bool) -> None:
+        """Set the connection flag without notifying listeners.
+
+        The transport owns the connect/disconnect lifecycle and publishes the
+        resulting state itself; listeners are only for IB-originated codes.
+        """
+        self._is_connected = is_up
 
     def on_error(
         self,
@@ -70,6 +81,15 @@ class _ErrorRouter:
         if code == 1102:
             self._is_connected = True
             self._notify_connection(True)
+            return
+
+        # Code 1101: connectivity restored but market data was lost — flip state,
+        # notify, then let data-lost listeners resubscribe their streams.
+        if code == 1101:
+            self._is_connected = True
+            self._notify_connection(True)
+            for data_cb in list(self._data_lost_listeners):
+                data_cb(code, msg)
             return
 
         # Code 10090: market data partially unavailable — log warning, do not raise.

@@ -75,12 +75,13 @@ class TestErrorTable:
 
 
 class TestConnectionState:
-    def test_initial_state_is_connected(self):
+    def test_initial_state_is_disconnected(self):
         router = _ErrorRouter()
-        assert router.is_connected is True
+        assert router.is_connected is False
 
     def test_1100_sets_disconnected(self):
         router = _ErrorRouter()
+        router.set_connected(True)
         router.on_error(req_id=-1, code=1100, msg="connectivity lost")
         assert router.is_connected is False
 
@@ -94,6 +95,7 @@ class TestConnectionState:
     def test_1300_does_not_flip_connected(self):
         """ConnectionTerminated fails all pending but does not change is_connected."""
         router = _ErrorRouter()
+        router.set_connected(True)
         router.on_error(req_id=-1, code=1300, msg="terminated")
         # is_connected stays True — explicit reconnect is required, but we don't
         # flip the flag on termination (only on 1100)

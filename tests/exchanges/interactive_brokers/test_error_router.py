@@ -149,6 +149,24 @@ class TestMarketDataErrorCodes:
         with pytest.raises(MarketDataPermissionError):
             fut.result()
 
+    @pytest.mark.parametrize("code", [354, 10089])
+    async def test_delayed_data_permission_error_has_clear_message(self, code: int) -> None:
+        router = _ErrorRouter(market_data_type=3)
+        fut = asyncio.get_running_loop().create_future()
+        router._pending_request_waiters[1] = fut
+        router.on_error(req_id=1, code=code, msg="not subscribed")
+        with pytest.raises(MarketDataPermissionError, match="live market data permissions"):
+            fut.result()
+
+    async def test_live_data_permission_error_keeps_plain_message(self) -> None:
+        router = _ErrorRouter(market_data_type=1)
+        fut = asyncio.get_running_loop().create_future()
+        router._pending_request_waiters[1] = fut
+        router.on_error(req_id=1, code=354, msg="not subscribed")
+        with pytest.raises(MarketDataPermissionError) as info:
+            fut.result()
+        assert "live market data permissions" not in str(info.value)
+
     @pytest.mark.parametrize("code", [165])
     async def test_historical_data_codes_raise(self, code: int) -> None:
         router = _ErrorRouter()

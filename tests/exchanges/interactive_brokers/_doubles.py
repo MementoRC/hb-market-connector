@@ -30,6 +30,17 @@ class MockIb:
         self._depth_ticker = FakeTicker()
         self._cancel_mkt_depth_calls: list[object] = []
         self._historical_bars: list[object] = []
+        self.market_data_type_calls: list[int] = []
+        self.connect_calls: list[dict[str, object]] = []
+        self.errorEvent = FakeEvent()  # noqa: N815
+
+    async def connectAsync(self, **kwargs: object) -> None:  # noqa: N802
+        """Record connection parameters."""
+        self.connect_calls.append(kwargs)
+
+    def reqMarketDataType(self, marketDataType: int) -> None:  # noqa: N802, N803
+        """Synchronous, like ib_async.IB.reqMarketDataType."""
+        self.market_data_type_calls.append(marketDataType)
 
     def reqMktDepth(  # noqa: N802, N803
         self,

@@ -128,7 +128,7 @@ class IbGatewayTransport:
         self._spec = spec
         self._ib = IB()
         self._handle_registry: dict[int, OrderHandle] = {}
-        self._error_router = _ErrorRouter()
+        self._error_router = _ErrorRouter(market_data_type=spec.resolved_market_data_type)
         self._first_status_timeout: float = 30.0
         self._event_bus = EventBus(name="ib-ws")
         self._subscribe_seq: int = 0
@@ -146,6 +146,15 @@ class IbGatewayTransport:
             clientId=self._spec.client_id,
         )
         self._ib.errorEvent += self._error_router.on_error
+        self._apply_market_data_type()
+
+    def _apply_market_data_type(self) -> None:
+        """Send the configured market data type to IB.
+
+        Must run after every successful (re)connect, since IB resets it per
+        session; a reconnect supervisor should call this too.
+        """
+        self._ib.reqMarketDataType(self._spec.resolved_market_data_type)
 
     async def disconnect(self) -> None:
         self._ib.errorEvent -= self._error_router.on_error

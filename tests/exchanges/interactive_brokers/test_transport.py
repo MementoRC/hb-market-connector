@@ -249,11 +249,53 @@ class TestSubscribe:
         ):
             transport = IbGatewayTransport(spec)
         contract = MagicMock()
-        transport._ib._tick_ticker = MagicMock()
-        transport._ib.reqTickByTickData = MagicMock(return_value=transport._ib._tick_ticker)
-        transport._ib.cancelTickByTickData = MagicMock()
 
         handle = transport.subscribe("trades", contract, lambda tick: None)
         assert handle is not None
         handle.close()
-        transport._ib.cancelTickByTickData.assert_called_once()
+        assert transport._ib._cancel_tick_by_tick_calls == [(contract, "AllLast")]
+
+    def _trades_transport(self, spec: IbConnectionSpec) -> IbGatewayTransport:
+        from ._doubles import MockIb
+
+        with patch(
+            "market_connector.exchanges.interactive_brokers.transport.IB",
+            return_value=MockIb(),
+        ):
+            return IbGatewayTransport(spec)
+
+    def test_trades_publish_one_tick_per_tick_by_tick_entry(self, spec: IbConnectionSpec) -> None:
+        transport = self._trades_transport(spec)
+        received: list[object] = []
+        transport.subscribe("trades", MagicMock(), received.append)
+
+        ticker = transport._ib._tick_ticker
+        ticks = [MagicMock(), MagicMock(), MagicMock()]
+        ticker.tickByTicks.extend(ticks)
+        ticker.updateEvent(ticker)
+
+        assert received == ticks
+
+    def test_trades_empty_tick_by_ticks_publishes_nothing(self, spec: IbConnectionSpec) -> None:
+        transport = self._trades_transport(spec)
+        received: list[object] = []
+        transport.subscribe("trades", MagicMock(), received.append)
+
+        ticker = transport._ib._tick_ticker
+        ticker.updateEvent(ticker)
+
+        assert received == []
+
+    def test_trades_close_detaches_update_handler(self, spec: IbConnectionSpec) -> None:
+        transport = self._trades_transport(spec)
+        received: list[object] = []
+        handle = transport.subscribe("trades", MagicMock(), received.append)
+
+        ticker = transport._ib._tick_ticker
+        assert len(ticker.updateEvent._handlers) == 1
+        handle.close()
+        assert ticker.updateEvent._handlers == []
+
+        ticker.tickByTicks.append(MagicMock())
+        ticker.updateEvent(ticker)
+        assert received == []

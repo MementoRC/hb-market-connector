@@ -36,7 +36,7 @@ from market_connector.hb_compat.event_bus import EventBus
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from ib_async import Contract
+    from ib_async import Contract, Ticker
 
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
@@ -331,9 +331,9 @@ class IbGatewayTransport:
 
         The callback is registered on a canonical :class:`event_bus.EventBus`
         instance (ADR 0001 Group D, issue #44); ib_async's native
-        ``ticker.updateEvent``/``tickByTickAllLastEvent`` objects remain the
-        upstream trigger (ib_async's own API — not reinvented here) and are
-        bridged into a publish() call per subscription. EventBus.publish
+        ``ticker.updateEvent`` remains the upstream trigger (ib_async's own
+        API — not reinvented here) and is bridged into publish() calls per
+        subscription (one per entry of ``ticker.tickByTicks`` for trades). EventBus.publish
         isolates and logs handler exceptions, replacing the previous
         try/except-around-callback pattern.
 
@@ -369,13 +369,15 @@ class IbGatewayTransport:
             ticker = self._ib.reqTickByTickData(contract, "AllLast", 0, False)
             subscription = self._event_bus.subscribe(event_key, callback)
 
-            def _dispatch_trades(t: object) -> None:
-                self._event_bus.publish(event_key, t)
+            def _dispatch_trades(t: Ticker) -> None:
+                # ib_async appends each batch to ticker.tickByTicks, then fires updateEvent.
+                for tick in list(t.tickByTicks):
+                    self._event_bus.publish(event_key, tick)
 
-            ticker.tickByTickAllLastEvent += _dispatch_trades  # type: ignore[attr-defined]  # see #61
+            ticker.updateEvent += _dispatch_trades
 
             def _cleanup_trades() -> None:
-                ticker.tickByTickAllLastEvent -= _dispatch_trades  # type: ignore[attr-defined]  # see #61
+                ticker.updateEvent -= _dispatch_trades
                 self._event_bus.unsubscribe(subscription)
                 self._ib.cancelTickByTickData(contract, "AllLast")
 

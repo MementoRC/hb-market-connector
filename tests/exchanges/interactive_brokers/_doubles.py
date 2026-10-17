@@ -29,6 +29,8 @@ class MockIb:
     def __init__(self) -> None:
         self._depth_ticker = FakeTicker()
         self._cancel_mkt_depth_calls: list[object] = []
+        self._tick_ticker = FakeTicker()
+        self._cancel_tick_by_tick_calls: list[tuple[object, str]] = []
         self._historical_bars: list[object] = []
 
     def reqMktDepth(  # noqa: N802, N803
@@ -55,19 +57,19 @@ class MockIb:
         ignoreSize: int,  # noqa: N803
         useRTH: bool,  # noqa: N803
     ) -> FakeTicker:
-        """Return a FakeTicker with tickByTickAllLastEvent support."""
-        return FakeTicker()
+        """Return the pre-configured tick-by-tick FakeTicker."""
+        return self._tick_ticker
 
     def cancelTickByTickData(self, contract: object, tickType: str) -> None:  # noqa: N802, N803
-        """No-op for test."""
-        pass
+        """Record that tick-by-tick cancellation was called."""
+        self._cancel_tick_by_tick_calls.append((contract, tickType))
 
 
 class FakeTicker:
-    """Fake ib_async.Ticker with updateEvent and tickByTickAllLastEvent support."""
+    """Fake ib_async.Ticker: updateEvent plus a tickByTicks batch list (as in ib_async)."""
 
     def __init__(self) -> None:
         self.domBids: list[object] = []
         self.domAsks: list[object] = []
+        self.tickByTicks: list[object] = []
         self.updateEvent = FakeEvent()
-        self.tickByTickAllLastEvent = FakeEvent()

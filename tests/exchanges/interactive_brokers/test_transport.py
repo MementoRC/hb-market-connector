@@ -36,6 +36,33 @@ def mock_ib() -> MagicMock:
     return ib
 
 
+class TestMarketDataType:
+    """Issue #53: connect() sends reqMarketDataType with the resolved value."""
+
+    @pytest.mark.parametrize(
+        "spec,expected",
+        [
+            (IbConnectionSpec(port=4002, paper=True), 3),
+            (IbConnectionSpec(port=4001, paper=False), 1),
+            (IbConnectionSpec(port=4002, paper=True, market_data_type=1), 1),
+            (IbConnectionSpec(port=4001, paper=False, market_data_type=4), 4),
+        ],
+    )
+    async def test_connect_requests_resolved_market_data_type(
+        self, spec: IbConnectionSpec, expected: int
+    ) -> None:
+        from tests.exchanges.interactive_brokers._doubles import MockIb
+
+        ib = MockIb()
+        with patch("market_connector.exchanges.interactive_brokers.transport.IB", return_value=ib):
+            transport = IbGatewayTransport(spec)
+            await transport.connect()
+            assert ib.market_data_type_calls == [expected]
+            transport._apply_market_data_type()
+            assert ib.market_data_type_calls == [expected, expected]
+        assert transport._error_router.market_data_type == expected
+
+
 class TestProtocolConformance:
     def test_satisfies_request_transport(self, spec: IbConnectionSpec) -> None:
         with patch("market_connector.exchanges.interactive_brokers.transport.IB"):

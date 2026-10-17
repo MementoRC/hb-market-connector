@@ -38,10 +38,17 @@ _ERROR_TABLE: dict[int, type[IbError]] = {
 }
 
 
+_DELAYED_DATA_HINT = (
+    "(delayed/frozen market data is configured; tick-by-tick and market-depth "
+    "requests require live market data permissions)"
+)
+
+
 class _ErrorRouter:
     """Routes IB error events to in-flight call Futures and manages connection state."""
 
-    def __init__(self) -> None:
+    def __init__(self, market_data_type: int | None = None) -> None:
+        self.market_data_type = market_data_type
         self._pending_request_waiters: dict[int, Future[Any]] = {}
         self._pending_order_waiters: dict[int, Future[Any]] = {}
         self._is_connected: bool = True
@@ -98,6 +105,8 @@ class _ErrorRouter:
         if exc_cls is MarketDataPermissionError:
             fut = self._pending_request_waiters.pop(req_id, None)
             if fut is not None and not fut.done():
+                if self.market_data_type not in (None, 1):
+                    msg = f"{msg} {_DELAYED_DATA_HINT}"
                 fut.set_exception(exc_cls(code, msg))
             return
 

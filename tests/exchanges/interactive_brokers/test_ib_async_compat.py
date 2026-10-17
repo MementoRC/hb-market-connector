@@ -83,9 +83,8 @@ async def test_ticker_exposes_depth_and_update_event() -> None:
     assert hasattr(ticker, "tickByTicks")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#61: transport hooks ticker.tickByTickAllLastEvent, which ib_async does not define",
-)
-async def test_ticker_exposes_tick_by_tick_all_last_event() -> None:
-    assert hasattr(ib_async.Ticker(), "tickByTickAllLastEvent")
+async def test_ticker_delivers_tick_by_tick_via_update_event() -> None:
+    ticker = ib_async.Ticker()
+    assert isinstance(ticker.tickByTicks, list)
+    assert hasattr(ticker, "updateEvent")
+    assert not hasattr(ticker, "tickByTickAllLastEvent")

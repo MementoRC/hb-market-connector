@@ -97,18 +97,22 @@ async def _connected(client_id: int, *, fetch_all: bool = True) -> AsyncIterator
         await gateway.stop()
 
 
-async def _await_working(gateway: IbGatewayGateway, order_id: int) -> None:
+async def _await_working(gateway: IbGatewayGateway, placed: OrderHandle) -> OrderHandle:
+    """Poll until IB has assigned a permId and the order is working; return the fresh handle."""
+    order_id = placed._trade.order.orderId
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         for handle in gateway.get_open_orders():
-            if handle.order_id == order_id and handle.raw_status in _WORKING:
-                return
+            order = handle._trade.order
+            if order.orderId == order_id and order.permId and handle.raw_status in _WORKING:
+                return handle
         await asyncio.sleep(0.25)
     pytest.fail(f"order {order_id} never reached a working state")
 
 
-def _find(gateway: IbGatewayGateway, order_id: int) -> OrderHandle | None:
-    return next((h for h in gateway.get_open_orders() if h.order_id == order_id), None)
+def _find(gateway: IbGatewayGateway, perm_id: int) -> OrderHandle | None:
+    # permId is the only order identity shared across clients in IB; orderId is per-client.
+    return next((h for h in gateway.get_open_orders() if h._trade.order.permId == perm_id), None)
 
 
 @pytest.fixture
@@ -122,24 +126,26 @@ async def working_order() -> AsyncIterator[tuple[IbGatewayGateway, OrderHandle]]
             price=Decimal("1.00"),
         )
         try:
-            handle = await gateway_a.place_order(_AAPL, order)
+            placed = await gateway_a.place_order(_AAPL, order)
         except OrderRejectedError as exc:
             pytest.skip(f"IB rejected the order (outside market hours?): {exc}")
+        fresh: OrderHandle | None = None
         try:
-            if handle.status is IBOrderState.REJECTED:
-                pytest.skip(f"IB rejected the order: {handle.raw_status}")
-            await _await_working(gateway_a, handle.order_id)
-            yield gateway_a, handle
+            if placed.status is IBOrderState.REJECTED:
+                pytest.skip(f"IB rejected the order: {placed.raw_status}")
+            fresh = await _await_working(gateway_a, placed)
+            yield gateway_a, fresh
         finally:
-            await gateway_a.cancel_order(handle)
+            await gateway_a.cancel_order(fresh or placed)
 
 
 async def test_other_client_sees_order_as_not_owned(
     working_order: tuple[IbGatewayGateway, OrderHandle],
 ) -> None:
     gateway_a, handle_a = working_order
+    perm_id = handle_a._trade.order.permId
     async with _connected(CLIENT_B) as gateway_b:
-        seen = _find(gateway_b, handle_a.order_id)
+        seen = _find(gateway_b, perm_id)
         assert seen is not None, "client B does not see client A's order"
         assert seen.client_id == CLIENT_A
         assert seen.owned is False
@@ -148,7 +154,7 @@ async def test_other_client_sees_order_as_not_owned(
         with pytest.raises(ValueError):
             await gateway_b.cancel_order(seen)
 
-    still = _find(gateway_a, handle_a.order_id)
+    still = _find(gateway_a, perm_id)
     assert still is not None
     assert still.raw_status in _WORKING
     assert still.owned is True
@@ -159,7 +165,7 @@ async def test_fetch_all_disabled_hides_foreign_order(
 ) -> None:
     _, handle_a = working_order
     async with _connected(CLIENT_C, fetch_all=False) as gateway_c:
-        assert _find(gateway_c, handle_a.order_id) is None
+        assert _find(gateway_c, handle_a._trade.order.permId) is None
 
 
 async def test_restarted_bot_sees_order_but_cannot_cancel_it(
@@ -167,7 +173,7 @@ async def test_restarted_bot_sees_order_but_cannot_cancel_it(
 ) -> None:
     _, handle_a = working_order
     async with _connected(CLIENT_D) as restarted:
-        seen = _find(restarted, handle_a.order_id)
+        seen = _find(restarted, handle_a._trade.order.permId)
         assert seen is not None, "restarted bot does not see the pre-existing order"
         assert seen.client_id == CLIENT_A
         assert seen.owned is False

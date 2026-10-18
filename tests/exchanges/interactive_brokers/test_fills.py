@@ -6,6 +6,10 @@ All run against MockIb; fills and reports are SimpleNamespace fakes.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import sys
+import types
+from dataclasses import dataclass
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -143,6 +147,21 @@ class TestLiveFees:
         await transport.connect()
         ib.commissionReportEvent(None, make_fill("e1.01"), make_commission_report(""))
         assert fees == []
+
+
+@dataclass
+class _StubExecutionFilter:
+    clientId: int = 0  # noqa: N815
+    acctCode: str = ""  # noqa: N815
+
+
+@pytest.fixture(autouse=True)
+def _ib_async_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``ib_async.ExecutionFilter`` when ib_async is not installed (e.g. CI py312)."""
+    if importlib.util.find_spec("ib_async") is None:
+        stub = types.ModuleType("ib_async")
+        stub.ExecutionFilter = _StubExecutionFilter  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "ib_async", stub)
 
 
 class TestReconcile:

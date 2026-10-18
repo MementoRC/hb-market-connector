@@ -18,6 +18,7 @@ rig sets it explicitly, as the other mixin tests do.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import time
 from collections import Counter
@@ -36,7 +37,7 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
 )
 from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayGateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
-from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
+from market_connector.exchanges.interactive_brokers.transport import DepthBook, IbGatewayTransport
 
 from ._doubles import FakeTicker, MockIb
 
@@ -51,8 +52,8 @@ _IDLE_SHORT = 0.05
 _IDLE_LONG = 0.2
 _PAST_IDLE = 0.4
 
-_BIDS = [SimpleNamespace(price=150.0, size=100.0), SimpleNamespace(price=149.5, size=200.0)]
-_ASKS = [SimpleNamespace(price=150.5, size=50.0), SimpleNamespace(price=151.0, size=75.0)]
+_BIDS = [(150.0, 100.0), (149.5, 200.0)]  # raw (price, size) rows, best first
+_ASKS = [(150.5, 50.0), (151.0, 75.0)]
 _EXPECTED_BIDS = [(Decimal("150.0"), Decimal("100.0")), (Decimal("149.5"), Decimal("200.0"))]
 _EXPECTED_ASKS = [(Decimal("150.5"), Decimal("50.0")), (Decimal("151.0"), Decimal("75.0"))]
 
@@ -109,9 +110,44 @@ def _set_l1(ticker: FakeTicker, bid: float, ask: float) -> None:
     ticker.ask = ask
 
 
-def _populate_depth(ticker: FakeTicker) -> None:
-    ticker.domBids = list(_BIDS)
-    ticker.domAsks = list(_ASKS)
+def _tick(side: int, operation: int, position: int, price: float, size: float) -> SimpleNamespace:
+    """Raw per-update depth data, shaped like ib_async's ``MktDepthData`` (ticker.domTicks)."""
+    return SimpleNamespace(
+        time=None,
+        position=position,
+        marketMaker="",
+        operation=operation,
+        side=side,
+        price=price,
+        size=size,
+    )
+
+
+def _feed(ticker: FakeTicker, *ticks: SimpleNamespace) -> None:
+    """Deliver one network batch: a FRESH domTicks list, then updateEvent (as ib_async does).
+
+    ib_async's own domBids/domAsks are deliberately poisoned: our book must never read them.
+    """
+    ticker.domTicks = list(ticks)
+    ticker.domBids = [SimpleNamespace(price=1.0, size=1.0)]
+    ticker.domAsks = [SimpleNamespace(price=2.0, size=2.0)]
+    _fire(ticker)
+
+
+def _feed_levels(
+    ticker: FakeTicker,
+    bids: list[tuple[float, float]] = _BIDS,
+    asks: list[tuple[float, float]] = _ASKS,
+) -> None:
+    """Insert *bids* / *asks* as raw op-0 ticks at positions 0..n (one batch)."""
+    ticks = [_tick(1, 0, i, p, s) for i, (p, s) in enumerate(bids)]
+    ticks += [_tick(0, 0, i, p, s) for i, (p, s) in enumerate(asks)]
+    _feed(ticker, *ticks)
+
+
+def _feed_levels_soon(ticker: FakeTicker, delay: float = 0.01) -> None:
+    """Feed the default book shortly after the stream under test has been opened."""
+    _call_later(delay, lambda: _feed_levels(ticker))
 
 
 def _call_later(delay: float, fn: Callable[[], None]) -> None:
@@ -283,7 +319,7 @@ class TestD3NoFixedSleepForL1:
 class TestD4SharedRefCountedDepth:
     async def test_d4_get_orderbook_then_subscribe_share_one_stream(self) -> None:
         rig = _rig()
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         await rig.gateway.get_orderbook("AAPL-USD")
         contract = rig.resolver.contracts["AAPL-USD"]
         handle = rig.transport.subscribe("depth", contract, lambda t: None)
@@ -292,7 +328,7 @@ class TestD4SharedRefCountedDepth:
 
     async def test_d4_subscribe_then_get_orderbook_share_one_stream(self) -> None:
         rig = _rig()
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         contract = await rig.resolver.resolve_from_pair("AAPL-USD")
         handle = rig.transport.subscribe("depth", contract, lambda t: None)
         await rig.gateway.get_orderbook("AAPL-USD")
@@ -301,7 +337,7 @@ class TestD4SharedRefCountedDepth:
 
     async def test_d4_no_new_request_while_subscribed(self) -> None:
         rig = _rig()
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         contract = await rig.resolver.resolve_from_pair("AAPL-USD")
         handle = rig.transport.subscribe("depth", contract, lambda t: None)
         for _ in range(3):
@@ -321,7 +357,7 @@ class TestD4SharedRefCountedDepth:
         first.close()
         await asyncio.sleep(_PAST_IDLE)
         assert rig.ib._cancel_mkt_depth_calls == []
-        _fire(rig.ib._depth_ticker)
+        _feed_levels(rig.ib._depth_ticker)
         assert (len(seen_a), len(seen_b)) == (0, 1)
         second.close()
 
@@ -336,7 +372,7 @@ class TestD4SharedRefCountedDepth:
 
     async def test_d4_repeated_get_orderbook_within_window_one_request(self) -> None:
         rig = _rig(depth_idle_release=_IDLE_LONG)
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         for _ in range(3):
             await rig.gateway.get_orderbook("AAPL-USD")
             await asyncio.sleep(0.02)
@@ -345,18 +381,19 @@ class TestD4SharedRefCountedDepth:
 
     async def test_d4_get_orderbook_alone_releases_after_idle_and_reopens(self) -> None:
         rig = _rig(depth_idle_release=_IDLE_SHORT)
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         await rig.gateway.get_orderbook("AAPL-USD")
         assert rig.ib._cancel_mkt_depth_calls == []  # not cancelled on return
         await asyncio.sleep(_PAST_IDLE)
         contract = rig.resolver.contracts["AAPL-USD"]
         assert rig.ib._cancel_mkt_depth_calls == [contract]
+        _feed_levels_soon(rig.ib._depth_ticker)
         await rig.gateway.get_orderbook("AAPL-USD")
         assert len(rig.ib.req_mkt_depth_calls) == 2
 
     async def test_d4_use_resets_the_idle_period(self) -> None:
         rig = _rig(depth_idle_release=_IDLE_LONG)
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         await rig.gateway.get_orderbook("AAPL-USD")
         await asyncio.sleep(0.12)
         await rig.gateway.get_orderbook("AAPL-USD")  # resets the period
@@ -368,7 +405,7 @@ class TestD4SharedRefCountedDepth:
 
     async def test_d4_subscribe_within_window_keeps_stream_open(self) -> None:
         rig = _rig(depth_idle_release=_IDLE_SHORT)
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         await rig.gateway.get_orderbook("AAPL-USD")
         contract = rig.resolver.contracts["AAPL-USD"]
         handle = rig.transport.subscribe("depth", contract, lambda t: None)
@@ -386,9 +423,12 @@ class TestD4SharedRefCountedDepth:
 class TestD5OrderbookWaitsForFirstUpdate:
     async def test_d5_populated_book_returns_immediately_with_decimal_levels(self) -> None:
         rig = _rig()  # default 5.0s timeout
-        _populate_depth(rig.ib._depth_ticker)
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        handle = rig.transport.subscribe("depth", contract, lambda t: None)  # opens the stream
+        _feed_levels(rig.ib._depth_ticker)  # book already populated when get_orderbook runs
         started = time.monotonic()
         snapshot = await rig.gateway.get_orderbook("AAPL-USD")
+        handle.close()
         assert time.monotonic() - started < 0.5
         assert snapshot.trading_pair == "AAPL-USD"
         assert snapshot.bids == _EXPECTED_BIDS
@@ -397,7 +437,7 @@ class TestD5OrderbookWaitsForFirstUpdate:
 
     async def test_d5_transport_depth_snapshot_returns_bids_and_asks(self) -> None:
         rig = _rig()
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         contract = await rig.resolver.resolve_from_pair("AAPL-USD")
         bids, asks = await rig.transport.depth_snapshot(contract)
         assert (bids, asks) == (_EXPECTED_BIDS, _EXPECTED_ASKS)
@@ -406,11 +446,7 @@ class TestD5OrderbookWaitsForFirstUpdate:
         rig = _rig()
         ticker = rig.ib._depth_ticker
 
-        def deliver() -> None:
-            _populate_depth(ticker)
-            _fire(ticker)
-
-        _call_later(0.05, deliver)
+        _call_later(0.05, lambda: _feed_levels(ticker))
         started = time.monotonic()
         snapshot = await rig.gateway.get_orderbook("AAPL-USD")
         elapsed = time.monotonic() - started
@@ -422,15 +458,8 @@ class TestD5OrderbookWaitsForFirstUpdate:
         rig = _rig()
         ticker = rig.ib._depth_ticker
 
-        def empty_update() -> None:
-            _fire(ticker)
-
-        def real_update() -> None:
-            _populate_depth(ticker)
-            _fire(ticker)
-
-        _call_later(0.03, empty_update)
-        _call_later(0.10, real_update)
+        _call_later(0.03, lambda: _feed(ticker))  # an update batch with no raw ticks
+        _call_later(0.10, lambda: _feed_levels(ticker))
         started = time.monotonic()
         snapshot = await rig.gateway.get_orderbook("AAPL-USD")
         assert time.monotonic() - started >= 0.09
@@ -499,7 +528,7 @@ class TestD6Code317DepthReset:
 class TestD7StopCancelsEverything:
     async def _open_everything(self, rig: Rig) -> tuple[FakeContract, FakeContract, FakeContract]:
         _set_l1(rig.ib._l1_ticker, 150.0, 150.5)
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         await rig.gateway.start()
         await rig.gateway.get_mid_price("AAPL-USD")
         await rig.gateway.get_mid_price("MSFT-USD")
@@ -537,7 +566,7 @@ class TestD7StopCancelsEverything:
 
     async def test_d7_no_idle_timer_fires_after_stop(self) -> None:
         rig = _rig(depth_idle_release=_IDLE_SHORT)
-        _populate_depth(rig.ib._depth_ticker)
+        _feed_levels_soon(rig.ib._depth_ticker)
         await rig.gateway.start()
         await rig.gateway.get_orderbook("AAPL-USD")  # leaves an idle-release timer pending
         contract = await rig.resolver.resolve_from_pair("NVDA-USD")
@@ -572,7 +601,7 @@ class TestD7StopCancelsEverything:
 async def _open_l1_and_depth(rig: Rig) -> FakeContract:
     """Connect, then open one L1 ticker and one idle-open depth stream for AAPL-USD."""
     _set_l1(rig.ib._l1_ticker, 150.0, 150.5)
-    _populate_depth(rig.ib._depth_ticker)
+    _feed_levels_soon(rig.ib._depth_ticker)
     await rig.gateway.start()
     await rig.gateway.get_mid_price("AAPL-USD")
     await rig.gateway.get_orderbook("AAPL-USD")
@@ -580,11 +609,20 @@ async def _open_l1_and_depth(rig: Rig) -> FakeContract:
 
 
 def _new_tickers_with_data(ib: MockIb) -> None:
-    """Rotate to brand-new tickers carrying distinguishable data (mid 200.5, bids 200.0)."""
+    """Rotate to brand-new tickers; the new L1 ticker carries mid 200.5."""
     ib.rotate_tickers()
     _set_l1(ib._l1_ticker, 200.0, 201.0)
-    ib._depth_ticker.domBids = [SimpleNamespace(price=200.0, size=1.0)]
-    ib._depth_ticker.domAsks = [SimpleNamespace(price=201.0, size=2.0)]
+
+
+def _feed_new_book_soon(ib: MockIb) -> None:
+    """Deliver bids 200.0 / asks 201.0 on the NEW depth ticker once it has been re-hooked."""
+    _feed_levels_soon_with(ib._depth_ticker, [(200.0, 1.0)], [(201.0, 2.0)])
+
+
+def _feed_levels_soon_with(
+    ticker: FakeTicker, bids: list[tuple[float, float]], asks: list[tuple[float, float]]
+) -> None:
+    _call_later(0.01, lambda: _feed_levels(ticker, bids, asks))
 
 
 class TestD8SurviveDrops:
@@ -613,6 +651,7 @@ class TestD8SurviveDrops:
         assert rig.transport._supervisor is not None
         await rig.transport._supervisor
 
+        _feed_new_book_soon(rig.ib)
         assert await rig.gateway.get_mid_price("AAPL-USD") == Decimal("200.5")
         snapshot = await rig.gateway.get_orderbook("AAPL-USD")
         assert snapshot.bids == [(Decimal("200.0"), Decimal("1.0"))]
@@ -641,6 +680,7 @@ class TestD8SurviveDrops:
 
         rig.ib.errorEvent(-1, 1101, "data lost")
 
+        _feed_new_book_soon(rig.ib)
         assert await rig.gateway.get_mid_price("AAPL-USD") == Decimal("200.5")
         snapshot = await rig.gateway.get_orderbook("AAPL-USD")
         assert snapshot.bids == [(Decimal("200.0"), Decimal("1.0"))]
@@ -736,3 +776,167 @@ async def test_d9_real_ib_async_depth_rows_stay_consistent() -> None:
         assert actual_asks == asks, f"asks diverged at step {step}: {_DEPTH_OPS[step]}"
         assert len({p for p, _ in actual_bids}) == len(actual_bids)
         assert len({p for p, _ in actual_asks}) == len(actual_asks)
+
+
+# --------------------------------------------------------------------------- D10
+#
+# Data source (verified in ib_async 2.1.0 wrapper.py): updateMktDepthL2 appends a
+# MktDepthData(time, position, marketMaker, operation, side, price, size) to ticker.domTicks;
+# tcpDataArrived() replaces domTicks with a fresh [] for pending tickers at the start of each
+# network batch; tcpDataProcessed() then fires ticker.updateEvent. So every updateEvent carries
+# exactly the raw updates of its batch (possibly several) and they must be applied in order.
+# Error 317 also appends synthetic op-2 deletes (position 0, side 0/1) for every existing row.
+
+
+def _levels(rows: list[tuple[float, float]]) -> list[tuple[Decimal, Decimal]]:
+    return [(Decimal(str(p)), Decimal(str(s))) for p, s in rows]
+
+
+def _reference_after(ops: list[tuple[int, int, int, float, float]]) -> tuple[list, list]:
+    bids: list[tuple[float, float]] = []
+    asks: list[tuple[float, float]] = []
+    for side, operation, position, price, size in ops:
+        _apply_reference(bids if side else asks, operation, position, price, size)
+    return _levels(bids), _levels(asks)
+
+
+class TestD10OwnDepthBook:
+    async def test_d10_book_matches_reference_after_every_ladder_step(self) -> None:
+        rig = _rig()
+        ticker = rig.ib._depth_ticker
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        handle = rig.transport.subscribe("depth", contract, lambda t: None)
+        for step in range(len(_DEPTH_OPS)):
+            side, operation, position, price, size = _DEPTH_OPS[step]
+            _feed(ticker, _tick(side, operation, position, price, size))
+            bids, asks = await rig.transport.depth_snapshot(contract)
+            expected = _reference_after(_DEPTH_OPS[: step + 1])
+            assert (bids, asks) == expected, f"book diverged at step {step}: {_DEPTH_OPS[step]}"
+        handle.close()
+
+    async def test_d10_ticks_batched_in_one_update_are_applied_in_order(self) -> None:
+        rig = _rig()
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        handle = rig.transport.subscribe("depth", contract, lambda t: None)
+        _feed(rig.ib._depth_ticker, *(_tick(*op) for op in _DEPTH_OPS))
+        assert await rig.transport.depth_snapshot(contract) == _reference_after(_DEPTH_OPS)
+        handle.close()
+
+    async def test_d10_get_orderbook_levels_come_from_our_book(self) -> None:
+        rig = _rig()
+        ticker = rig.ib._depth_ticker
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        handle = rig.transport.subscribe("depth", contract, lambda t: None)
+        for op in _DEPTH_OPS:
+            _feed(ticker, _tick(*op))
+        snapshot = await rig.gateway.get_orderbook("AAPL-USD")
+        expected_bids, expected_asks = _reference_after(_DEPTH_OPS)
+        assert (snapshot.bids, snapshot.asks) == (expected_bids, expected_asks)
+        handle.close()
+
+    async def test_d10_subscribe_callbacks_receive_our_book(self) -> None:
+        rig = _rig()
+        ticker = rig.ib._depth_ticker
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        received: list[DepthBook] = []
+        handle = rig.transport.subscribe("depth", contract, received.append)
+        for step, op in enumerate(_DEPTH_OPS):
+            _feed(ticker, _tick(*op))
+            book = received[-1]
+            assert isinstance(book, DepthBook)
+            expected = _reference_after(_DEPTH_OPS[: step + 1])
+            assert (list(book.bids), list(book.asks)) == expected, f"step {step}"
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            received[-1].bids = ()  # type: ignore[misc]
+        handle.close()
+
+    async def test_d10_insert_beyond_num_rows_truncates_the_tail(self) -> None:
+        rig = _rig()
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        handle = rig.transport.subscribe("depth", contract, lambda t: None)
+        ticks = [_tick(1, 0, i, 100.0 - i, 1.0) for i in range(10)]
+        ticks.append(_tick(1, 0, 0, 200.0, 5.0))  # shifts everything down; the 10th row falls off
+        _feed(rig.ib._depth_ticker, *ticks)
+        bids, _ = await rig.transport.depth_snapshot(rig.resolver.contracts["AAPL-USD"])
+        expected = [(200.0, 5.0)] + [(100.0 - i, 1.0) for i in range(9)]
+        assert bids == _levels(expected)
+        assert len(bids) == 10
+        handle.close()
+
+    async def test_d10_delete_at_missing_position_is_ignored(self) -> None:
+        rig = _rig()
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        handle = rig.transport.subscribe("depth", contract, lambda t: None)
+        _feed(rig.ib._depth_ticker, _tick(1, 2, 0, 100.0, 0.0), _tick(1, 2, 5, 99.0, 0.0))
+        _feed(rig.ib._depth_ticker, _tick(0, 0, 0, 101.0, 7.0))
+        bids, asks = await rig.transport.depth_snapshot(contract)
+        assert (bids, asks) == ([], _levels([(101.0, 7.0)]))
+        handle.close()
+
+    async def test_d10_code_317_clears_the_book(self) -> None:
+        rig = _rig(market_data_timeout=0.05)
+        await rig.gateway.start()  # attaches the router to errorEvent
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        handle = rig.transport.subscribe("depth", contract, lambda t: None)
+        _feed_levels(rig.ib._depth_ticker)
+        assert (await rig.transport.depth_snapshot(contract))[0] == _EXPECTED_BIDS
+
+        rig.ib.errorEvent(1, 317, "Market depth data has been RESET")
+
+        with pytest.raises(MarketDataTimeoutError):  # empty again: waits for a fresh update
+            await rig.transport.depth_snapshot(contract)
+        # ib_async then reports synthetic deletes for the old rows: harmless on an empty book.
+        _feed(rig.ib._depth_ticker, _tick(0, 2, 0, 150.5, 0.0), _tick(1, 2, 0, 150.0, 0.0))
+        _feed(rig.ib._depth_ticker, _tick(1, 0, 0, 300.0, 1.0))
+        bids, asks = await rig.transport.depth_snapshot(contract)
+        assert (bids, asks) == (_levels([(300.0, 1.0)]), [])
+        handle.close()
+        await rig.gateway.stop()
+
+    @pytest.mark.parametrize("trigger", ["router_1101", "reconnect"])
+    async def test_d10_resubscribe_clears_the_book(self, trigger: str) -> None:
+        rig = _rig(market_data_timeout=0.05, depth_idle_release=_IDLE_LONG * 10)
+        await rig.gateway.start()
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        handle = rig.transport.subscribe("depth", contract, lambda t: None)
+        old_ticker = rig.ib._depth_ticker
+        _feed_levels(old_ticker)
+        rig.ib.rotate_tickers()
+        new_ticker = rig.ib._depth_ticker
+
+        if trigger == "router_1101":
+            rig.ib.errorEvent(-1, 1101, "data lost")
+        else:
+            rig.ib.simulate_drop()
+            assert rig.transport._supervisor is not None
+            await rig.transport._supervisor
+
+        with pytest.raises(MarketDataTimeoutError):  # no stale rows survive the resubscribe
+            await rig.transport.depth_snapshot(contract)
+        _feed_levels(old_ticker, [(999.0, 1.0)], [])  # a dead ticker must not touch the book
+        _feed_levels(new_ticker, [(200.0, 1.0)], [(201.0, 2.0)])
+        bids, asks = await rig.transport.depth_snapshot(contract)
+        assert (bids, asks) == (_levels([(200.0, 1.0)]), _levels([(201.0, 2.0)]))
+        handle.close()
+        await rig.gateway.stop()
+
+    async def test_d10_real_wrapper_through_transport_matches_reference(self) -> None:
+        """Drive ib_async's REAL Wrapper.updateMktDepthL2 -> ticker.updateEvent -> OUR book."""
+        ib_async = pytest.importorskip("ib_async")
+        real_ib = ib_async.IB()
+        wrapper = real_ib.wrapper
+        ticker = ib_async.Ticker()
+        wrapper.reqId2Ticker[1] = ticker
+        rig = _rig()
+        rig.ib._depth_ticker = ticker  # the transport's reqMktDepth now returns the real Ticker
+        contract = await rig.resolver.resolve_from_pair("AAPL-USD")
+        handle = rig.transport.subscribe("depth", contract, lambda t: None)
+
+        for step, (side, operation, position, price, size) in enumerate(_DEPTH_OPS):
+            wrapper.tcpDataArrived()  # fresh domTicks for this batch
+            wrapper.updateMktDepthL2(1, position, "", operation, side, price, size, True)
+            wrapper.tcpDataProcessed()  # fires ticker.updateEvent
+            bids, asks = await rig.transport.depth_snapshot(contract)
+            expected = _reference_after(_DEPTH_OPS[: step + 1])
+            assert (bids, asks) == expected, f"book diverged at step {step}: {_DEPTH_OPS[step]}"
+        handle.close()

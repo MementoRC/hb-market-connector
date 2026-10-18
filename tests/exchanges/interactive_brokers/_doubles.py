@@ -235,5 +235,8 @@ class FakeTicker:
         self.ask: float = float("nan")
         self.domBids: list[object] = []
         self.domAsks: list[object] = []
+        # Raw per-update depth data (ib_async MktDepthData: position/operation/side/price/size).
+        # ib_async replaces this with a fresh list for each network batch before updateEvent.
+        self.domTicks: list[object] = []
         self.tickByTicks: list[object] = []
         self.updateEvent = FakeEvent()

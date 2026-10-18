@@ -186,6 +186,18 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
     )
 
 
+@dataclass(frozen=True)
+class DepthBook:
+    """Order-book state delivered to ``subscribe("depth")`` callbacks.
+
+    Built from the transport's own book (raw ``ticker.domTicks`` applied with IB semantics),
+    never from ib_async's ``domBids``/``domAsks``. Rows are Decimal ``(price, size)``, best first.
+    """
+
+    bids: tuple[tuple[Decimal, Decimal], ...]
+    asks: tuple[tuple[Decimal, Decimal], ...]
+
+
 @dataclass
 class SubscriptionHandle:
     """Handle returned by IbGatewayTransport.subscribe(). Owns cleanup on close()."""

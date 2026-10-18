@@ -25,7 +25,10 @@ class HasIbTransport(Protocol):
 class HasContractResolver(Protocol):
     """Protocol for objects that expose an IbContractResolver as _contract_resolver."""
 
-    _contract_resolver: IbContractResolver
+    @property
+    def _contract_resolver(self) -> IbContractResolver:
+        """Read-only access to the contract resolver."""
+        ...
 
 
 @runtime_checkable

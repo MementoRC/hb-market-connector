@@ -66,6 +66,19 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         """Protocol slot: exposes the concrete transport as Transport | None."""
         return self._transport
 
+    @property
+    def _contract_resolver(self) -> ContractResolver:
+        """Alias to self.contract_resolver for mixin protocol conformance.
+
+        Raises RuntimeError if contract_resolver was not set by the factory.
+        """
+        if self.contract_resolver is None:
+            raise RuntimeError(
+                "IbGatewayGateway has no contract_resolver; build it with build_ib_gateway() "
+                "or pass contract_resolver="
+            )
+        return self.contract_resolver
+
     # --- Lifecycle (Stage 1) ---
 
     @property

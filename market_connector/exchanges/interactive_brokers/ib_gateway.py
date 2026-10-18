@@ -128,7 +128,10 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         return await self._transport.cancel_order(handle)
 
     async def cancel_all(self) -> list[OrderHandle]:
-        """Delegate to transport: cancel only this client's open orders."""
+        """Delegate to transport: cancel this client's open orders (not manual TWS ones).
+
+        Raises CancelAllError (ExceptionGroup with ``.cancelled``) if any cancel fails.
+        """
         return await self._transport.cancel_all()
 
     def get_open_orders(self) -> list[OrderHandle]:

@@ -69,6 +69,7 @@ class OrderHandle:
     _trade: Trade
     client_id: int = 0
     owned: bool = True
+    manual: bool = False
 
     @classmethod
     def from_trade(cls, trade: Trade, own_client_id: int | None = None) -> OrderHandle:
@@ -96,6 +97,7 @@ class OrderHandle:
             _trade=trade,
             client_id=client_id,
             owned=own_client_id is None or client_id == own_client_id,
+            manual=client_id == 0 and trade.order.orderId <= 0,
         )
 
     async def wait_for(

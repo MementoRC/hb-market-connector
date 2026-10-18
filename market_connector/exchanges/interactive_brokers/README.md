@@ -53,6 +53,13 @@ services:
 - `cancel_order` refuses handles with `owned=False` (`ValueError`), and
   `cancel_all` cancels only orders owned by this client; it never issues a
   global cancel.
+- Orders placed by a previous run under a different `client_id` are visible
+  (`owned=False`) but cannot be cancelled by this bot: IB only lets the
+  originating client cancel an order, so keep one stable `client_id` per bot.
+- For a `client_id=0` bot, `cancel_all` will skip manual TWS orders (clientId 0
+  with orderId <= 0); cancel them explicitly with `cancel_order` if intended.
+- `cancel_all` attempts every owned order and raises `CancelAllError` (an
+  `ExceptionGroup` carrying `.cancelled`) if any cancel fails.
 
 ## Stage roadmap
 

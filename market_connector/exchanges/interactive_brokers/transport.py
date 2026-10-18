@@ -751,11 +751,34 @@ class IbGatewayTransport:
     async def cancel_all(self) -> list[OrderHandle]:
         """Cancel every open order owned by this client, sequentially.
 
-        Orders of other API clients are skipped; reqGlobalCancel is never used.
-        Raises ConnectionLostError if the transport is not connected.
+        Orders of other API clients and manual TWS orders are skipped;
+        reqGlobalCancel is never used. Every eligible order is attempted.
+        Raises ConnectionLostError if the transport is not connected (unwrapped).
+        Raises CancelAllError (an ExceptionGroup whose ``cancelled`` lists the
+        successful cancels) if any individual cancel fails.
         """
-        owned = [h for h in self.open_orders() if h.owned]
-        return [await self.cancel_order(h) for h in owned]
+        from market_connector.exchanges.interactive_brokers.exceptions import (  # noqa: PLC0415
+            CancelAllError,
+        )
+
+        targets = [h for h in self.open_orders() if h.owned and not h.manual]
+        cancelled: list[OrderHandle] = []
+        errors: list[Exception] = []
+        failed_ids: list[int] = []
+        for handle in targets:
+            try:
+                cancelled.append(await self.cancel_order(handle))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+                failed_ids.append(handle.order_id)
+        if errors:
+            ids = ", ".join(str(i) for i in failed_ids)
+            raise CancelAllError(
+                f"cancel_all: {len(errors)} of {len(targets)} cancels failed (order ids: {ids})",
+                errors,
+                cancelled,
+            )
+        return cancelled
 
     def subscribe(
         self,

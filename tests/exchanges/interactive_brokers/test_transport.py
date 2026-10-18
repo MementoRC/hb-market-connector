@@ -7,18 +7,21 @@ test_integration.py and is gated by pytest.mark.ib_gateway.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
-from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
+from market_connector.exchanges.interactive_brokers.transport import DepthBook, IbGatewayTransport
 from market_connector.transport.protocols import (
     RequestTransport,
     StreamTransport,
     Transport,
 )
+
+from .test_persistent_market_data import _feed, _tick
 
 
 @pytest.fixture
@@ -231,18 +234,20 @@ class TestSubscribe:
         contract = MagicMock()
         received: list[object] = []
 
-        def on_update(ticker: object) -> None:
-            received.append(ticker)
+        def on_update(book: object) -> None:
+            received.append(book)
 
         handle = transport.subscribe("depth", contract, on_update)
 
-        # Simulate IB firing the updateEvent
-        transport._ib._depth_ticker.updateEvent(transport._ib._depth_ticker)
+        # Simulate IB delivering one raw depth update (insert a bid at position 0), then the event
+        _feed(transport._ib._depth_ticker, _tick(1, 0, 0, 100.0, 5.0))
         assert len(received) == 1
+        assert isinstance(received[0], DepthBook)
+        assert list(received[0].bids) == [(Decimal("100.0"), Decimal("5.0"))]
 
         handle.close()
-        # After close, firing again should NOT call the callback
-        transport._ib._depth_ticker.updateEvent(transport._ib._depth_ticker)
+        # After close, another update should NOT call the callback
+        _feed(transport._ib._depth_ticker, _tick(1, 0, 1, 99.0, 6.0))
         assert len(received) == 1  # still 1
 
     def test_close_is_idempotent(self, spec: IbConnectionSpec) -> None:
@@ -259,7 +264,10 @@ class TestSubscribe:
         handle.close()
         handle.close()  # must not raise
 
-    def test_close_calls_cancel_mkt_depth(self, spec: IbConnectionSpec) -> None:
+    async def test_close_calls_cancel_mkt_depth_after_idle_release(self) -> None:
+        """Issue #54 (D4): the last handle closing cancels after depth_idle_release, not at once."""
+        import asyncio
+
         from ._doubles import MockIb
 
         mock_ib = MockIb()
@@ -267,10 +275,12 @@ class TestSubscribe:
             "market_connector.exchanges.interactive_brokers.transport.IB",
             return_value=mock_ib,
         ):
-            transport = IbGatewayTransport(spec)
+            transport = IbGatewayTransport(IbConnectionSpec(depth_idle_release=0.05))
         contract = MagicMock()
         handle = transport.subscribe("depth", contract, lambda t: None)
         handle.close()
+        assert transport._ib._cancel_mkt_depth_calls == []
+        await asyncio.sleep(0.3)
         assert len(transport._ib._cancel_mkt_depth_calls) == 1
 
     def test_subscribe_trades_returns_handle(self, spec: IbConnectionSpec) -> None:

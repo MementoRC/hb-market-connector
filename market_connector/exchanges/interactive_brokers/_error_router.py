@@ -85,6 +85,8 @@ class _ErrorRouter:
         self._farm_listeners: list[Callable[[str, bool, int, str], None]] = []
         # order_id -> IB's code-202 cancellation text (always recorded).
         self._cancel_reasons: dict[int, str] = {}
+        # Called as cb() on 317 (market depth RESET: listeners must empty their books).
+        self._depth_reset_listeners: list[Callable[[], None]] = []
 
     @property
     def is_connected(self) -> bool:
@@ -124,6 +126,14 @@ class _ErrorRouter:
         # Code 10090: market data partially unavailable — log warning, do not raise.
         if code == 10090:
             logger.warning("IB error %d (partial data): %s", code, msg)
+            return
+
+        # Code 317: market depth was RESET — informational; books must be emptied.
+        # Not request-scoped (never fails a waiter) and says nothing about connectivity.
+        if code == 317:
+            logger.info("IB error %d (market depth reset): %s", code, msg)
+            for reset_cb in list(self._depth_reset_listeners):
+                reset_cb()
             return
 
         if code in _CONNECTION_LOST_CODES:

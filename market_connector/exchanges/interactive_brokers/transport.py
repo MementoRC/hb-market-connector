@@ -36,6 +36,7 @@ else:
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
+    MarketDataTimeoutError,
     OrderRejectedError,
 )
 from market_connector.hb_compat.event_bus import EventBus
@@ -95,6 +96,9 @@ FEE_TOPIC = "fee"
 
 # Upper bound on remembered execution ids (fills and fees each); oldest evicted first.
 _MAX_TRACKED_EXECUTIONS = 10_000
+
+# Depth rows requested per side (reqMktDepth numRows); the own book is truncated to this.
+_DEPTH_ROWS = 10
 
 
 @dataclass(frozen=True)
@@ -186,6 +190,18 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
     )
 
 
+@dataclass(frozen=True)
+class DepthBook:
+    """Order-book state delivered to ``subscribe("depth")`` callbacks.
+
+    Built from the transport's own book (raw ``ticker.domTicks`` applied with IB semantics),
+    never from ib_async's ``domBids``/``domAsks``. Rows are Decimal ``(price, size)``, best first.
+    """
+
+    bids: tuple[tuple[Decimal, Decimal], ...]
+    asks: tuple[tuple[Decimal, Decimal], ...]
+
+
 @dataclass
 class SubscriptionHandle:
     """Handle returned by IbGatewayTransport.subscribe(). Owns cleanup on close()."""
@@ -211,6 +227,31 @@ class _ActiveSubscription:
     contract: Any
     dispatch: Callable[[Any], None]
     ticker: Any = None
+
+
+@dataclass
+class _Stream:
+    """A persistent per-contract IB stream (L1 reqMktData or shared reqMktDepth).
+
+    ``hook`` is the ticker.updateEvent handler; it stays attached to the current
+    ``ticker`` and moves to the new one on resubscribe. Depth streams also own
+    the book (``bids``/``asks``), a user count and the idle-release timer.
+    """
+
+    contract: Any
+    hook: Callable[[Any], None]
+    ticker: Any = None
+    waiters: list[asyncio.Future[None]] = field(default_factory=list)
+    bids: list[tuple[Decimal, Decimal]] = field(default_factory=list)
+    asks: list[tuple[Decimal, Decimal]] = field(default_factory=list)
+    refs: int = 0
+    idle: asyncio.TimerHandle | None = None
+
+    def wake(self) -> None:
+        """Wake every coroutine waiting for new data on this stream."""
+        for fut in self.waiters:
+            if not fut.done():
+                fut.set_result(None)
 
 
 class IbGatewayTransport:
@@ -240,6 +281,9 @@ class IbGatewayTransport:
         self._event_bus = EventBus(name="ib-ws")
         self._subscribe_seq: int = 0
         self._subscriptions: dict[str, _ActiveSubscription] = {}
+        # Persistent per-contract streams: one L1 ticker and one shared depth stream each.
+        self._l1_streams: dict[Any, _Stream] = {}
+        self._depth_streams: dict[Any, _Stream] = {}
         # Fill de-duplication: execId base (final ".NN" removed) -> last full execId.
         self._seen_fills: OrderedDict[str, str] = OrderedDict()
         self._seen_fees: OrderedDict[str, None] = OrderedDict()
@@ -251,6 +295,7 @@ class IbGatewayTransport:
         self._error_router._connection_listeners.append(self._on_router_connection)
         self._error_router._data_lost_listeners.append(self._on_data_lost)
         self._error_router._farm_listeners.append(self._on_farm_status)
+        self._error_router._depth_reset_listeners.append(self._clear_depth_books)
 
     @property
     def is_connected(self) -> bool:
@@ -470,6 +515,7 @@ class IbGatewayTransport:
             supervisor.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await supervisor
+        self._release_all_streams()
         self._detach_handlers()
         self._error_router.set_connected(False)
         self._ib.disconnect()
@@ -682,8 +728,8 @@ class IbGatewayTransport:
         event_key = f"{channel}:{self._subscribe_seq}"
         bus_subscription = self._event_bus.subscribe(event_key, callback)
 
-        def _dispatch_depth(t: object) -> None:
-            self._event_bus.publish(event_key, t)
+        def _dispatch_depth(book: DepthBook) -> None:
+            self._event_bus.publish(event_key, book)
 
         def _dispatch_trades(t: Ticker) -> None:
             # ib_async appends each batch to ticker.tickByTicks, then fires updateEvent.
@@ -696,23 +742,28 @@ class IbGatewayTransport:
             contract=contract,
             dispatch=_dispatch_depth if channel == "depth" else _dispatch_trades,
         )
-        self._issue_stream(active)
+        depth_stream: _Stream | None = None
+        if channel == "depth":
+            # Depth subscribers share the contract's stream; it feeds them DepthBooks.
+            depth_stream = self._acquire_depth(contract)
+        else:
+            self._issue_stream(active)
         self._subscriptions[event_key] = active
 
         def _cleanup() -> None:
             self._subscriptions.pop(event_key, None)
-            self._unhook_stream(active)
             self._event_bus.unsubscribe(bus_subscription)
-            self._cancel_stream(active)
+            if depth_stream is not None:
+                self._release_depth(depth_stream)
+            else:
+                self._unhook_stream(active)
+                self._cancel_stream(active)
 
         return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup)
 
     def _issue_stream(self, sub: _ActiveSubscription) -> None:
-        """Send the IB request for *sub* and hook the resulting ticker's updateEvent."""
-        if sub.channel == "depth":
-            ticker = self._ib.reqMktDepth(sub.contract, numRows=10, isSmartDepth=True)
-        else:
-            ticker = self._ib.reqTickByTickData(sub.contract, "AllLast", 0, False)
+        """Send the IB request for a trades *sub* and hook the resulting ticker."""
+        ticker = self._ib.reqTickByTickData(sub.contract, "AllLast", 0, False)
         ticker.updateEvent += sub.dispatch
         sub.ticker = ticker
 
@@ -723,20 +774,21 @@ class IbGatewayTransport:
             sub.ticker = None
 
     def _cancel_stream(self, sub: _ActiveSubscription) -> None:
-        """Cancel the IB-side stream for *sub*."""
-        if sub.channel == "depth":
-            self._ib.cancelMktDepth(sub.contract, isSmartDepth=True)
-        else:
-            self._ib.cancelTickByTickData(sub.contract, "AllLast")
+        """Cancel the IB-side tick-by-tick stream for a trades *sub*."""
+        self._ib.cancelTickByTickData(sub.contract, "AllLast")
 
     def resubscribe_all(self, *, cancel_old: bool = True) -> None:
-        """Re-issue every active subscription's IB request on a fresh ticker.
+        """Re-issue every open IB request on a fresh ticker.
 
-        The bus subscription and the caller's callback are untouched; only the
-        ticker hook moves. Pass ``cancel_old=False`` after a full reconnect,
-        where the old streams no longer exist server-side.
+        Covers trades subscriptions, L1 tickers and shared depth streams (idle
+        but still open ones included). Bus subscriptions and caller callbacks
+        are untouched; only the ticker hooks move, and depth books are cleared.
+        Pass ``cancel_old=False`` after a full reconnect, where the old streams
+        no longer exist server-side.
         """
         for sub in list(self._subscriptions.values()):
+            if sub.channel == "depth":
+                continue  # served by the shared depth stream below
             try:
                 self._unhook_stream(sub)
                 if cancel_old:
@@ -744,6 +796,212 @@ class IbGatewayTransport:
                 self._issue_stream(sub)
             except Exception as exc:
                 logger.warning("IB resubscribe of %s failed: %s", sub.event_key, exc)
+        for stream in list(self._l1_streams.values()):
+            self._resubscribe_stream(stream, cancel_old, depth=False)
+        for stream in list(self._depth_streams.values()):
+            self._resubscribe_stream(stream, cancel_old, depth=True)
+
+    def _resubscribe_stream(self, stream: _Stream, cancel_old: bool, *, depth: bool) -> None:
+        """Move a persistent stream onto a freshly requested ticker."""
+        try:
+            self._unhook_persistent(stream)
+            stream.bids.clear()
+            stream.asks.clear()
+            if cancel_old:
+                self._cancel_persistent(stream, depth=depth)
+            self._request_persistent(stream, depth=depth)
+        except Exception as exc:
+            logger.warning("IB resubscribe of %s stream %r failed: %s", depth, stream.contract, exc)
+
+    def _request_persistent(self, stream: _Stream, *, depth: bool) -> None:
+        """Send the reqMktDepth / reqMktData request and hook its ticker."""
+        if depth:
+            ticker = self._ib.reqMktDepth(stream.contract, numRows=_DEPTH_ROWS, isSmartDepth=True)
+        else:
+            ticker = self._ib.reqMktData(stream.contract)
+        ticker.updateEvent += stream.hook
+        stream.ticker = ticker
+
+    def _unhook_persistent(self, stream: _Stream) -> None:
+        if stream.ticker is not None:
+            stream.ticker.updateEvent -= stream.hook
+            stream.ticker = None
+
+    def _cancel_persistent(self, stream: _Stream, *, depth: bool) -> None:
+        if depth:
+            self._ib.cancelMktDepth(stream.contract, isSmartDepth=True)
+        else:
+            self._ib.cancelMktData(stream.contract)
+
+    # -- persistent streams -------------------------------------------------
+
+    def _release_all_streams(self) -> None:
+        """Cancel every L1 ticker and depth stream exactly once and stop idle timers."""
+        for streams, depth in ((self._l1_streams, False), (self._depth_streams, True)):
+            for stream in list(streams.values()):
+                self._drop_stream(streams, stream, depth=depth)
+
+    def _drop_stream(self, streams: dict[Any, _Stream], stream: _Stream, *, depth: bool) -> None:
+        """Forget *stream*, stop its timer, detach its hook and cancel it at IB."""
+        streams.pop(stream.contract, None)
+        if stream.idle is not None:
+            stream.idle.cancel()
+            stream.idle = None
+        self._unhook_persistent(stream)
+        stream.wake()
+        try:
+            self._cancel_persistent(stream, depth=depth)
+        except Exception as exc:
+            logger.warning("IB cancel of stream %r failed: %s", stream.contract, exc)
+
+    def _acquire_depth(self, contract: Any) -> _Stream:
+        """Return the contract's shared depth stream (opening it) with one more user."""
+        stream = self._depth_streams.get(contract)
+        if stream is None:
+
+            def hook(ticker: Any, _contract: Any = contract) -> None:
+                self._on_depth_update(self._depth_streams.get(_contract), ticker)
+
+            stream = _Stream(contract=contract, hook=hook)
+            self._request_persistent(stream, depth=True)
+            self._depth_streams[contract] = stream
+        if stream.idle is not None:
+            stream.idle.cancel()
+            stream.idle = None
+        stream.refs += 1
+        return stream
+
+    def _release_depth(self, stream: _Stream) -> None:
+        """Drop one user; the last one arms the idle-release timer."""
+        stream.refs -= 1
+        if stream.refs > 0 or self._depth_streams.get(stream.contract) is not stream:
+            return
+        if stream.idle is not None:
+            stream.idle.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No loop to run a timer on: nothing can use the stream later, release now.
+            self._drop_stream(self._depth_streams, stream, depth=True)
+            return
+        stream.idle = loop.call_later(self._spec.depth_idle_release, self._idle_expired, stream)
+
+    def _idle_expired(self, stream: _Stream) -> None:
+        stream.idle = None
+        if stream.refs <= 0 and self._depth_streams.get(stream.contract) is stream:
+            self._drop_stream(self._depth_streams, stream, depth=True)
+
+    def _on_depth_update(self, stream: _Stream | None, ticker: Any) -> None:
+        """Apply the update's raw ``domTicks`` to the own book, then notify."""
+        if stream is None:
+            return
+        for tick in list(getattr(ticker, "domTicks", None) or []):
+            self._apply_depth_tick(stream, tick)
+        stream.wake()
+        book = DepthBook(bids=tuple(stream.bids), asks=tuple(stream.asks))
+        for sub in list(self._subscriptions.values()):
+            if sub.channel == "depth" and sub.contract == stream.contract:
+                sub.dispatch(book)
+
+    @staticmethod
+    def _apply_depth_tick(stream: _Stream, tick: Any) -> None:
+        """Apply one IB depth row update (insert/update/delete) with IB's shifting rules."""
+        book = stream.bids if tick.side == 1 else stream.asks
+        pos = tick.position
+        if tick.operation == 0:
+            if 0 <= pos <= len(book):
+                book.insert(pos, (Decimal(str(tick.price)), Decimal(str(tick.size))))
+                del book[_DEPTH_ROWS:]
+        elif 0 <= pos < len(book):
+            if tick.operation == 1:
+                book[pos] = (Decimal(str(tick.price)), Decimal(str(tick.size)))
+            elif tick.operation == 2:
+                del book[pos]
+
+    def _clear_depth_books(self) -> None:
+        """Empty every depth book (IB error 317: depth was reset)."""
+        for stream in self._depth_streams.values():
+            stream.bids.clear()
+            stream.asks.clear()
+
+    async def _wait_for(self, stream: _Stream, ready: Callable[[], Any], what: str) -> Any:
+        """Return ``ready()`` once it is not None, waking on *stream* updates.
+
+        Raises MarketDataTimeoutError after ``market_data_timeout`` seconds.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._spec.market_data_timeout
+        while True:
+            result = ready()
+            if result is not None:
+                return result
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise MarketDataTimeoutError(
+                    0, f"no {what} for {stream.contract!r} within {self._spec.market_data_timeout}s"
+                )
+            fut: asyncio.Future[None] = loop.create_future()
+            stream.waiters.append(fut)
+            try:
+                await asyncio.wait_for(fut, remaining)
+            except TimeoutError:
+                continue  # one last ready() check, then the deadline branch raises
+            finally:
+                if fut in stream.waiters:
+                    stream.waiters.remove(fut)
+
+    async def top_of_book(self, contract: Any) -> tuple[Decimal, Decimal]:
+        """Return (bid, ask) from the persistent L1 ticker for *contract*.
+
+        Raises MarketDataTimeoutError when both sides are not valid within
+        ``IbConnectionSpec.market_data_timeout``.
+        """
+        stream = self._l1_streams.get(contract)
+        if stream is None:
+            stream = _Stream(contract=contract, hook=lambda _ticker: self._wake_l1(contract))
+            self._request_persistent(stream, depth=False)
+            self._l1_streams[contract] = stream
+
+        def ready() -> tuple[Decimal, Decimal] | None:
+            ticker = stream.ticker
+            if ticker is None:
+                return None
+            bid, ask = ticker.bid, ticker.ask
+            # NaN (unset) fails both comparisons; IB also uses -1 for "no value".
+            if bid > 0 and ask > 0:
+                return Decimal(str(bid)), Decimal(str(ask))
+            return None
+
+        result: tuple[Decimal, Decimal] = await self._wait_for(stream, ready, "top of book")
+        return result
+
+    def _wake_l1(self, contract: Any) -> None:
+        stream = self._l1_streams.get(contract)
+        if stream is not None:
+            stream.wake()
+
+    async def depth_snapshot(
+        self, contract: Any
+    ) -> tuple[list[tuple[Decimal, Decimal]], list[tuple[Decimal, Decimal]]]:
+        """Return (bids, asks) as (price, size) levels from the shared depth stream.
+
+        Raises MarketDataTimeoutError when no depth arrives within
+        ``IbConnectionSpec.market_data_timeout``.
+        """
+        stream = self._acquire_depth(contract)
+
+        def ready() -> tuple[list, list] | None:
+            if stream.bids or stream.asks:
+                return list(stream.bids), list(stream.asks)
+            return None
+
+        try:
+            result: tuple[
+                list[tuple[Decimal, Decimal]], list[tuple[Decimal, Decimal]]
+            ] = await self._wait_for(stream, ready, "depth")
+            return result
+        finally:
+            self._release_depth(stream)
 
     def subscribe_connection_state(
         self, callback: Callable[[ConnectionStateEvent], None]

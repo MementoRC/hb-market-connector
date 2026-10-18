@@ -2,48 +2,56 @@
 
 from __future__ import annotations
 
-import asyncio
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ContractNotFoundError,
-    MarketDataPermissionError,
+    MarketDataTimeoutError,
 )
 from market_connector.exchanges.interactive_brokers.mixins.market_data import MarketDataMixin
 
-
-def _make_dom_level(price: float, size: float) -> MagicMock:
-    level = MagicMock()
-    level.price = price
-    level.size = size
-    return level
+_Levels = list[tuple[Decimal, Decimal]]
 
 
-def _make_fake_ticker(
-    bids: list[tuple[float, float]],
-    asks: list[tuple[float, float]],
-) -> MagicMock:
-    ticker = MagicMock()
-    ticker.domBids = [_make_dom_level(p, s) for p, s in bids]
-    ticker.domAsks = [_make_dom_level(p, s) for p, s in asks]
-    return ticker
+def _lv(price: str, size: str) -> tuple[Decimal, Decimal]:
+    return Decimal(price), Decimal(size)
 
 
 class FakeTransport:
-    """Minimal transport double: _ib exposes reqMktDepth / cancelMktDepth."""
+    """Transport double exposing the contract the mixin delegates to.
 
-    def __init__(self, ticker: MagicMock) -> None:
+    ``top_of_book`` / ``depth_snapshot`` return canned values (or raise ``error``) and record
+    the contract they were called with. ``_ib`` is kept for get_candles.
+    """
+
+    def __init__(
+        self,
+        *,
+        bid_ask: tuple[Decimal, Decimal] = (Decimal(0), Decimal(0)),
+        depth: tuple[_Levels, _Levels] = ([], []),
+        error: Exception | None = None,
+    ) -> None:
         self._ib = MagicMock()
-        self._ib.reqMktDepth.return_value = ticker
-        self._cancel_called = False
+        self._bid_ask = bid_ask
+        self._depth = depth
+        self._error = error
+        self.top_of_book_contracts: list[object] = []
+        self.depth_snapshot_contracts: list[object] = []
 
-        def cancel_side_effect(*args, **kwargs) -> None:
-            self._cancel_called = True
+    async def top_of_book(self, contract: object) -> tuple[Decimal, Decimal]:
+        self.top_of_book_contracts.append(contract)
+        if self._error is not None:
+            raise self._error
+        return self._bid_ask
 
-        self._ib.cancelMktDepth.side_effect = cancel_side_effect
+    async def depth_snapshot(self, contract: object) -> tuple[_Levels, _Levels]:
+        self.depth_snapshot_contracts.append(contract)
+        if self._error is not None:
+            raise self._error
+        return self._depth
 
 
 class FakeResolver:
@@ -75,57 +83,46 @@ class ConcreteMarketDataHost(MarketDataMixin):
 class TestGetOrderbook:
     @pytest.mark.asyncio
     async def test_happy_path_returns_snapshot(self) -> None:
-        ticker = _make_fake_ticker(
-            bids=[(150.00, 100.0), (149.99, 200.0)],
-            asks=[(150.01, 50.0), (150.02, 75.0)],
+        resolver = FakeResolver()
+        transport = FakeTransport(
+            depth=(
+                [_lv("150.0", "100.0"), _lv("149.99", "200.0")],
+                [_lv("150.01", "50.0"), _lv("150.02", "75.0")],
+            )
         )
-        transport = FakeTransport(ticker)
-        host = ConcreteMarketDataHost(transport, FakeResolver())
+        host = ConcreteMarketDataHost(transport, resolver)
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
-            snapshot = await host.get_orderbook("AAPL-USD")
+        snapshot = await host.get_orderbook("AAPL-USD")
 
         assert snapshot.trading_pair == "AAPL-USD"
         assert len(snapshot.bids) == 2
         assert len(snapshot.asks) == 2
         assert snapshot.bids[0] == (Decimal("150.0"), Decimal("100.0"))
         assert snapshot.asks[0] == (Decimal("150.01"), Decimal("50.0"))
+        assert transport.depth_snapshot_contracts == [resolver._contract]
 
     @pytest.mark.asyncio
     async def test_symbol_not_found_propagates(self) -> None:
-        ticker = _make_fake_ticker([], [])
-        transport = FakeTransport(ticker)
+        transport = FakeTransport()
         host = ConcreteMarketDataHost(transport, FakeResolver(raise_not_found=True))
 
-        with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(ContractNotFoundError):
+        with pytest.raises(ContractNotFoundError):
             await host.get_orderbook("UNKNOWN-USD")
+        assert transport.depth_snapshot_contracts == []
 
     @pytest.mark.asyncio
-    async def test_cancel_mkt_depth_called_in_finally(self) -> None:
-        """cancelMktDepth must be called even when asyncio.sleep is cancelled."""
-        ticker = _make_fake_ticker([], [])
-        transport = FakeTransport(ticker)
+    async def test_transport_timeout_propagates(self) -> None:
+        transport = FakeTransport(error=MarketDataTimeoutError(0, "no depth"))
         host = ConcreteMarketDataHost(transport, FakeResolver())
 
-        async def raise_on_sleep(*args, **kwargs) -> None:
-            raise asyncio.CancelledError
-
-        with (
-            patch("asyncio.sleep", side_effect=raise_on_sleep),
-            pytest.raises(asyncio.CancelledError),
-        ):
+        with pytest.raises(MarketDataTimeoutError):
             await host.get_orderbook("AAPL-USD")
-
-        assert transport._cancel_called, "cancelMktDepth was not called in finally"
 
     @pytest.mark.asyncio
     async def test_empty_depth_returns_empty_sided_snapshot(self) -> None:
-        ticker = _make_fake_ticker([], [])
-        transport = FakeTransport(ticker)
-        host = ConcreteMarketDataHost(transport, FakeResolver())
+        host = ConcreteMarketDataHost(FakeTransport(), FakeResolver())
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
-            snapshot = await host.get_orderbook("AAPL-USD")
+        snapshot = await host.get_orderbook("AAPL-USD")
 
         assert snapshot.bids == []
         assert snapshot.asks == []
@@ -134,42 +131,31 @@ class TestGetOrderbook:
 class TestGetMidPrice:
     @pytest.mark.asyncio
     async def test_mid_price_from_one_level_snapshot(self) -> None:
-        ticker = _make_fake_ticker(
-            bids=[(150.00, 100.0)],
-            asks=[(150.10, 50.0)],
-        )
-        transport = FakeTransport(ticker)
-        host = ConcreteMarketDataHost(transport, FakeResolver())
+        resolver = FakeResolver()
+        transport = FakeTransport(bid_ask=(Decimal("150.00"), Decimal("150.10")))
+        host = ConcreteMarketDataHost(transport, resolver)
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
-            mid = await host.get_mid_price("AAPL-USD")
+        mid = await host.get_mid_price("AAPL-USD")
 
-        expected = (Decimal("150.00") + Decimal("150.10")) / 2
-        assert mid == expected
+        assert mid == (Decimal("150.00") + Decimal("150.10")) / 2
+        assert transport.top_of_book_contracts == [resolver._contract]
 
     @pytest.mark.asyncio
-    async def test_empty_bids_raises_market_data_permission_error(self) -> None:
-        ticker = _make_fake_ticker(bids=[], asks=[(150.01, 50.0)])
-        transport = FakeTransport(ticker)
+    async def test_transport_timeout_propagates(self) -> None:
+        transport = FakeTransport(error=MarketDataTimeoutError(0, "no top of book"))
         host = ConcreteMarketDataHost(transport, FakeResolver())
 
-        with (
-            patch("asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(MarketDataPermissionError, match="no market data"),
-        ):
+        with pytest.raises(MarketDataTimeoutError):
             await host.get_mid_price("AAPL-USD")
 
     @pytest.mark.asyncio
-    async def test_empty_asks_raises_market_data_permission_error(self) -> None:
-        ticker = _make_fake_ticker(bids=[(150.00, 100.0)], asks=[])
-        transport = FakeTransport(ticker)
-        host = ConcreteMarketDataHost(transport, FakeResolver())
+    async def test_symbol_not_found_propagates(self) -> None:
+        transport = FakeTransport()
+        host = ConcreteMarketDataHost(transport, FakeResolver(raise_not_found=True))
 
-        with (
-            patch("asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(MarketDataPermissionError, match="no market data"),
-        ):
-            await host.get_mid_price("AAPL-USD")
+        with pytest.raises(ContractNotFoundError):
+            await host.get_mid_price("UNKNOWN-USD")
+        assert transport.top_of_book_contracts == []
 
 
 class TestGetCandles:
@@ -215,7 +201,7 @@ class TestGetCandles:
         ]
 
         resolver = FakeResolver()
-        transport = FakeTransport(_make_fake_ticker([], []))
+        transport = FakeTransport()
         transport._ib.reqHistoricalDataAsync = AsyncMock(return_value=bars)
         host = ConcreteMarketDataHost(transport, resolver)
 
@@ -231,7 +217,7 @@ class TestGetCandles:
     async def test_negative_one_volume_coerced_to_zero(self) -> None:
         bars = [self._make_bar(volume=-1.0)]
         resolver = FakeResolver()
-        transport = FakeTransport(_make_fake_ticker([], []))
+        transport = FakeTransport()
         transport._ib.reqHistoricalDataAsync = AsyncMock(return_value=bars)
         host = ConcreteMarketDataHost(transport, resolver)
 
@@ -244,7 +230,7 @@ class TestGetCandles:
         from market_connector.exchanges.interactive_brokers.interval_map import InvalidIntervalError
 
         resolver = FakeResolver()
-        transport = FakeTransport(_make_fake_ticker([], []))
+        transport = FakeTransport()
         host = ConcreteMarketDataHost(transport, resolver)
 
         with pytest.raises(InvalidIntervalError):

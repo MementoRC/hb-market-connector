@@ -8,6 +8,7 @@ against MockIb; the real-Gateway integration tests live in test_integration.py.
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,10 +20,12 @@ from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpe
 from market_connector.exchanges.interactive_brokers.transport import (
     CONNECTION_TOPIC,
     ConnectionStateEvent,
+    DepthBook,
     IbGatewayTransport,
 )
 
 from ._doubles import MockIb
+from .test_persistent_market_data import _feed, _tick
 
 _IB_PATH = "market_connector.exchanges.interactive_brokers.transport.IB"
 
@@ -171,14 +174,16 @@ class TestResubscribeOn1101:
         assert states[-2:] == ["connected", "data_lost"]
 
         # Callbacks keep receiving, now from the NEW tickers.
-        ib._depth_ticker.updateEvent(ib._depth_ticker)
+        _feed(ib._depth_ticker, _tick(1, 0, 0, 100.0, 5.0))
         tick = MagicMock()
         ib._tick_ticker.tickByTicks.append(tick)
         ib._tick_ticker.updateEvent(ib._tick_ticker)
-        assert depth == [ib._depth_ticker]
+        assert len(depth) == 1
+        assert isinstance(depth[0], DepthBook)
+        assert list(depth[0].bids) == [(Decimal("100.0"), Decimal("5.0"))]
         assert trades == [tick]
-        old_depth.updateEvent(old_depth)
-        assert depth == [ib._depth_ticker]
+        _feed(old_depth, _tick(1, 0, 1, 99.0, 6.0))  # the OLD ticker is detached
+        assert len(depth) == 1
 
     async def test_1101_event_carries_code(self) -> None:
         transport, ib, _ = _make()
@@ -200,15 +205,17 @@ class TestResubscribeOn1101:
         assert states == ["connected", "disconnected", "connected"]
 
     async def test_closed_handle_is_not_resubscribed(self) -> None:
-        transport, ib, _ = _make()
+        """Issue #54 (D4): once released after the idle period, a closed handle stays gone."""
+        transport, ib, _ = _make(IbConnectionSpec(depth_idle_release=0.05))
         await transport.connect()
         handle = transport.subscribe("depth", "C", lambda t: None)
-        assert len(transport._subscriptions) == 1
         handle.close()
         handle.close()
-        assert transport._subscriptions == {}
+        await asyncio.sleep(0.3)
+        assert ib._cancel_mkt_depth_calls == ["C"]
         ib.errorEvent(-1, 1101, "lost")
         assert len(ib.req_mkt_depth_calls) == 1
+        assert ib._cancel_mkt_depth_calls == ["C"]
 
     async def test_resubscribe_failure_is_logged_and_others_continue(self) -> None:
         transport, ib, _ = _make()
@@ -263,8 +270,12 @@ class TestReconnectSupervisor:
         assert ib._cancel_mkt_depth_calls == []
         assert len(ib.req_mkt_depth_calls) == 2
         assert old_depth.updateEvent._handlers == []
-        ib._depth_ticker.updateEvent(ib._depth_ticker)
-        assert received == [ib._depth_ticker]
+        _feed(ib._depth_ticker, _tick(1, 0, 0, 100.0, 5.0))
+        assert len(received) == 1
+        assert isinstance(received[0], DepthBook)
+        assert list(received[0].bids) == [(Decimal("100.0"), Decimal("5.0"))]
+        _feed(old_depth, _tick(1, 0, 1, 99.0, 6.0))  # the OLD ticker is detached
+        assert len(received) == 1
         # Handlers were not double-attached across reconnects.
         assert len(ib.errorEvent._handlers) == 1
         assert len(ib.disconnectedEvent._handlers) == 1

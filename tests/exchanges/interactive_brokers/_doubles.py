@@ -69,6 +69,14 @@ class MockIb:
         self.req_tick_by_tick_calls: list[object] = []
         # Ordered log of "setConnectOptions" / "connectAsync" calls.
         self.call_order: list[str] = []
+        # L1 (reqMktData) tickers and the isSmartDepth flag of each depth request/cancel.
+        self._l1_ticker = FakeTicker()
+        self.req_mkt_data_calls: list[object] = []
+        self.cancel_mkt_data_calls: list[object] = []
+        self.req_mkt_depth_smart: list[bool] = []
+        self.cancel_mkt_depth_smart: list[bool] = []
+        # Ordered "reqMktData"/"cancelMktData"/"cancelMktDepth"/"disconnect" markers.
+        self.event_log: list[str] = []
 
     async def connectAsync(self, **kwargs: object) -> None:  # noqa: N802
         """Record connection parameters; fail while ``connect_failures`` > 0."""
@@ -85,6 +93,7 @@ class MockIb:
     def disconnect(self) -> None:
         """Like ib_async.IB.disconnect: closes the socket and fires disconnectedEvent."""
         self.disconnect_calls += 1
+        self.event_log.append("disconnect")
         was_connected = self.connected
         self.connected = False
         if was_connected:
@@ -96,9 +105,10 @@ class MockIb:
         self.disconnectedEvent()
 
     def rotate_tickers(self) -> None:
-        """Make the next reqMktDepth/reqTickByTickData return brand-new tickers."""
+        """Make the next reqMktDepth/reqTickByTickData/reqMktData return brand-new tickers."""
         self._depth_ticker = FakeTicker()
         self._tick_ticker = FakeTicker()
+        self._l1_ticker = FakeTicker()
 
     def reqMarketDataType(self, marketDataType: int) -> None:  # noqa: N802, N803
         """Synchronous, like ib_async.IB.reqMarketDataType."""
@@ -112,11 +122,32 @@ class MockIb:
     ) -> FakeTicker:
         """Return a pre-configured FakeTicker with domBids/domAsks."""
         self.req_mkt_depth_calls.append(contract)
+        self.req_mkt_depth_smart.append(isSmartDepth)
         return self._depth_ticker
 
     def cancelMktDepth(self, contract: object, isSmartDepth: bool = True) -> None:  # noqa: N802, N803
         """Record that market depth cancellation was called."""
         self._cancel_mkt_depth_calls.append(contract)
+        self.cancel_mkt_depth_smart.append(isSmartDepth)
+        self.event_log.append("cancelMktDepth")
+
+    def reqMktData(  # noqa: N802
+        self,
+        contract: object,
+        genericTickList: str = "",  # noqa: N803
+        snapshot: bool = False,
+        regulatorySnapshot: bool = False,  # noqa: N803
+        mktDataOptions: object = None,  # noqa: N803
+    ) -> FakeTicker:
+        """Return the pre-configured L1 FakeTicker (bid/ask/updateEvent)."""
+        self.req_mkt_data_calls.append(contract)
+        self.event_log.append("reqMktData")
+        return self._l1_ticker
+
+    def cancelMktData(self, contract: object) -> None:  # noqa: N802
+        """Record that L1 market data cancellation was called."""
+        self.cancel_mkt_data_calls.append(contract)
+        self.event_log.append("cancelMktData")
 
     async def reqExecutionsAsync(self, execFilter: object = None) -> list[object]:  # noqa: N802, N803
         """Record the filter; return ``executions_result`` or raise ``executions_error``."""
@@ -197,10 +228,15 @@ def make_fill(
 
 
 class FakeTicker:
-    """Fake ib_async.Ticker: updateEvent plus a tickByTicks batch list (as in ib_async)."""
+    """Fake ib_async.Ticker: updateEvent, tickByTicks batch list, and L1 bid/ask (NaN = unset)."""
 
     def __init__(self) -> None:
+        self.bid: float = float("nan")
+        self.ask: float = float("nan")
         self.domBids: list[object] = []
         self.domAsks: list[object] = []
+        # Raw per-update depth data (ib_async MktDepthData: position/operation/side/price/size).
+        # ib_async replaces this with a fresh list for each network batch before updateEvent.
+        self.domTicks: list[object] = []
         self.tickByTicks: list[object] = []
         self.updateEvent = FakeEvent()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from decimal import Decimal
 from typing import TYPE_CHECKING, cast
@@ -13,13 +12,6 @@ if TYPE_CHECKING:
         HasIbTransport,
     )
     from market_connector.primitives import CandleData
-
-from market_connector.exchanges.interactive_brokers.exceptions import (
-    MarketDataPermissionError,
-)
-
-# Time to allow IB depth snapshot to populate after reqMktDepth (event-driven, not awaitable).
-_DEPTH_SETTLE_SECS: float = 0.1
 
 _INTERVAL_SECONDS: dict[str, int] = {
     "1m": 60,
@@ -60,9 +52,9 @@ class MarketDataMixin:
         self,
         trading_pair: str,
     ) -> object:  # returns OrderBookSnapshot; typed loosely to avoid circular import
-        """Snapshot DOM depth for trading_pair via reqMktDepth."""
+        """Snapshot DOM depth for trading_pair from the transport's shared depth stream."""
         contract = await self._contract_resolver.resolve_from_pair(trading_pair)  # type: ignore[attr-defined]
-        bids, asks = await _snapshot_depth(self._transport._ib, contract)  # type: ignore[attr-defined]
+        bids, asks = await self._transport.depth_snapshot(contract)  # type: ignore[attr-defined]
 
         # Late import to avoid circular dependency with framework.
         from market_connector.primitives import OrderBookSnapshot  # noqa: PLC0415
@@ -78,18 +70,14 @@ class MarketDataMixin:
         self: HasIbTransport & HasContractResolver,  # type: ignore[valid-type]
         trading_pair: str,
     ) -> Decimal:
-        """Return (best_bid + best_ask) / 2.
+        """Return (bid + ask) / 2 from the transport's persistent L1 ticker.
 
-        Raises MarketDataPermissionError if either side empty.
+        Raises MarketDataTimeoutError if no valid bid and ask arrive in time.
         """
         contract = await self._contract_resolver.resolve_from_pair(trading_pair)
-        bids, asks = await _snapshot_depth(self._transport._ib, contract)
-
-        if not bids or not asks:
-            raise MarketDataPermissionError(
-                0, f"no market data for {trading_pair}: empty {'bids' if not bids else 'asks'}"
-            )
-        return (bids[0][0] + asks[0][0]) / 2
+        bid, ask = await self._transport.top_of_book(contract)
+        mid: Decimal = (bid + ask) / 2
+        return mid
 
     async def get_candles(
         self: HasIbTransport & HasContractResolver,  # type: ignore[valid-type]
@@ -147,20 +135,3 @@ class MarketDataMixin:
                 )
             )
         return cast("list[object]", result)
-
-
-async def _snapshot_depth(
-    ib: object,
-    contract: object,
-    *,
-    num_rows: int = 10,
-) -> tuple[list[tuple[Decimal, Decimal]], list[tuple[Decimal, Decimal]]]:
-    """Own the reqMktDepth lifecycle: start, settle, read, cancel."""
-    ticker = ib.reqMktDepth(contract, numRows=num_rows, isSmartDepth=True)  # type: ignore[attr-defined]
-    try:
-        await asyncio.sleep(_DEPTH_SETTLE_SECS)
-        bids = [(Decimal(str(lv.price)), Decimal(str(lv.size))) for lv in ticker.domBids]
-        asks = [(Decimal(str(lv.price)), Decimal(str(lv.size))) for lv in ticker.domAsks]
-        return bids, asks
-    finally:
-        ib.cancelMktDepth(contract, isSmartDepth=True)  # type: ignore[attr-defined]

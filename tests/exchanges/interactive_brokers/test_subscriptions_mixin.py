@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from market_connector.exchanges.interactive_brokers.mixins.subscriptions import (
     SubscriptionsMixin,
 )
+from market_connector.exchanges.interactive_brokers.transport import DepthBook
 
 # ── Doubles ────────────────────────────────────────────────────────────────────
 
@@ -105,10 +107,27 @@ class TestSubscribeOrderbook:
 
         async with host.subscribe_orderbook("AAPL-USD", on_update):
             # Simulate IB firing the depth update
-            ticker = host._transport._ticker
-            ticker.updateEvent(ticker)
+            # Issue #54 (D10): the transport delivers its own DepthBook, not the ib_async ticker.
+            host._transport._ticker.updateEvent(DepthBook(bids=(), asks=()))
 
         assert len(received) == 1
+
+    @pytest.mark.asyncio
+    async def test_callback_update_carries_levels_from_depth_book(self) -> None:
+        """Issue #54 (D10): OrderBookUpdate bids/asks come from the DepthBook payload."""
+        host = ConcreteSubscriptionsHost()
+        received = []
+        book = DepthBook(
+            bids=((Decimal("150.0"), Decimal("100")), (Decimal("149.5"), Decimal("200"))),
+            asks=((Decimal("150.5"), Decimal("50")),),
+        )
+
+        async with host.subscribe_orderbook("AAPL-USD", received.append):
+            host._transport._ticker.updateEvent(book)
+
+        assert len(received) == 1
+        assert list(received[0].bids) == list(book.bids)
+        assert list(received[0].asks) == list(book.asks)
 
     @pytest.mark.asyncio
     async def test_handle_closed_on_normal_exit(self) -> None:

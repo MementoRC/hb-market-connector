@@ -27,8 +27,14 @@ class IbConnectionSpec:
     pace_api: bool = True  # send "+PACEAPI" so IB paces API messages for us
     reconnect_initial_delay: float = 1.0  # seconds before the first reconnect attempt
     reconnect_max_delay: float = 60.0  # backoff cap in seconds
+    market_data_timeout: float = 5.0  # seconds to wait for first top-of-book / depth data
+    depth_idle_release: float = 60.0  # seconds an unused depth stream stays open
 
     def __post_init__(self) -> None:
+        if self.market_data_timeout <= 0:
+            raise ValueError(f"market_data_timeout must be > 0; got {self.market_data_timeout!r}")
+        if self.depth_idle_release <= 0:
+            raise ValueError(f"depth_idle_release must be > 0; got {self.depth_idle_release!r}")
         if self.reconnect_initial_delay <= 0 or self.reconnect_max_delay <= 0:
             raise ValueError("reconnect delays must be > 0")
         if self.reconnect_initial_delay > self.reconnect_max_delay:

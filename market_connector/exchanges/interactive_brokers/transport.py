@@ -15,6 +15,7 @@ Stage 2 adds _handle_registry and _error_router; wires IB.errorEvent.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -31,10 +32,12 @@ else:
         IB = None  # noqa: F841
 
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
+from market_connector.exchanges.interactive_brokers.exceptions import ConnectionLostError
 from market_connector.hb_compat.event_bus import EventBus
+from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from ib_async import Contract, Ticker
 
@@ -42,6 +45,24 @@ if TYPE_CHECKING:
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
     from market_connector.orders import HBOrder
+
+logger = get_logger(__name__)
+
+# EventBus topic carrying ConnectionStateEvent payloads.
+CONNECTION_TOPIC = "connection"
+
+
+@dataclass(frozen=True)
+class ConnectionStateEvent:
+    """Connection lifecycle notification published on CONNECTION_TOPIC.
+
+    ``state`` is one of "connected", "disconnected", "reconnecting" or
+    "data_lost". ``code`` carries the IB error code when one triggered it.
+    """
+
+    state: str
+    code: int | None = None
+    message: str = ""
 
 
 def _hb_to_ib_order(hb_order: HBOrder) -> Any:
@@ -106,6 +127,17 @@ class SubscriptionHandle:
             self._cleanup()
 
 
+@dataclass
+class _ActiveSubscription:
+    """Registry entry able to re-issue its IB request and re-hook the new ticker."""
+
+    event_key: str
+    channel: str
+    contract: Any
+    dispatch: Callable[[Any], None]
+    ticker: Any = None
+
+
 class IbGatewayTransport:
     """Connection wrapper around ib_async.IB.
 
@@ -132,6 +164,14 @@ class IbGatewayTransport:
         self._first_status_timeout: float = 30.0
         self._event_bus = EventBus(name="ib-ws")
         self._subscribe_seq: int = 0
+        self._subscriptions: dict[str, _ActiveSubscription] = {}
+        # Reconnect supervisor state.
+        self._handlers_attached: bool = False
+        self._closing: bool = False
+        self._supervisor: asyncio.Task[None] | None = None
+        self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep  # patchable in tests
+        self._error_router._connection_listeners.append(self._on_router_connection)
+        self._error_router._data_lost_listeners.append(self._on_data_lost)
 
     @property
     def is_connected(self) -> bool:
@@ -139,14 +179,93 @@ class IbGatewayTransport:
 
     async def connect(self) -> None:
         """Connect to IB Gateway. Auth is handled by Gateway externally
-        (interactive 2FA login at Gateway startup); this just opens the socket."""
+        (interactive 2FA login at Gateway startup); this just opens the socket.
+
+        Raises whatever ``connectAsync`` raises; on failure no handlers stay
+        attached and no state is published.
+        """
+        self._closing = False
+        await self._connect_once()
+        self._publish_state("connected")
+
+    async def _connect_once(self) -> None:
+        """Run the connect sequence (used by connect() and the supervisor).
+
+        Handlers are attached only after connectAsync returns, and only once
+        across reconnects, so a failed attempt leaves nothing behind.
+        """
+        if self._spec.pace_api:
+            self._ib.client.setConnectOptions("+PACEAPI")
         await self._ib.connectAsync(
             host=self._spec.host,
             port=self._spec.port,
             clientId=self._spec.client_id,
+            readonly=self._spec.readonly,
+            account=self._spec.account_id or "",
+            raiseSyncErrors=True,
         )
+        try:
+            self._attach_handlers()
+            self._apply_market_data_type()
+        except BaseException:
+            self._detach_handlers()
+            raise
+        self._error_router.set_connected(True)
+
+    def _attach_handlers(self) -> None:
+        if self._handlers_attached:
+            return
         self._ib.errorEvent += self._error_router.on_error
-        self._apply_market_data_type()
+        self._ib.disconnectedEvent += self._on_disconnected
+        self._handlers_attached = True
+
+    def _detach_handlers(self) -> None:
+        if not self._handlers_attached:
+            return
+        self._ib.errorEvent -= self._error_router.on_error
+        self._ib.disconnectedEvent -= self._on_disconnected
+        self._handlers_attached = False
+
+    def _publish_state(self, state: str, code: int | None = None, message: str = "") -> None:
+        """Publish a ConnectionStateEvent on the connection topic."""
+        self._event_bus.publish(CONNECTION_TOPIC, ConnectionStateEvent(state, code, message))
+
+    def _on_router_connection(self, is_up: bool) -> None:
+        """Mirror IB-originated 1100/1101/1102 connectivity codes onto the bus."""
+        self._publish_state("connected" if is_up else "disconnected")
+
+    def _on_data_lost(self, code: int, msg: str) -> None:
+        """1101: socket is fine but IB dropped our streams — re-request them."""
+        self._publish_state("data_lost", code, msg)
+        self.resubscribe_all(cancel_old=True)
+
+    def _on_disconnected(self, *_args: Any) -> None:
+        """disconnectedEvent handler: start the reconnect supervisor unless we caused it."""
+        if self._closing:
+            return
+        if self._supervisor is not None and not self._supervisor.done():
+            return  # failed attempts also fire this; never run two supervisors
+        self._error_router.set_connected(False)
+        self._error_router._fail_all_pending(ConnectionLostError(1100, "socket disconnected"))
+        self._publish_state("disconnected")
+        self._supervisor = asyncio.get_running_loop().create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self) -> None:
+        """Reconnect with exponential backoff until success or cancellation."""
+        delay = self._spec.reconnect_initial_delay
+        while True:
+            await self._sleep(delay)
+            self._publish_state("reconnecting")
+            try:
+                await self._connect_once()
+            except Exception as exc:
+                logger.warning("IB reconnect attempt failed (next delay %.1fs): %s", delay, exc)
+                delay = min(delay * 2, self._spec.reconnect_max_delay)
+                continue
+            break
+        # A full reconnect drops every old stream server-side: re-request, no cancel.
+        self.resubscribe_all(cancel_old=False)
+        self._publish_state("connected")
 
     def _apply_market_data_type(self) -> None:
         """Send the configured market data type to IB.
@@ -157,7 +276,15 @@ class IbGatewayTransport:
         self._ib.reqMarketDataType(self._spec.resolved_market_data_type)
 
     async def disconnect(self) -> None:
-        self._ib.errorEvent -= self._error_router.on_error
+        """Stop the supervisor, detach handlers and close the socket."""
+        self._closing = True
+        supervisor, self._supervisor = self._supervisor, None
+        if supervisor is not None and not supervisor.done():
+            supervisor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await supervisor
+        self._detach_handlers()
+        self._error_router.set_connected(False)
         self._ib.disconnect()
 
     async def request(self, method: str, *args: Any, **kwargs: Any) -> Any:
@@ -355,41 +482,83 @@ class IbGatewayTransport:
             SubscriptionHandle whose .close() unregisters the handler and
             cancels the IB stream.
         """
+        if channel not in ("depth", "trades"):
+            raise ValueError(f"Unknown subscribe channel {channel!r}; expected 'depth' or 'trades'")
+
         self._subscribe_seq += 1
         event_key = f"{channel}:{self._subscribe_seq}"
+        bus_subscription = self._event_bus.subscribe(event_key, callback)
 
-        if channel == "depth":
-            ticker = self._ib.reqMktDepth(contract, numRows=10, isSmartDepth=True)
-            subscription = self._event_bus.subscribe(event_key, callback)
+        def _dispatch_depth(t: object) -> None:
+            self._event_bus.publish(event_key, t)
 
-            def _dispatch_depth(t: object) -> None:
-                self._event_bus.publish(event_key, t)
+        def _dispatch_trades(t: Ticker) -> None:
+            # ib_async appends each batch to ticker.tickByTicks, then fires updateEvent.
+            for tick in list(t.tickByTicks):
+                self._event_bus.publish(event_key, tick)
 
-            ticker.updateEvent += _dispatch_depth
+        active = _ActiveSubscription(
+            event_key=event_key,
+            channel=channel,
+            contract=contract,
+            dispatch=_dispatch_depth if channel == "depth" else _dispatch_trades,
+        )
+        self._issue_stream(active)
+        self._subscriptions[event_key] = active
 
-            def _cleanup_depth() -> None:
-                ticker.updateEvent -= _dispatch_depth
-                self._event_bus.unsubscribe(subscription)
-                self._ib.cancelMktDepth(contract, isSmartDepth=True)
+        def _cleanup() -> None:
+            self._subscriptions.pop(event_key, None)
+            self._unhook_stream(active)
+            self._event_bus.unsubscribe(bus_subscription)
+            self._cancel_stream(active)
 
-            return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup_depth)
+        return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup)
 
-        if channel == "trades":
-            ticker = self._ib.reqTickByTickData(contract, "AllLast", 0, False)
-            subscription = self._event_bus.subscribe(event_key, callback)
+    def _issue_stream(self, sub: _ActiveSubscription) -> None:
+        """Send the IB request for *sub* and hook the resulting ticker's updateEvent."""
+        if sub.channel == "depth":
+            ticker = self._ib.reqMktDepth(sub.contract, numRows=10, isSmartDepth=True)
+        else:
+            ticker = self._ib.reqTickByTickData(sub.contract, "AllLast", 0, False)
+        ticker.updateEvent += sub.dispatch
+        sub.ticker = ticker
 
-            def _dispatch_trades(t: Ticker) -> None:
-                # ib_async appends each batch to ticker.tickByTicks, then fires updateEvent.
-                for tick in list(t.tickByTicks):
-                    self._event_bus.publish(event_key, tick)
+    def _unhook_stream(self, sub: _ActiveSubscription) -> None:
+        """Detach *sub*'s dispatcher from its current ticker, if hooked."""
+        if sub.ticker is not None:
+            sub.ticker.updateEvent -= sub.dispatch
+            sub.ticker = None
 
-            ticker.updateEvent += _dispatch_trades
+    def _cancel_stream(self, sub: _ActiveSubscription) -> None:
+        """Cancel the IB-side stream for *sub*."""
+        if sub.channel == "depth":
+            self._ib.cancelMktDepth(sub.contract, isSmartDepth=True)
+        else:
+            self._ib.cancelTickByTickData(sub.contract, "AllLast")
 
-            def _cleanup_trades() -> None:
-                ticker.updateEvent -= _dispatch_trades
-                self._event_bus.unsubscribe(subscription)
-                self._ib.cancelTickByTickData(contract, "AllLast")
+    def resubscribe_all(self, *, cancel_old: bool = True) -> None:
+        """Re-issue every active subscription's IB request on a fresh ticker.
 
-            return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup_trades)
+        The bus subscription and the caller's callback are untouched; only the
+        ticker hook moves. Pass ``cancel_old=False`` after a full reconnect,
+        where the old streams no longer exist server-side.
+        """
+        for sub in list(self._subscriptions.values()):
+            try:
+                self._unhook_stream(sub)
+                if cancel_old:
+                    self._cancel_stream(sub)
+                self._issue_stream(sub)
+            except Exception as exc:
+                logger.warning("IB resubscribe of %s failed: %s", sub.event_key, exc)
 
-        raise ValueError(f"Unknown subscribe channel {channel!r}; expected 'depth' or 'trades'")
+    def subscribe_connection_state(
+        self, callback: Callable[[ConnectionStateEvent], None]
+    ) -> SubscriptionHandle:
+        """Observe connection state changes; the handle's close() unsubscribes."""
+        bus_subscription = self._event_bus.subscribe(CONNECTION_TOPIC, callback)
+        return SubscriptionHandle(
+            channel=CONNECTION_TOPIC,
+            contract=None,
+            _cleanup=lambda: self._event_bus.unsubscribe(bus_subscription),
+        )

@@ -10,13 +10,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from decimal import Decimal
 
     from market_connector.auth.passthrough import PassThroughSigner
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.contracts.protocols import ContractResolver
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
-    from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
+    from market_connector.exchanges.interactive_brokers.transport import (
+        ConnectionStateEvent,
+        IbGatewayTransport,
+        SubscriptionHandle,
+    )
     from market_connector.orders import HBOrder
     from market_connector.transport.protocols import (
         RequestTransport,
@@ -70,6 +75,12 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
 
     async def stop(self) -> None:
         await self._transport.disconnect()
+
+    def subscribe_connection_state(
+        self, callback: Callable[[ConnectionStateEvent], None]
+    ) -> SubscriptionHandle:
+        """Delegate to transport: observe connected/disconnected/reconnecting/data_lost."""
+        return self._transport.subscribe_connection_state(callback)
 
     # --- ExecutionGateway (Stage 2) ---
 

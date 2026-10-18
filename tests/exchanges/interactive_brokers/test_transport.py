@@ -103,7 +103,14 @@ class TestConnectionLifecycle:
         ):
             t = IbGatewayTransport(spec)
             await t.connect()
-            mock_ib.connectAsync.assert_awaited_once_with(host="127.0.0.1", port=4002, clientId=1)
+            mock_ib.connectAsync.assert_awaited_once_with(
+                host="127.0.0.1",
+                port=4002,
+                clientId=1,
+                readonly=False,
+                account="",
+                raiseSyncErrors=True,
+            )
 
     @pytest.mark.asyncio
     async def test_connect_wires_error_router(

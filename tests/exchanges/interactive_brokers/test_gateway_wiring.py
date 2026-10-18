@@ -6,10 +6,10 @@ The mixins read the resolver the factory injected. Nothing here sets
 
 from __future__ import annotations
 
-from decimal import Decimal
+import asyncio
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -17,23 +17,20 @@ from market_connector.exchanges.interactive_brokers.factory import build_ib_gate
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
 from ._doubles import MockIb
+from .test_persistent_market_data import _feed_levels
 
 if TYPE_CHECKING:
     from market_connector.exchanges.interactive_brokers.gateway import IbGatewayGateway
 
 _PAIR = "AAPL-USD"
-_CONTRACT = SimpleNamespace(conId=265598, symbol="AAPL")
-
-
-def _level(price: float, size: float) -> SimpleNamespace:
-    return SimpleNamespace(price=price, size=size)
+_CONTRACT = MagicMock(conId=265598, symbol="AAPL")  # hashable, like a real Contract
 
 
 @pytest.fixture
 def mock_ib() -> MockIb:
     ib = MockIb()
-    ib._depth_ticker.domBids = [_level(100.0, 5)]
-    ib._depth_ticker.domAsks = [_level(100.5, 7)]
+    ib._l1_ticker.bid = 100.0  # valid top of book, pre-set for get_mid_price
+    ib._l1_ticker.ask = 100.5
     ib._historical_bars = [
         SimpleNamespace(date="20260102 15:30:00", open=1.0, high=2.0, low=0.5, close=1.5, volume=10)
     ]
@@ -46,16 +43,15 @@ def gateway(mock_ib: MockIb) -> IbGatewayGateway:
         "market_connector.exchanges.interactive_brokers.transport.IB",
         return_value=mock_ib,
     ):
-        built = build_ib_gateway(IbConnectionSpec())
-    # Market data now comes from the transport (#54); this test is about resolver wiring only.
-    built._transport.top_of_book = AsyncMock(return_value=(Decimal("100.0"), Decimal("100.5")))  # type: ignore[method-assign]
-    built._transport.depth_snapshot = AsyncMock(  # type: ignore[method-assign]
-        return_value=([(Decimal("100.0"), Decimal("5"))], [(Decimal("100.5"), Decimal("7"))])
-    )
-    return built
+        return build_ib_gateway(IbConnectionSpec(market_data_timeout=0.2))
 
 
 async def _call_get_orderbook(g: IbGatewayGateway) -> object:
+    # The depth stream only exists once the call starts: feed raw ticks shortly after.
+    ticker = g._transport._ib._depth_ticker
+    asyncio.get_running_loop().call_later(
+        0.01, lambda: _feed_levels(ticker, [(100.0, 5.0)], [(100.5, 7.0)])
+    )
     return await g.get_orderbook(_PAIR)
 
 

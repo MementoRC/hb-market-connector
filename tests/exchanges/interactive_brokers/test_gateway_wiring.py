@@ -7,13 +7,18 @@ The mixins read the resolver the factory injected. Nothing here sets
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
-from tests.exchanges.interactive_brokers._doubles import MockIb
+
+from ._doubles import MockIb
+
+if TYPE_CHECKING:
+    from market_connector.exchanges.interactive_brokers.gateway import IbGatewayGateway
 
 _PAIR = "AAPL-USD"
 _CONTRACT = SimpleNamespace(conId=265598, symbol="AAPL")
@@ -35,7 +40,7 @@ def mock_ib() -> MockIb:
 
 
 @pytest.fixture
-def gateway(mock_ib: MockIb):
+def gateway(mock_ib: MockIb) -> IbGatewayGateway:
     with patch(
         "market_connector.exchanges.interactive_brokers.transport.IB",
         return_value=mock_ib,
@@ -43,29 +48,28 @@ def gateway(mock_ib: MockIb):
         return build_ib_gateway(IbConnectionSpec())
 
 
-async def _call_get_orderbook(g):
+async def _call_get_orderbook(g: IbGatewayGateway) -> object:
     return await g.get_orderbook(_PAIR)
 
 
-async def _call_get_mid_price(g):
+async def _call_get_mid_price(g: IbGatewayGateway) -> object:
     return await g.get_mid_price(_PAIR)
 
 
-async def _call_get_candles(g):
+async def _call_get_candles(g: IbGatewayGateway) -> object:
     return await g.get_candles(_PAIR, "1m", 1)
 
 
-async def _call_subscribe_orderbook(g):
+async def _call_subscribe_orderbook(g: IbGatewayGateway) -> None:
     async with g.subscribe_orderbook(_PAIR, lambda _u: None):
         pass
 
 
-async def _call_subscribe_trades(g):
+async def _call_subscribe_trades(g: IbGatewayGateway) -> None:
     async with g.subscribe_trades(_PAIR, lambda _t: None):
         pass
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "call",
     [
@@ -76,7 +80,10 @@ async def _call_subscribe_trades(g):
         _call_subscribe_trades,
     ],
 )
-async def test_factory_built_gateway_resolves_through_factory_resolver(gateway, call) -> None:
+async def test_factory_built_gateway_resolves_through_factory_resolver(
+    gateway: IbGatewayGateway,
+    call,
+) -> None:
     with patch.object(
         gateway.contract_resolver,
         "resolve_from_pair",

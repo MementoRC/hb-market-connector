@@ -76,7 +76,8 @@ class MarketDataMixin:
         """
         contract = await self._contract_resolver.resolve_from_pair(trading_pair)
         bid, ask = await self._transport.top_of_book(contract)
-        return (bid + ask) / 2
+        mid: Decimal = (bid + ask) / 2
+        return mid
 
     async def get_candles(
         self: HasIbTransport & HasContractResolver,  # type: ignore[valid-type]

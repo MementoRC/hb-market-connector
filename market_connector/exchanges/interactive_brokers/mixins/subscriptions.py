@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         HasContractResolver,
         HasIbTransport,
     )
+    from market_connector.exchanges.interactive_brokers.transport import DepthBook
 
 _log = get_logger(__name__)
 
@@ -71,17 +72,11 @@ class SubscriptionsMixin:
 
         contract = await self._contract_resolver.resolve_from_pair(trading_pair)
 
-        def _on_dom_update(ticker: object) -> None:
+        def _on_dom_update(book: DepthBook) -> None:
             try:
-                # Build OrderBookUpdate from ticker.domBids / ticker.domAsks.
-                bids = [
-                    (Decimal(str(lv.price)), Decimal(str(lv.size)))
-                    for lv in getattr(ticker, "domBids", [])
-                ]
-                asks = [
-                    (Decimal(str(lv.price)), Decimal(str(lv.size)))
-                    for lv in getattr(ticker, "domAsks", [])
-                ]
+                # The transport delivers its own book; ib_async's domBids/domAsks are not used.
+                bids = list(book.bids)
+                asks = list(book.asks)
                 # Late import to avoid circular dep.
                 from market_connector.primitives import OrderBookUpdate  # noqa: PLC0415
 

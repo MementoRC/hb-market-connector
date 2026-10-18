@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.transport import (
         ConnectionStateEvent,
+        FeeEvent,
+        FillEvent,
         IbGatewayTransport,
         SubscriptionHandle,
     )
@@ -81,6 +83,14 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
     ) -> SubscriptionHandle:
         """Delegate to transport: observe connected/disconnected/reconnecting/data_lost."""
         return self._transport.subscribe_connection_state(callback)
+
+    def subscribe_fills(self, callback: Callable[[FillEvent], None]) -> SubscriptionHandle:
+        """Delegate to transport: observe executions (live and reconciled)."""
+        return self._transport.subscribe_fills(callback)
+
+    def subscribe_fees(self, callback: Callable[[FeeEvent], None]) -> SubscriptionHandle:
+        """Delegate to transport: observe execution fees (live and reconciled)."""
+        return self._transport.subscribe_fees(callback)
 
     # --- ExecutionGateway (Stage 2) ---
 

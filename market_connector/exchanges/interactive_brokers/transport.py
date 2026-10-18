@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections import OrderedDict
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -38,13 +40,14 @@ from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from datetime import datetime
 
     from ib_async import Contract, Ticker
 
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
-    from market_connector.orders import HBOrder
+    from market_connector.orders import HBOrder, TradeType
 
 logger = get_logger(__name__)
 
@@ -63,6 +66,57 @@ class ConnectionStateEvent:
     state: str
     code: int | None = None
     message: str = ""
+
+
+# EventBus topics carrying FillEvent / FeeEvent payloads.
+FILL_TOPIC = "fill"
+FEE_TOPIC = "fee"
+
+# Upper bound on remembered execution ids (fills and fees each); oldest evicted first.
+_MAX_TRACKED_EXECUTIONS = 10_000
+
+
+@dataclass(frozen=True)
+class FillEvent:
+    """One execution of an order, published on FILL_TOPIC as soon as IB reports it.
+
+    Fills are never buffered waiting for their commission: the fee follows as
+    a separate :class:`FeeEvent` (same ``exec_id``) when IB sends the report,
+    which may be much later. ``is_correction`` marks an execution IB re-sent
+    with the same id prefix but a new final ``.NN`` segment (a trade bust or
+    correction). ``reconciled`` marks fills recovered by the post-(re)connect
+    executions query instead of the live stream.
+    """
+
+    exec_id: str
+    order_id: int
+    perm_id: int
+    con_id: int
+    symbol: str
+    side: TradeType
+    price: Decimal
+    size: Decimal
+    cum_qty: Decimal
+    time: datetime
+    account: str
+    is_correction: bool = False
+    reconciled: bool = False
+
+
+@dataclass(frozen=True)
+class FeeEvent:
+    """Fee for an execution, published on FEE_TOPIC when IB's report arrives.
+
+    Deliberately named "fee" rather than "commission": IB renamed its callback
+    to ``commissionAndFeesReport``. Always published after (or independently
+    of) the matching :class:`FillEvent`; deduplicated by full ``exec_id``.
+    """
+
+    exec_id: str
+    order_id: int
+    fee: Decimal
+    fee_currency: str
+    reconciled: bool = False
 
 
 def _hb_to_ib_order(hb_order: HBOrder) -> Any:
@@ -165,6 +219,9 @@ class IbGatewayTransport:
         self._event_bus = EventBus(name="ib-ws")
         self._subscribe_seq: int = 0
         self._subscriptions: dict[str, _ActiveSubscription] = {}
+        # Fill de-duplication: execId base (final ".NN" removed) -> last full execId.
+        self._seen_fills: OrderedDict[str, str] = OrderedDict()
+        self._seen_fees: OrderedDict[str, None] = OrderedDict()
         # Reconnect supervisor state.
         self._handlers_attached: bool = False
         self._closing: bool = False
@@ -207,6 +264,7 @@ class IbGatewayTransport:
         try:
             self._attach_handlers()
             self._apply_market_data_type()
+            await self._reconcile_executions()
         except BaseException:
             self._detach_handlers()
             raise
@@ -217,6 +275,8 @@ class IbGatewayTransport:
             return
         self._ib.errorEvent += self._error_router.on_error
         self._ib.disconnectedEvent += self._on_disconnected
+        self._ib.execDetailsEvent += self._on_exec_details
+        self._ib.commissionReportEvent += self._on_commission_report
         self._handlers_attached = True
 
     def _detach_handlers(self) -> None:
@@ -224,7 +284,112 @@ class IbGatewayTransport:
             return
         self._ib.errorEvent -= self._error_router.on_error
         self._ib.disconnectedEvent -= self._on_disconnected
+        self._ib.execDetailsEvent -= self._on_exec_details
+        self._ib.commissionReportEvent -= self._on_commission_report
         self._handlers_attached = False
+
+    @staticmethod
+    def _remember(seen: OrderedDict[str, Any], key: str, value: Any) -> None:
+        """Record *key* as the newest entry, evicting the oldest beyond the cap."""
+        seen[key] = value
+        seen.move_to_end(key)
+        while len(seen) > _MAX_TRACKED_EXECUTIONS:
+            seen.popitem(last=False)
+
+    def _on_exec_details(self, _trade: Any, fill: Any) -> None:
+        """IB.execDetailsEvent handler: publish the live fill immediately."""
+        self._ingest_fill(fill, reconciled=False)
+
+    def _on_commission_report(self, _trade: Any, fill: Any, report: Any) -> None:
+        """IB.commissionReportEvent handler: publish the fee when it arrives."""
+        self._ingest_fee(fill, report, reconciled=False)
+
+    @staticmethod
+    def _exec_suffix(exec_id: str) -> int:
+        """Parse the final dot-segment of exec_id as an int; return -1 if absent or non-numeric."""
+        _, _, suffix = exec_id.rpartition(".")
+        if not suffix:
+            return -1
+        try:
+            return int(suffix)
+        except ValueError:
+            return -1
+
+    def _ingest_fill(self, fill: Any, *, reconciled: bool) -> bool:
+        """Publish *fill* unless already seen; returns True when published.
+
+        IB re-sends executions. The identical full execId is dropped; the same
+        base with a different ``.NN`` suffix is a correction and is published
+        with ``is_correction=True``, but only if the suffix is strictly newer.
+        """
+        from market_connector.orders import TradeType  # noqa: PLC0415
+
+        ex = fill.execution
+        exec_id: str = ex.execId
+        base = exec_id.rpartition(".")[0] or exec_id
+        last = self._seen_fills.get(base)
+        if last is not None and self._exec_suffix(exec_id) <= self._exec_suffix(last):
+            return False
+        self._remember(self._seen_fills, base, exec_id)
+        self._event_bus.publish(
+            FILL_TOPIC,
+            FillEvent(
+                exec_id=exec_id,
+                order_id=ex.orderId,
+                perm_id=ex.permId,
+                con_id=fill.contract.conId,
+                symbol=fill.contract.symbol,
+                side=TradeType.BUY if ex.side == "BOT" else TradeType.SELL,
+                price=Decimal(str(ex.price)),
+                size=Decimal(str(ex.shares)),
+                cum_qty=Decimal(str(ex.cumQty)),
+                time=fill.time,
+                account=ex.acctNumber,
+                is_correction=last is not None,
+                reconciled=reconciled,
+            ),
+        )
+        return True
+
+    def _ingest_fee(self, fill: Any, report: Any, *, reconciled: bool) -> bool:
+        """Publish the fee in *report* unless its execId is empty or already seen."""
+        exec_id: str = report.execId
+        if not exec_id or exec_id in self._seen_fees:
+            return False
+        self._remember(self._seen_fees, exec_id, None)
+        self._event_bus.publish(
+            FEE_TOPIC,
+            FeeEvent(
+                exec_id=exec_id,
+                order_id=fill.execution.orderId,
+                fee=Decimal(str(report.commission)),
+                fee_currency=report.currency,
+                reconciled=reconciled,
+            ),
+        )
+        return True
+
+    async def _reconcile_executions(self) -> None:
+        """Recover executions missed while disconnected, via reqExecutionsAsync.
+
+        Runs after every successful (re)connect. Fills and fees go through the
+        same de-duplication as the live stream, flagged ``reconciled=True``,
+        so anything already seen live is not re-emitted. Failure is logged and
+        never fails the connect.
+        """
+        try:
+            from ib_async import ExecutionFilter  # noqa: PLC0415 — lazy, ib_async is optional
+
+            fills = await self._ib.reqExecutionsAsync(
+                ExecutionFilter(clientId=self._spec.client_id, acctCode=self._spec.account_id or "")
+            )
+            for fill in fills:
+                self._ingest_fill(fill, reconciled=True)
+                report = fill.commissionReport
+                if report is not None:
+                    self._ingest_fee(fill, report, reconciled=True)
+        except Exception as exc:
+            logger.warning("IB execution reconcile failed: %s", exc)
 
     def _publish_state(self, state: str, code: int | None = None, message: str = "") -> None:
         """Publish a ConnectionStateEvent on the connection topic."""
@@ -559,6 +724,24 @@ class IbGatewayTransport:
         bus_subscription = self._event_bus.subscribe(CONNECTION_TOPIC, callback)
         return SubscriptionHandle(
             channel=CONNECTION_TOPIC,
+            contract=None,
+            _cleanup=lambda: self._event_bus.unsubscribe(bus_subscription),
+        )
+
+    def subscribe_fills(self, callback: Callable[[FillEvent], None]) -> SubscriptionHandle:
+        """Observe executions (live and reconciled); the handle's close() unsubscribes."""
+        bus_subscription = self._event_bus.subscribe(FILL_TOPIC, callback)
+        return SubscriptionHandle(
+            channel=FILL_TOPIC,
+            contract=None,
+            _cleanup=lambda: self._event_bus.unsubscribe(bus_subscription),
+        )
+
+    def subscribe_fees(self, callback: Callable[[FeeEvent], None]) -> SubscriptionHandle:
+        """Observe execution fees (live and reconciled); the handle's close() unsubscribes."""
+        bus_subscription = self._event_bus.subscribe(FEE_TOPIC, callback)
+        return SubscriptionHandle(
+            channel=FEE_TOPIC,
             contract=None,
             _cleanup=lambda: self._event_bus.unsubscribe(bus_subscription),
         )

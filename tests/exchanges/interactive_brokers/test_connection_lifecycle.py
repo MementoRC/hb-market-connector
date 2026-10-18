@@ -200,15 +200,17 @@ class TestResubscribeOn1101:
         assert states == ["connected", "disconnected", "connected"]
 
     async def test_closed_handle_is_not_resubscribed(self) -> None:
-        transport, ib, _ = _make()
+        """Issue #54 (D4): once released after the idle period, a closed handle stays gone."""
+        transport, ib, _ = _make(IbConnectionSpec(depth_idle_release=0.05))
         await transport.connect()
         handle = transport.subscribe("depth", "C", lambda t: None)
-        assert len(transport._subscriptions) == 1
         handle.close()
         handle.close()
-        assert transport._subscriptions == {}
+        await asyncio.sleep(0.3)
+        assert ib._cancel_mkt_depth_calls == ["C"]
         ib.errorEvent(-1, 1101, "lost")
         assert len(ib.req_mkt_depth_calls) == 1
+        assert ib._cancel_mkt_depth_calls == ["C"]
 
     async def test_resubscribe_failure_is_logged_and_others_continue(self) -> None:
         transport, ib, _ = _make()

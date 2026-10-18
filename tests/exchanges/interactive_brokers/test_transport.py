@@ -259,7 +259,10 @@ class TestSubscribe:
         handle.close()
         handle.close()  # must not raise
 
-    def test_close_calls_cancel_mkt_depth(self, spec: IbConnectionSpec) -> None:
+    async def test_close_calls_cancel_mkt_depth_after_idle_release(self) -> None:
+        """Issue #54 (D4): the last handle closing cancels after depth_idle_release, not at once."""
+        import asyncio
+
         from ._doubles import MockIb
 
         mock_ib = MockIb()
@@ -267,10 +270,12 @@ class TestSubscribe:
             "market_connector.exchanges.interactive_brokers.transport.IB",
             return_value=mock_ib,
         ):
-            transport = IbGatewayTransport(spec)
+            transport = IbGatewayTransport(IbConnectionSpec(depth_idle_release=0.05))
         contract = MagicMock()
         handle = transport.subscribe("depth", contract, lambda t: None)
         handle.close()
+        assert transport._ib._cancel_mkt_depth_calls == []
+        await asyncio.sleep(0.3)
         assert len(transport._ib._cancel_mkt_depth_calls) == 1
 
     def test_subscribe_trades_returns_handle(self, spec: IbConnectionSpec) -> None:

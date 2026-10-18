@@ -745,6 +745,24 @@ class IbGatewayTransport:
             except Exception as exc:
                 logger.warning("IB resubscribe of %s failed: %s", sub.event_key, exc)
 
+    async def top_of_book(self, contract: Any) -> tuple[Decimal, Decimal]:
+        """Return (bid, ask) from the persistent L1 ticker for *contract*.
+
+        Raises MarketDataTimeoutError when both sides are not valid within
+        ``IbConnectionSpec.market_data_timeout``.
+        """
+        raise NotImplementedError("top_of_book is implemented in issue #54")
+
+    async def depth_snapshot(
+        self, contract: Any
+    ) -> tuple[list[tuple[Decimal, Decimal]], list[tuple[Decimal, Decimal]]]:
+        """Return (bids, asks) as (price, size) levels from the shared depth stream.
+
+        Raises MarketDataTimeoutError when no depth arrives within
+        ``IbConnectionSpec.market_data_timeout``.
+        """
+        raise NotImplementedError("depth_snapshot is implemented in issue #54")
+
     def subscribe_connection_state(
         self, callback: Callable[[ConnectionStateEvent], None]
     ) -> SubscriptionHandle:

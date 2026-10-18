@@ -34,7 +34,10 @@ else:
         IB = None  # noqa: F841
 
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
-from market_connector.exchanges.interactive_brokers.exceptions import ConnectionLostError
+from market_connector.exchanges.interactive_brokers.exceptions import (
+    ConnectionLostError,
+    OrderRejectedError,
+)
 from market_connector.hb_compat.event_bus import EventBus
 from market_connector.hb_compat.logging import get_logger
 
@@ -247,6 +250,7 @@ class IbGatewayTransport:
         self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep  # patchable in tests
         self._error_router._connection_listeners.append(self._on_router_connection)
         self._error_router._data_lost_listeners.append(self._on_data_lost)
+        self._error_router._farm_listeners.append(self._on_farm_status)
 
     @property
     def is_connected(self) -> bool:
@@ -524,7 +528,13 @@ class IbGatewayTransport:
         initial = OrderHandle.from_trade(trade)
         self._handle_registry[trade.order.orderId] = initial
 
-        new_handle = await self._wait_first_status_update(trade)
+        try:
+            new_handle = await self._wait_first_status_update(trade)
+        except OrderRejectedError as exc:
+            # The router has no trade; attach IB's advanced reject text here.
+            raise OrderRejectedError(
+                exc.error_code, exc.message, advanced_reject=trade.advancedError or None
+            ) from exc
         self._handle_registry[trade.order.orderId] = new_handle
         return new_handle
 
@@ -749,17 +759,26 @@ class IbGatewayTransport:
     @property
     def stale_farms(self) -> frozenset[str]:
         """Names of data farms currently reported broken ("market", "hmds", "secdef")."""
-        raise NotImplementedError
+        return frozenset(self._error_router._stale_farms)
 
     def subscribe_farm_status(
         self, callback: Callable[[FarmStatusEvent], None]
     ) -> SubscriptionHandle:
         """Observe data-farm status changes; the handle's close() unsubscribes."""
-        raise NotImplementedError
+        bus_subscription = self._event_bus.subscribe(FARM_TOPIC, callback)
+        return SubscriptionHandle(
+            channel=FARM_TOPIC,
+            contract=None,
+            _cleanup=lambda: self._event_bus.unsubscribe(bus_subscription),
+        )
+
+    def _on_farm_status(self, farm: str, ok: bool, code: int, msg: str) -> None:
+        """Mirror IB-originated farm status codes (2103..2158) onto the bus."""
+        self._event_bus.publish(FARM_TOPIC, FarmStatusEvent(farm, ok, code, msg))
 
     def cancel_reason(self, order_id: int) -> str | None:
         """Return IB's code-202 cancellation text for *order_id*, or None if unknown."""
-        raise NotImplementedError
+        return self._error_router._cancel_reasons.get(order_id)
 
     def subscribe_fills(self, callback: Callable[[FillEvent], None]) -> SubscriptionHandle:
         """Observe executions (live and reconciled); the handle's close() unsubscribes."""

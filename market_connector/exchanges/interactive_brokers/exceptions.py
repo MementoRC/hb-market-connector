@@ -15,7 +15,7 @@ class IbError(Exception):
 
 
 class ContractNotFoundError(IbError):
-    """IB error 162 / 200 — no security definition for contract."""
+    """IB error 200 — no security definition for contract."""
 
 
 class OrderRejectedError(IbError):
@@ -50,7 +50,7 @@ class SubscriptionLimitError(IbError):
 
 
 class ConnectionLostError(IbError):
-    """IB error 1100 — connectivity lost."""
+    """IB connectivity lost: 1100, 2110 (TWS-to-server), 502 / 504 (API socket)."""
 
 
 class ConnectionTerminatedError(IbError):
@@ -60,14 +60,16 @@ class ConnectionTerminatedError(IbError):
 class MarketDataPermissionError(IbError):
     """IB account does not have a subscription for the requested market data.
 
-    IB codes: 354 (not subscribed), 10089 (requires additional subscription).
+    IB codes: 354 (not subscribed), 10089 (requires additional subscription),
+    10197 (competing live session), 162 with a "No market data permissions" text.
     """
 
 
 class HistoricalDataError(IbError):
     """IB historical data request failed or the farm is temporarily disconnected.
 
-    IB codes: 162 (service error), 165 (farm disconnected — transient; caller may retry).
+    IB codes: 162 (service error, unless pacing or permissions), 165 (farm
+    disconnected — transient; caller may retry).
     """
 
 

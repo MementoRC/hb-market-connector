@@ -11,7 +11,10 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     HistoricalDataError,
     IbError,
     MarketDataPermissionError,
+    OrderCancelledError,
     OrderRejectedError,
+    RateLimitError,
+    SubscriptionLimitError,
 )
 from market_connector.hb_compat.logging import get_logger
 
@@ -24,18 +27,39 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+# Simple code -> exception mapping. Request-scoped codes fail the request waiter,
+# OrderRejectedError codes the order waiter. Codes needing more than a lookup are
+# handled in ``on_error``: 162 (text-disambiguated), 420/100 (rate limits),
+# 10197 (competing session), 202 (cancellation), connectivity and farm codes.
 _ERROR_TABLE: dict[int, type[IbError]] = {
-    162: ContractNotFoundError,
     165: HistoricalDataError,
     200: ContractNotFoundError,
     201: OrderRejectedError,
+    309: SubscriptionLimitError,
     321: OrderRejectedError,
     325: OrderRejectedError,
     354: MarketDataPermissionError,
-    1100: ConnectionLostError,
-    1300: ConnectionTerminatedError,
     10089: MarketDataPermissionError,
 }
+
+# Connectivity lost: 1100 (lost), 2110 (TWS-to-server broken), 502/504 (API socket).
+_CONNECTION_LOST_CODES = frozenset({1100, 2110, 502, 504})
+
+# Data-farm status codes -> (farm, ok).
+_FARM_CODES: dict[int, tuple[str, bool]] = {
+    2103: ("market", False),
+    2104: ("market", True),
+    2105: ("hmds", False),
+    2106: ("hmds", True),
+    2157: ("secdef", False),
+    2158: ("secdef", True),
+}
+
+# Suggested wait (seconds) before retrying after a rate-limit error.
+# Historical-data pacing violations clear slowly (IB's pacing windows are ~10s);
+# message-rate codes (100, 420) clear within about a second.
+HISTORICAL_PACING_RETRY_AFTER = 10.0
+MESSAGE_RATE_RETRY_AFTER = 1.0
 
 
 _DELAYED_DATA_HINT = (
@@ -56,6 +80,11 @@ class _ErrorRouter:
         self._connection_listeners: list[Callable[[bool], None]] = []
         # Called as cb(code, msg) on 1101 (connectivity restored, data lost).
         self._data_lost_listeners: list[Callable[[int, str], None]] = []
+        # Farms currently reported broken; farm listeners get cb(farm, ok, code, msg).
+        self._stale_farms: set[str] = set()
+        self._farm_listeners: list[Callable[[str, bool, int, str], None]] = []
+        # order_id -> IB's code-202 cancellation text (always recorded).
+        self._cancel_reasons: dict[int, str] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -97,47 +126,83 @@ class _ErrorRouter:
             logger.warning("IB error %d (partial data): %s", code, msg)
             return
 
-        exc_cls = _ERROR_TABLE.get(code)
-
-        if exc_cls is ConnectionLostError:
+        if code in _CONNECTION_LOST_CODES:
             self._is_connected = False
             self._notify_connection(False)
-            self._fail_all_pending(exc_cls(code, msg))
+            self._fail_all_pending(ConnectionLostError(code, msg))
             return
 
-        if exc_cls is ConnectionTerminatedError:
-            self._fail_all_pending(exc_cls(code, msg))
+        if code == 1300:
+            self._fail_all_pending(ConnectionTerminatedError(code, msg))
             return
 
-        if exc_cls is ContractNotFoundError:
-            fut = self._pending_request_waiters.pop(req_id, None)
-            if fut is not None and not fut.done():
-                fut.set_exception(exc_cls(code, msg))
+        farm = _FARM_CODES.get(code)
+        if farm is not None:
+            self._on_farm_status(farm[0], farm[1], code, msg)
             return
 
+        if code == 202:
+            self._cancel_reasons[req_id] = msg
+            self._fail_waiter(
+                self._pending_order_waiters, req_id, OrderCancelledError(code, msg, msg)
+            )
+            return
+
+        exc_cls = _ERROR_TABLE.get(code)
         if exc_cls is OrderRejectedError:
             # IB protocol invariant: req_id == orderId for order-related errors.
-            fut = self._pending_order_waiters.pop(req_id, None)
-            if fut is not None and not fut.done():
-                fut.set_exception(exc_cls(code, msg))
+            self._fail_waiter(self._pending_order_waiters, req_id, exc_cls(code, msg))
             return
 
-        if exc_cls is MarketDataPermissionError:
-            fut = self._pending_request_waiters.pop(req_id, None)
-            if fut is not None and not fut.done():
-                if self.market_data_type not in (None, 1):
-                    msg = f"{msg} {_DELAYED_DATA_HINT}"
-                fut.set_exception(exc_cls(code, msg))
+        request_exc = self._request_exception(code, msg, exc_cls)
+        if request_exc is None:
+            # Unrouted error — log at debug.
+            logger.debug("Unrouted IB error %d: %s", code, msg)
             return
 
-        if exc_cls is HistoricalDataError:
-            fut = self._pending_request_waiters.pop(req_id, None)
-            if fut is not None and not fut.done():
-                fut.set_exception(exc_cls(code, msg))
-            return
+        waiting = req_id in self._pending_request_waiters
+        self._fail_waiter(self._pending_request_waiters, req_id, request_exc)
+        if code == 309 and not waiting:
+            logger.warning("IB error %d (subscription limit, no request waiting): %s", code, msg)
 
-        # Unrouted error — log at debug; Stage 6 may extend.
-        logger.debug("Unrouted IB error %d: %s", code, msg)
+    def _request_exception(
+        self, code: int, msg: str, exc_cls: type[IbError] | None
+    ) -> IbError | None:
+        """Build the exception for a request-scoped error code, or None if unrouted."""
+        if code == 162:
+            lowered = msg.lower()
+            if "pacing violation" in lowered:
+                return RateLimitError(code, msg, retry_after=HISTORICAL_PACING_RETRY_AFTER)
+            exc_cls = (
+                MarketDataPermissionError
+                if "no market data permissions" in lowered
+                else HistoricalDataError
+            )
+        elif code in (420, 100):
+            return RateLimitError(code, msg, retry_after=MESSAGE_RATE_RETRY_AFTER)
+        elif code == 10197:
+            return MarketDataPermissionError(
+                code, f"{msg} (competing live session is using the market data)"
+            )
+        if exc_cls is None:
+            return None
+        if exc_cls is MarketDataPermissionError and self.market_data_type not in (None, 1):
+            msg = f"{msg} {_DELAYED_DATA_HINT}"
+        return exc_cls(code, msg)
+
+    @staticmethod
+    def _fail_waiter(waiters: dict[int, Future[Any]], key: int, exc: IbError) -> None:
+        fut = waiters.pop(key, None)
+        if fut is not None and not fut.done():
+            fut.set_exception(exc)
+
+    def _on_farm_status(self, farm: str, ok: bool, code: int, msg: str) -> None:
+        if ok:
+            self._stale_farms.discard(farm)
+        else:
+            self._stale_farms.add(farm)
+        for farm_cb in list(self._farm_listeners):
+            farm_cb(farm, ok, code, msg)
 
     def _fail_all_pending(self, exc: IbError) -> None:
         all_futs = list(self._pending_request_waiters.values()) + list(

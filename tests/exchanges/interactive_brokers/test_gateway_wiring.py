@@ -6,6 +6,7 @@ The mixins read the resolver the factory injected. Nothing here sets
 
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
@@ -45,7 +46,13 @@ def gateway(mock_ib: MockIb) -> IbGatewayGateway:
         "market_connector.exchanges.interactive_brokers.transport.IB",
         return_value=mock_ib,
     ):
-        return build_ib_gateway(IbConnectionSpec())
+        built = build_ib_gateway(IbConnectionSpec())
+    # Market data now comes from the transport (#54); this test is about resolver wiring only.
+    built._transport.top_of_book = AsyncMock(return_value=(Decimal("100.0"), Decimal("100.5")))  # type: ignore[method-assign]
+    built._transport.depth_snapshot = AsyncMock(  # type: ignore[method-assign]
+        return_value=([(Decimal("100.0"), Decimal("5"))], [(Decimal("100.5"), Decimal("7"))])
+    )
+    return built
 
 
 async def _call_get_orderbook(g: IbGatewayGateway) -> object:

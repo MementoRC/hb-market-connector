@@ -11,8 +11,8 @@ Pinned decisions (beyond the issue text):
 - A timeout does not close the stream or ticker: a later call can still succeed on it.
 
 Timing tests use small real values (asyncio, no internal patching); generous margins keep them
-stable. NOTE: the real gateway does not set ``_contract_resolver`` (the mixins read it), so the
-rig sets it explicitly, as the other mixin tests do.
+stable. The rig passes the resolver as the gateway's public ``contract_resolver`` (the mixins
+read it through the ``_contract_resolver`` alias since #68).
 """
 
 from __future__ import annotations
@@ -101,7 +101,6 @@ def _rig(**spec_kwargs: Any) -> Rig:
         transport = IbGatewayTransport(IbConnectionSpec(**spec_kwargs))
     resolver = FakeResolver()
     gateway = IbGatewayGateway(transport=transport, signer=MagicMock(), contract_resolver=resolver)
-    gateway._contract_resolver = resolver  # type: ignore[attr-defined]
     return Rig(gateway, transport, ib, resolver)
 
 

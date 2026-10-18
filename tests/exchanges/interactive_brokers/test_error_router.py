@@ -21,7 +21,7 @@ class TestErrorTable:
     @pytest.mark.parametrize(
         "code,exc_cls",
         [
-            (162, ContractNotFoundError),
+            # 162 is no longer ContractNotFoundError (#56); see test_error_codes.py (C5).
             (200, ContractNotFoundError),
             (201, OrderRejectedError),
             (321, OrderRejectedError),

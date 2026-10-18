@@ -19,7 +19,34 @@ class ContractNotFoundError(IbError):
 
 
 class OrderRejectedError(IbError):
-    """IB error 201 / 321 / 325 — order rejected."""
+    """IB error 201 / 321 / 325 — order rejected.
+
+    ``advanced_reject`` carries the ib_async ``Trade.advancedError`` text when present.
+    """
+
+    def __init__(self, error_code: int, message: str, advanced_reject: str | None = None) -> None:
+        super().__init__(error_code, message)
+        self.advanced_reject = advanced_reject
+
+
+class OrderCancelledError(IbError):
+    """IB error 202 — order cancelled; ``reason`` is IB's cancellation text."""
+
+    def __init__(self, error_code: int, message: str, reason: str = "") -> None:
+        super().__init__(error_code, message)
+        self.reason = reason
+
+
+class RateLimitError(IbError):
+    """IB pacing/rate limit: codes 100, 420 and 162 with a "pacing violation" text."""
+
+    def __init__(self, error_code: int, message: str, retry_after: float | None = None) -> None:
+        super().__init__(error_code, message)
+        self.retry_after = retry_after
+
+
+class SubscriptionLimitError(IbError):
+    """IB error 309 — maximum number of market-depth requests exceeded."""
 
 
 class ConnectionLostError(IbError):

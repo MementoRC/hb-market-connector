@@ -68,6 +68,24 @@ class ConnectionStateEvent:
     message: str = ""
 
 
+# EventBus topic carrying FarmStatusEvent payloads.
+FARM_TOPIC = "farm"
+
+
+@dataclass(frozen=True)
+class FarmStatusEvent:
+    """Data-farm status notification published on FARM_TOPIC.
+
+    ``farm`` is "market", "hmds" or "secdef"; ``ok`` is False for the
+    broken codes (2103/2105/2157) and True for the OK codes (2104/2106/2158).
+    """
+
+    farm: str
+    ok: bool
+    code: int
+    message: str = ""
+
+
 # EventBus topics carrying FillEvent / FeeEvent payloads.
 FILL_TOPIC = "fill"
 FEE_TOPIC = "fee"
@@ -727,6 +745,21 @@ class IbGatewayTransport:
             contract=None,
             _cleanup=lambda: self._event_bus.unsubscribe(bus_subscription),
         )
+
+    @property
+    def stale_farms(self) -> frozenset[str]:
+        """Names of data farms currently reported broken ("market", "hmds", "secdef")."""
+        raise NotImplementedError
+
+    def subscribe_farm_status(
+        self, callback: Callable[[FarmStatusEvent], None]
+    ) -> SubscriptionHandle:
+        """Observe data-farm status changes; the handle's close() unsubscribes."""
+        raise NotImplementedError
+
+    def cancel_reason(self, order_id: int) -> str | None:
+        """Return IB's code-202 cancellation text for *order_id*, or None if unknown."""
+        raise NotImplementedError
 
     def subscribe_fills(self, callback: Callable[[FillEvent], None]) -> SubscriptionHandle:
         """Observe executions (live and reconciled); the handle's close() unsubscribes."""

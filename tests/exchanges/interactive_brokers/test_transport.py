@@ -7,18 +7,21 @@ test_integration.py and is gated by pytest.mark.ib_gateway.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
-from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
+from market_connector.exchanges.interactive_brokers.transport import DepthBook, IbGatewayTransport
 from market_connector.transport.protocols import (
     RequestTransport,
     StreamTransport,
     Transport,
 )
+
+from .test_persistent_market_data import _feed, _tick
 
 
 @pytest.fixture
@@ -231,18 +234,20 @@ class TestSubscribe:
         contract = MagicMock()
         received: list[object] = []
 
-        def on_update(ticker: object) -> None:
-            received.append(ticker)
+        def on_update(book: object) -> None:
+            received.append(book)
 
         handle = transport.subscribe("depth", contract, on_update)
 
-        # Simulate IB firing the updateEvent
-        transport._ib._depth_ticker.updateEvent(transport._ib._depth_ticker)
+        # Simulate IB delivering one raw depth update (insert a bid at position 0), then the event
+        _feed(transport._ib._depth_ticker, _tick(1, 0, 0, 100.0, 5.0))
         assert len(received) == 1
+        assert isinstance(received[0], DepthBook)
+        assert list(received[0].bids) == [(Decimal("100.0"), Decimal("5.0"))]
 
         handle.close()
-        # After close, firing again should NOT call the callback
-        transport._ib._depth_ticker.updateEvent(transport._ib._depth_ticker)
+        # After close, another update should NOT call the callback
+        _feed(transport._ib._depth_ticker, _tick(1, 0, 1, 99.0, 6.0))
         assert len(received) == 1  # still 1
 
     def test_close_is_idempotent(self, spec: IbConnectionSpec) -> None:

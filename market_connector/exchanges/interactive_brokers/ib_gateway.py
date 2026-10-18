@@ -127,6 +127,10 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         """Delegate cancel to transport (idempotent on terminal orders)."""
         return await self._transport.cancel_order(handle)
 
+    async def cancel_all(self) -> list[OrderHandle]:
+        """Delegate to transport: cancel only this client's open orders."""
+        return await self._transport.cancel_all()
+
     def get_open_orders(self) -> list[OrderHandle]:
         """Return a snapshot of open orders from the transport's local cache."""
         return self._transport.open_orders()

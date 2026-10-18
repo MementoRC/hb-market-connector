@@ -38,6 +38,22 @@ services:
 - Paper account: register a separate paper login from the IBKR client portal.
 - 2FA: use the IBKR Mobile soft-token (TOTP) for headless automation.
 
+## Client IDs and open-order visibility
+
+- Use one stable, unique `client_id` per bot. Order ids come from ib_async's
+  `nextValidId` per client, so two bots sharing a `client_id` will collide on
+  order ids.
+- `client_id=0` is the master client: it also binds orders placed manually in
+  TWS (requires TWS "bind automatic orders" / `reqAutoOpenOrders`). Only one
+  client can be 0 at a time.
+- `fetch_all_open_orders` (default on) calls `reqAllOpenOrdersAsync` on every
+  connect and reconnect, so orders from other clients (and, for client 0, TWS)
+  appear in `open_orders()` read-only with `owned=False`. IB does not keep
+  other clients' orders live-updated after that snapshot.
+- `cancel_order` refuses handles with `owned=False` (`ValueError`), and
+  `cancel_all` cancels only orders owned by this client; it never issues a
+  global cancel.
+
 ## Stage roadmap
 
 | Stage | Scope | Status |

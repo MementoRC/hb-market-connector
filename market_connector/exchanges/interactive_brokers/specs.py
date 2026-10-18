@@ -10,9 +10,18 @@ class IbConnectionSpec:
     """Parameters for connecting to a local IB Gateway instance.
 
     Defaults match a paper-trading IB Gateway (port 4002). For live trading,
-    set port=4001 and paper=False. The client_id should be unique per
-    concurrently-connected client (multiple clients on one Gateway need
-    distinct ids).
+    set port=4001 and paper=False.
+
+    client_id must be a non-negative int, unique per concurrently-connected
+    client (multiple clients on one Gateway need distinct ids). Use one stable
+    id per bot. client_id 0 is the master client: it additionally receives
+    orders placed manually in TWS, and only one client can be 0 at a time.
+
+    fetch_all_open_orders (default True) calls reqAllOpenOrdersAsync on every
+    connect and reconnect so orders from other API clients, from previous runs
+    with another client_id, and (for the master client) TWS orders become
+    visible, read-only (``OrderHandle.owned`` is False). IB does not keep
+    other clients' orders live-updated after that snapshot.
     """
 
     host: str = "127.0.0.1"
@@ -29,8 +38,13 @@ class IbConnectionSpec:
     reconnect_max_delay: float = 60.0  # backoff cap in seconds
     market_data_timeout: float = 5.0  # seconds to wait for first top-of-book / depth data
     depth_idle_release: float = 60.0  # seconds an unused depth stream stays open
+    fetch_all_open_orders: bool = True  # reqAllOpenOrdersAsync on every (re)connect
 
     def __post_init__(self) -> None:
+        if not isinstance(self.client_id, int) or isinstance(self.client_id, bool):
+            raise TypeError(f"client_id must be an int; got {self.client_id!r}")
+        if self.client_id < 0:
+            raise ValueError(f"client_id must be >= 0; got {self.client_id!r}")
         if self.market_data_timeout <= 0:
             raise ValueError(f"market_data_timeout must be > 0; got {self.market_data_timeout!r}")
         if self.depth_idle_release <= 0:

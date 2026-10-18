@@ -100,6 +100,26 @@ class TestLiveFills:
         ib.execDetailsEvent(None, make_fill("plain"))
         assert len(fills) == 1
 
+    async def test_stale_version_after_correction_not_published(self) -> None:
+        """Correction .02 arrives first; older .01 later is not published."""
+        transport, ib, fills, _ = _make()
+        await transport.connect()
+        ib.execDetailsEvent(None, make_fill("e1.02"))
+        ib.execDetailsEvent(None, make_fill("e1.01"))
+        assert [(f.exec_id, f.is_correction) for f in fills] == [("e1.02", False)]
+
+    async def test_multiple_corrections_idempotent_to_stale(self) -> None:
+        """Sequence .01, .02, .01 again: exactly two fills published."""
+        transport, ib, fills, _ = _make()
+        await transport.connect()
+        ib.execDetailsEvent(None, make_fill("e1.01"))
+        ib.execDetailsEvent(None, make_fill("e1.02"))
+        ib.execDetailsEvent(None, make_fill("e1.01"))
+        assert [(f.exec_id, f.is_correction) for f in fills] == [
+            ("e1.01", False),
+            ("e1.02", True),
+        ]
+
 
 class TestLiveFees:
     async def test_late_commission_follows_fill_and_duplicate_dropped(self) -> None:

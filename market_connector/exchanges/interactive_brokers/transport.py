@@ -304,12 +304,23 @@ class IbGatewayTransport:
         """IB.commissionReportEvent handler: publish the fee when it arrives."""
         self._ingest_fee(fill, report, reconciled=False)
 
+    @staticmethod
+    def _exec_suffix(exec_id: str) -> int:
+        """Parse the final dot-segment of exec_id as an int; return -1 if absent or non-numeric."""
+        _, _, suffix = exec_id.rpartition(".")
+        if not suffix:
+            return -1
+        try:
+            return int(suffix)
+        except ValueError:
+            return -1
+
     def _ingest_fill(self, fill: Any, *, reconciled: bool) -> bool:
         """Publish *fill* unless already seen; returns True when published.
 
         IB re-sends executions. The identical full execId is dropped; the same
         base with a different ``.NN`` suffix is a correction and is published
-        with ``is_correction=True``.
+        with ``is_correction=True``, but only if the suffix is strictly newer.
         """
         from market_connector.orders import TradeType  # noqa: PLC0415
 
@@ -317,7 +328,7 @@ class IbGatewayTransport:
         exec_id: str = ex.execId
         base = exec_id.rpartition(".")[0] or exec_id
         last = self._seen_fills.get(base)
-        if last == exec_id:
+        if last is not None and self._exec_suffix(exec_id) <= self._exec_suffix(last):
             return False
         self._remember(self._seen_fills, base, exec_id)
         self._event_bus.publish(

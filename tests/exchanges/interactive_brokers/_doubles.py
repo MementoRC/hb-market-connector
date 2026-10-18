@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import Any
+
+_FILL_TIME = datetime(2026, 1, 2, 15, 30, tzinfo=timezone.utc)  # noqa: UP017
+
 
 class FakeEvent:
     """Minimal ib_async-style event supporting += / -= / ()."""
@@ -48,6 +54,12 @@ class MockIb:
         self.connect_calls: list[dict[str, object]] = []
         self.errorEvent = FakeEvent()  # noqa: N815
         self.disconnectedEvent = FakeEvent()  # noqa: N815
+        self.execDetailsEvent = FakeEvent()  # noqa: N815
+        self.commissionReportEvent = FakeEvent()  # noqa: N815
+        # reqExecutionsAsync: filters received, fills returned, optional error to raise.
+        self.req_executions_filters: list[object] = []
+        self.executions_result: list[object] = []
+        self.executions_error: Exception | None = None
         self.client = FakeClient(self)
         self.connected = False
         self.disconnect_calls = 0
@@ -106,6 +118,13 @@ class MockIb:
         """Record that market depth cancellation was called."""
         self._cancel_mkt_depth_calls.append(contract)
 
+    async def reqExecutionsAsync(self, execFilter: object = None) -> list[object]:  # noqa: N802, N803
+        """Record the filter; return ``executions_result`` or raise ``executions_error``."""
+        self.req_executions_filters.append(execFilter)
+        if self.executions_error is not None:
+            raise self.executions_error
+        return list(self.executions_result)
+
     async def reqHistoricalDataAsync(self, contract: object, **kwargs: object) -> list[object]:  # noqa: N802
         """Return pre-configured historical bars."""
         return list(self._historical_bars)
@@ -124,6 +143,57 @@ class MockIb:
     def cancelTickByTickData(self, contract: object, tickType: str) -> None:  # noqa: N802, N803
         """Record that tick-by-tick cancellation was called."""
         self._cancel_tick_by_tick_calls.append((contract, tickType))
+
+
+def make_execution(  # noqa: PLR0913
+    exec_id: str = "0001f4e8.6700a1b2.01.01",
+    *,
+    order_id: int = 11,
+    side: str = "BOT",
+    shares: float = 10.0,
+    price: float = 101.25,
+    cum_qty: float = 10.0,
+) -> SimpleNamespace:
+    """Fake ib_async.Execution."""
+    return SimpleNamespace(
+        execId=exec_id,
+        orderId=order_id,
+        permId=987654,
+        clientId=1,
+        side=side,
+        shares=shares,
+        price=price,
+        cumQty=cum_qty,
+        avgPrice=price,
+        time=_FILL_TIME,
+        acctNumber="DU123",
+    )
+
+
+def make_commission_report(
+    exec_id: str = "0001f4e8.6700a1b2.01.01",
+    commission: float = 1.05,
+    currency: str = "USD",
+) -> SimpleNamespace:
+    """Fake ib_async.CommissionReport."""
+    return SimpleNamespace(
+        execId=exec_id, commission=commission, currency=currency, realizedPNL=0.0
+    )
+
+
+def make_fill(
+    exec_id: str = "0001f4e8.6700a1b2.01.01",
+    *,
+    report: SimpleNamespace | None = None,
+    **execution_kwargs: Any,
+) -> SimpleNamespace:
+    """Fake ib_async.Fill; ``report`` defaults to an unpopulated (empty execId) one."""
+    return SimpleNamespace(
+        contract=SimpleNamespace(conId=265598, symbol="AAPL"),
+        execution=make_execution(exec_id, **execution_kwargs),
+        commissionReport=report if report is not None else make_commission_report(""),
+        time=_FILL_TIME,
+    )
 
 
 class FakeTicker:

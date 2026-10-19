@@ -81,3 +81,22 @@ pixi run test market_connector/exchanges/interactive_brokers/
 # Integration tests (requires running IB Gateway)
 pixi run test -m ib_gateway
 ```
+
+Live tests are gated on `IB_GATEWAY_HOST` and skip when it is unset:
+
+- `IB_GATEWAY_HOST` — Gateway host (default `127.0.0.1` once the gate is enabled).
+- `IB_GATEWAY_PORT` — Gateway API port (default `4002`, the paper port).
+
+```bash
+IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 pixi run test -m ib_gateway
+```
+
+Live-port guard: the tests fail before connecting if `IB_GATEWAY_PORT` is a known
+live-trading default (4001 IB Gateway live, 7496 TWS live). The guard cannot detect
+a live Gateway on a non-default port, so always point `IB_GATEWAY_PORT` at a paper
+Gateway.
+
+If 4002 is occupied locally, map the Gateway to another host port and set
+`IB_GATEWAY_PORT` accordingly. For gnzsnz/ib-gateway the paper API is relayed on
+container port 4004, so e.g. `ports: ["127.0.0.1:4012:4004"]` with
+`IB_GATEWAY_PORT=4012`.

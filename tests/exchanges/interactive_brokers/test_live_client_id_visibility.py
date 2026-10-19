@@ -7,16 +7,18 @@ non-owned orders are never cancelled (``cancel_all`` skips them,
 ``cancel_order`` raises ``ValueError``). ``reqGlobalCancel`` is never used.
 
 Prerequisites:
-    - Paper IB Gateway listening on 127.0.0.1:4002. IB_GATEWAY_HOST must be set
-      (e.g. 127.0.0.1) to enable the module, as in test_integration.py; the
-      port is fixed to the paper port 4002.
+    - Paper IB Gateway on IB_GATEWAY_HOST:IB_GATEWAY_PORT (port default 4002).
+      IB_GATEWAY_HOST must be set (e.g. 127.0.0.1) to enable the module, as in
+      test_integration.py. Live ports 4001/7496 are refused; a live Gateway on
+      a non-default port cannot be detected, so point IB_GATEWAY_PORT at a
+      paper Gateway.
     - US market hours (an order rejected by IB makes the test skip, not fail).
     - ib_async installed. Client ids 11..14 must be free.
 
 The tests skip cleanly when no Gateway is reachable.
 
 Run:
-    IB_GATEWAY_HOST=127.0.0.1 pixi run test -m ib_gateway \\
+    IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 pixi run test -m ib_gateway \\
         tests/exchanges/interactive_brokers/test_live_client_id_visibility.py
 """
 
@@ -51,37 +53,35 @@ if TYPE_CHECKING:
     from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayGateway
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
 
+from ._live import live_endpoint
+
 pytestmark = pytest.mark.ib_gateway
 
-PAPER_PORT = 4002
 CLIENT_A, CLIENT_B, CLIENT_C, CLIENT_D = 11, 12, 13, 14
 _WORKING = {"Submitted", "PreSubmitted"}
 _AAPL = InstrumentRef(symbol="AAPL", instrument_type=InstrumentType.STOCK, quote_currency="USD")
 
 
-def _host() -> str:
-    return os.environ.get("IB_GATEWAY_HOST", "127.0.0.1")
-
-
 def _spec(client_id: int, *, fetch_all: bool = True) -> IbConnectionSpec:
+    host, port = live_endpoint()
     spec = IbConnectionSpec(
-        host=_host(),
-        port=PAPER_PORT,
+        host=host,
+        port=port,
         client_id=client_id,
         paper=True,
         fetch_all_open_orders=fetch_all,
     )
     assert spec.paper
-    assert spec.port == PAPER_PORT, "live tests must only talk to the paper Gateway"
     return spec
 
 
 @pytest.fixture(autouse=True)
 def _require_gateway() -> None:
+    host, port = live_endpoint()  # fails on live-trading ports before any connection
     try:
-        socket.create_connection((_host(), PAPER_PORT), timeout=2).close()
+        socket.create_connection((host, port), timeout=2).close()
     except OSError as exc:
-        pytest.skip(f"No IB paper Gateway reachable at {_host()}:{PAPER_PORT} ({exc})")
+        pytest.skip(f"No IB paper Gateway reachable at {host}:{port} ({exc})")
 
 
 @asynccontextmanager

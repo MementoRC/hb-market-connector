@@ -33,13 +33,13 @@ else:
     except ImportError:  # pragma: no cover - optional dep
         IB = None  # noqa: F841
 
+from market_connector.contracts.protocols import ResolvedContract
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     MarketDataTimeoutError,
     OrderRejectedError,
 )
-from market_connector.contracts.protocols import ResolvedContract
 from market_connector.hb_compat.event_bus import EventBus
 from market_connector.hb_compat.logging import get_logger
 
@@ -828,7 +828,9 @@ class IbGatewayTransport:
     def _request_persistent(self, stream: _Stream, *, depth: bool) -> None:
         """Send the reqMktDepth / reqMktData request and hook its ticker."""
         if depth:
-            ticker = self._ib.reqMktDepth(_native(stream.contract), numRows=_DEPTH_ROWS, isSmartDepth=True)
+            ticker = self._ib.reqMktDepth(
+                _native(stream.contract), numRows=_DEPTH_ROWS, isSmartDepth=True
+            )
         else:
             ticker = self._ib.reqMktData(_native(stream.contract))
         ticker.updateEvent += stream.hook

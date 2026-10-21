@@ -139,6 +139,8 @@ async def test_different_con_ids_get_separate_depth_streams() -> None:
     rig = _real_rig()
     _feed_levels_soon(rig.ib._depth_ticker)
     await rig.transport.depth_snapshot(_resolved(265598, "AAPL"))
+    # The new MSFT stream waits for its own first book update; feed one.
+    _feed_levels_soon(rig.ib._depth_ticker)
     await rig.transport.depth_snapshot(_resolved(272093, "MSFT"))
     assert len(rig.ib.req_mkt_depth_calls) == 2
     assert len(rig.transport._depth_streams) == 2

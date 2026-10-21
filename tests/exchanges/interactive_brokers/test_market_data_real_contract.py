@@ -9,9 +9,11 @@ raised ``TypeError: unhashable type: 'dict'``. These tests use the REAL ``Resolv
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from market_connector.contracts.instrument import InstrumentRef, InstrumentType
 from market_connector.contracts.protocols import ResolvedContract
@@ -152,3 +154,65 @@ async def test_different_con_ids_get_separate_l1_tickers() -> None:
     await rig.transport.top_of_book(_resolved(265598, "AAPL"))
     await rig.transport.top_of_book(_resolved(272093, "MSFT"))
     assert len(rig.ib.req_mkt_data_calls) == 2
+
+
+# The IB API must only ever receive the native ib_async.Contract, never our ResolvedContract
+# wrapper: ib_async hashes contracts (wrapper.startTicker does hash(contract)).
+
+
+async def test_req_mkt_data_receives_native_contract() -> None:
+    rig = _real_rig()
+    resolved = _resolved()
+    _set_l1(rig.ib._l1_ticker, 150.0, 150.5)
+    await rig.transport.top_of_book(resolved)
+    assert len(rig.ib.req_mkt_data_calls) == 1
+    assert rig.ib.req_mkt_data_calls[0] is resolved.native
+
+
+async def test_req_mkt_depth_receives_native_contract() -> None:
+    rig = _real_rig()
+    resolved = _resolved()
+    _feed_levels_soon(rig.ib._depth_ticker)
+    await rig.transport.depth_snapshot(resolved)
+    assert len(rig.ib.req_mkt_depth_calls) == 1
+    assert rig.ib.req_mkt_depth_calls[0] is resolved.native
+
+
+async def test_cancel_mkt_depth_receives_native_contract() -> None:
+    rig = _real_rig(depth_idle_release=_IDLE_SHORT)
+    resolved = _resolved()
+    _feed_levels_soon(rig.ib._depth_ticker)
+    await rig.transport.depth_snapshot(resolved)
+    await asyncio.sleep(_PAST_IDLE)
+    assert len(rig.ib._cancel_mkt_depth_calls) == 1
+    assert rig.ib._cancel_mkt_depth_calls[0] is resolved.native
+
+
+async def test_tick_by_tick_receives_native_contract() -> None:
+    rig = _real_rig()
+    trades: list[object] = []
+    async with rig.gateway.subscribe_trades("AAPL-USD", trades.append):
+        assert len(rig.ib.req_tick_by_tick_calls) == 1
+        contract = rig.ib.req_tick_by_tick_calls[0]
+        assert not isinstance(contract, ResolvedContract)
+        assert contract.conId == 265598
+        # Deliver one trade tick: the trade callback reads conId from the contract it was given.
+        ticker = rig.ib._tick_ticker
+        ticker.tickByTicks = [
+            SimpleNamespace(time=datetime(2026, 1, 2, 15, 30, tzinfo=UTC), price=150.0, size=10.0)
+        ]
+        ticker.updateEvent(ticker)
+    assert len(trades) == 1
+
+
+async def test_historical_bars_receive_native_contract() -> None:
+    rig = _real_rig()
+    bar = SimpleNamespace(
+        date="20260102 15:30:00", open=1.0, high=2.0, low=0.5, close=1.5, volume=10
+    )
+    rig.ib.reqHistoricalDataAsync = AsyncMock(return_value=[bar])
+    await rig.gateway.get_candles("AAPL-USD", "1m", 1)
+    rig.ib.reqHistoricalDataAsync.assert_awaited_once()
+    contract = rig.ib.reqHistoricalDataAsync.call_args.args[0]
+    assert not isinstance(contract, ResolvedContract)
+    assert contract.conId == 265598

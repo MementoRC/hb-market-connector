@@ -39,6 +39,7 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     MarketDataTimeoutError,
     OrderRejectedError,
 )
+from market_connector.contracts.protocols import ResolvedContract
 from market_connector.hb_compat.event_bus import EventBus
 from market_connector.hb_compat.logging import get_logger
 
@@ -63,6 +64,11 @@ def _stream_key(contract: Any) -> Hashable:
     """Registry key for a contract: its stable IB id, not the (possibly unhashable) object."""
     contract_id: Hashable | None = getattr(contract, "contract_id", None)
     return contract_id if contract_id else contract
+
+
+def _native(contract: Any) -> Any:
+    """Unwrap a ResolvedContract to the ib_async Contract IB calls expect."""
+    return contract.native if isinstance(contract, ResolvedContract) else contract
 
 
 @dataclass(frozen=True)
@@ -769,7 +775,7 @@ class IbGatewayTransport:
 
     def _issue_stream(self, sub: _ActiveSubscription) -> None:
         """Send the IB request for a trades *sub* and hook the resulting ticker."""
-        ticker = self._ib.reqTickByTickData(sub.contract, "AllLast", 0, False)
+        ticker = self._ib.reqTickByTickData(_native(sub.contract), "AllLast", 0, False)
         ticker.updateEvent += sub.dispatch
         sub.ticker = ticker
 
@@ -781,7 +787,7 @@ class IbGatewayTransport:
 
     def _cancel_stream(self, sub: _ActiveSubscription) -> None:
         """Cancel the IB-side tick-by-tick stream for a trades *sub*."""
-        self._ib.cancelTickByTickData(sub.contract, "AllLast")
+        self._ib.cancelTickByTickData(_native(sub.contract), "AllLast")
 
     def resubscribe_all(self, *, cancel_old: bool = True) -> None:
         """Re-issue every open IB request on a fresh ticker.
@@ -822,9 +828,9 @@ class IbGatewayTransport:
     def _request_persistent(self, stream: _Stream, *, depth: bool) -> None:
         """Send the reqMktDepth / reqMktData request and hook its ticker."""
         if depth:
-            ticker = self._ib.reqMktDepth(stream.contract, numRows=_DEPTH_ROWS, isSmartDepth=True)
+            ticker = self._ib.reqMktDepth(_native(stream.contract), numRows=_DEPTH_ROWS, isSmartDepth=True)
         else:
-            ticker = self._ib.reqMktData(stream.contract)
+            ticker = self._ib.reqMktData(_native(stream.contract))
         ticker.updateEvent += stream.hook
         stream.ticker = ticker
 
@@ -835,9 +841,9 @@ class IbGatewayTransport:
 
     def _cancel_persistent(self, stream: _Stream, *, depth: bool) -> None:
         if depth:
-            self._ib.cancelMktDepth(stream.contract, isSmartDepth=True)
+            self._ib.cancelMktDepth(_native(stream.contract), isSmartDepth=True)
         else:
-            self._ib.cancelMktData(stream.contract)
+            self._ib.cancelMktData(_native(stream.contract))
 
     # -- persistent streams -------------------------------------------------
 

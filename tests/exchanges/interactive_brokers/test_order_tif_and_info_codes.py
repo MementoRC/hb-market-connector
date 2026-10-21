@@ -172,9 +172,7 @@ class TestInfoCodeThenFill:
         ib.errorEvent(_ORDER_ID, 10349, _INFO_MSG, None)
         await asyncio.sleep(0.05)
 
-        ib.execDetailsEvent(
-            ib.trade, make_fill("e1.01", order_id=_ORDER_ID, shares=10, cum_qty=10)
-        )
+        ib.execDetailsEvent(ib.trade, make_fill("e1.01", order_id=_ORDER_ID, shares=10, cum_qty=10))
         ib.trade.set_status("Filled", perm_id=99, filled=10.0)
         ib.trade.statusEvent(ib.trade)
 

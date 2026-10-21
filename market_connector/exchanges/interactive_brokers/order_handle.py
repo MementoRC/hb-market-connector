@@ -8,6 +8,10 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from market_connector.exchanges.interactive_brokers._error_router import (
+    INFORMATIONAL_ORDER_CODES,
+)
+
 if TYPE_CHECKING:
     from ib_async import Trade
 
@@ -34,6 +38,17 @@ _TRADE_STATUS_MAP: dict[str, IBOrderState] = {
 }
 
 
+def is_synthetic_cancel(trade: Trade) -> bool:
+    """True when ib_async cancelled a live order locally on an informational code.
+
+    IB has not cancelled anything (no permId yet, and IB goes on to work the order),
+    so such a trade must not be reported as CANCELLED.
+    """
+    if trade.orderStatus.status != "Cancelled" or trade.order.permId:
+        return False
+    return any(entry.errorCode in INFORMATIONAL_ORDER_CODES for entry in trade.log)
+
+
 @dataclass(frozen=True)
 class OrderHandle:
     order_id: int
@@ -46,10 +61,13 @@ class OrderHandle:
     @classmethod
     def from_trade(cls, trade: Trade) -> OrderHandle:
         raw = trade.orderStatus.status
-        try:
-            base_state = _TRADE_STATUS_MAP[raw]
-        except KeyError as exc:
-            raise ValueError(f"Unknown IB order status: {raw}") from exc
+        if is_synthetic_cancel(trade):
+            base_state = IBOrderState.PENDING
+        else:
+            try:
+                base_state = _TRADE_STATUS_MAP[raw]
+            except KeyError as exc:
+                raise ValueError(f"Unknown IB order status: {raw}") from exc
         filled = Decimal(str(trade.orderStatus.filled))
         # promote to PARTIALLY_FILLED if fills present but base state is SUBMITTED
         if base_state is IBOrderState.SUBMITTED and filled > 0:

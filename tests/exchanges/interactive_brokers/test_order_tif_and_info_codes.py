@@ -14,6 +14,9 @@ errorCode=10349) even though IB goes on to fill the order. These tests pin:
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import sys
+import types
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -39,6 +42,15 @@ from ._doubles import FakeEvent, MockIb, make_fill
 _IB_PATH = "market_connector.exchanges.interactive_brokers.transport.IB"
 _INFO_MSG = "Order TIF was set to DAY based on order preset."
 _ORDER_ID = 7
+
+
+@pytest.fixture(autouse=True)
+def _ib_async_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``ib_async.Order`` when ib_async is not installed (e.g. CI py312)."""
+    if importlib.util.find_spec("ib_async") is None:
+        stub = types.ModuleType("ib_async")
+        stub.Order = MagicMock  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "ib_async", stub)
 
 
 def _market_order() -> HBOrder:

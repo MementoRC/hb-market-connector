@@ -1009,7 +1009,9 @@ class IbGatewayTransport:
             if remaining <= 0:
                 if stream.permission_warning is not None:
                     code, msg = stream.permission_warning
-                    self._fail_stream(stream, depth=depth)
+                    # Shared depth streams may feed other holders: release only if sole holder.
+                    if stream.refs <= 1:
+                        self._fail_stream(stream, depth=depth)
                     raise MarketDataPermissionError(code, msg)
                 raise MarketDataTimeoutError(
                     0, f"no {what} for {stream.contract!r} within {self._spec.market_data_timeout}s"

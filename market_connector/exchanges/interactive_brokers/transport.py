@@ -37,6 +37,7 @@ from market_connector.contracts.protocols import ResolvedContract
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
+    MarketDataPermissionError,
     MarketDataTimeoutError,
     OrderRejectedError,
 )
@@ -111,6 +112,12 @@ _MAX_TRACKED_EXECUTIONS = 10_000
 
 # Depth rows requested per side (reqMktDepth numRows); the own book is truncated to this.
 _DEPTH_ROWS = 10
+
+# Market-data permission codes reported against a persistent stream's reqId (issue #75).
+# HARD: the stream can never produce data. SOFT: IB may still deliver partial data, so
+# only a waiter that times out fails (with the remembered code and text).
+_HARD_PERMISSION_CODES = frozenset({354})
+_SOFT_PERMISSION_CODES = frozenset({2152, 10089, 10090})
 
 
 @dataclass(frozen=True)
@@ -258,6 +265,10 @@ class _Stream:
     asks: list[tuple[Decimal, Decimal]] = field(default_factory=list)
     refs: int = 0
     idle: asyncio.TimerHandle | None = None
+    # IB reqId of the current ticker (keys the transport's reqId map) and the last SOFT
+    # permission warning (code, text) IB sent against it.
+    req_id: int | None = None
+    permission_warning: tuple[int, str] | None = None
 
     def wake(self) -> None:
         """Wake every coroutine waiting for new data on this stream."""
@@ -296,6 +307,8 @@ class IbGatewayTransport:
         # Persistent per-contract streams: one L1 ticker and one shared depth stream each.
         self._l1_streams: dict[Hashable, _Stream] = {}
         self._depth_streams: dict[Hashable, _Stream] = {}
+        # IB reqId -> (stream, is_depth) for the streams' current requests; errors route by it.
+        self._stream_by_req_id: dict[int, tuple[_Stream, bool]] = {}
         # Fill de-duplication: execId base (final ".NN" removed) -> last full execId.
         self._seen_fills: OrderedDict[str, str] = OrderedDict()
         self._seen_fees: OrderedDict[str, None] = OrderedDict()
@@ -308,6 +321,7 @@ class IbGatewayTransport:
         self._error_router._data_lost_listeners.append(self._on_data_lost)
         self._error_router._farm_listeners.append(self._on_farm_status)
         self._error_router._depth_reset_listeners.append(self._clear_depth_books)
+        self._error_router._stream_error_listeners.append(self._on_stream_error)
 
     @property
     def is_connected(self) -> bool:
@@ -819,6 +833,7 @@ class IbGatewayTransport:
             self._unhook_persistent(stream)
             stream.bids.clear()
             stream.asks.clear()
+            stream.permission_warning = None
             if cancel_old:
                 self._cancel_persistent(stream, depth=depth)
             self._request_persistent(stream, depth=depth)
@@ -835,11 +850,19 @@ class IbGatewayTransport:
             ticker = self._ib.reqMktData(_native(stream.contract))
         ticker.updateEvent += stream.hook
         stream.ticker = ticker
+        req_id = self._ib.wrapper.ticker2ReqId["mktDepth" if depth else "mktData"].get(ticker)
+        if req_id is not None:
+            stream.req_id = req_id
+            self._stream_by_req_id[req_id] = (stream, depth)
 
     def _unhook_persistent(self, stream: _Stream) -> None:
+        """Detach the stream's hook and forget its reqId: the current request is going away."""
         if stream.ticker is not None:
             stream.ticker.updateEvent -= stream.hook
             stream.ticker = None
+        if stream.req_id is not None:
+            self._stream_by_req_id.pop(stream.req_id, None)
+            stream.req_id = None
 
     def _cancel_persistent(self, stream: _Stream, *, depth: bool) -> None:
         if depth:
@@ -869,6 +892,32 @@ class IbGatewayTransport:
             self._cancel_persistent(stream, depth=depth)
         except Exception as exc:
             logger.warning("IB cancel of stream %r failed: %s", stream.contract, exc)
+
+    def _fail_stream(
+        self, stream: _Stream, *, depth: bool, exc: MarketDataPermissionError | None = None
+    ) -> None:
+        """Release *stream* after a permission problem: fail waiters with *exc*, cancel, forget."""
+        if exc is not None:
+            for fut in stream.waiters:
+                if not fut.done():
+                    fut.set_exception(exc)
+        streams = self._depth_streams if depth else self._l1_streams
+        if streams.get(_stream_key(stream.contract)) is stream:
+            self._drop_stream(streams, stream, depth=depth)
+
+    def _on_stream_error(self, req_id: int, code: int, msg: str) -> None:
+        """Route a permission code IB reported against a persistent stream's reqId.
+
+        Matches by reqId and code only; unknown reqIds (including -1) and other codes are ignored.
+        """
+        entry = self._stream_by_req_id.get(req_id)
+        if entry is None:
+            return
+        stream, depth = entry
+        if code in _HARD_PERMISSION_CODES:
+            self._fail_stream(stream, depth=depth, exc=MarketDataPermissionError(code, msg))
+        elif code in _SOFT_PERMISSION_CODES:
+            stream.permission_warning = (code, msg)
 
     def _acquire_depth(self, contract: Any) -> _Stream:
         """Return the contract's shared depth stream (opening it) with one more user."""
@@ -941,10 +990,14 @@ class IbGatewayTransport:
             stream.bids.clear()
             stream.asks.clear()
 
-    async def _wait_for(self, stream: _Stream, ready: Callable[[], Any], what: str) -> Any:
+    async def _wait_for(
+        self, stream: _Stream, ready: Callable[[], Any], what: str, *, depth: bool
+    ) -> Any:
         """Return ``ready()`` once it is not None, waking on *stream* updates.
 
-        Raises MarketDataTimeoutError after ``market_data_timeout`` seconds.
+        Raises MarketDataTimeoutError after ``market_data_timeout`` seconds, or
+        MarketDataPermissionError (releasing the stream) if IB flagged a SOFT
+        permission problem on it and no data arrived.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._spec.market_data_timeout
@@ -954,6 +1007,10 @@ class IbGatewayTransport:
                 return result
             remaining = deadline - loop.time()
             if remaining <= 0:
+                if stream.permission_warning is not None:
+                    code, msg = stream.permission_warning
+                    self._fail_stream(stream, depth=depth)
+                    raise MarketDataPermissionError(code, msg)
                 raise MarketDataTimeoutError(
                     0, f"no {what} for {stream.contract!r} within {self._spec.market_data_timeout}s"
                 )
@@ -990,7 +1047,9 @@ class IbGatewayTransport:
                 return Decimal(str(bid)), Decimal(str(ask))
             return None
 
-        result: tuple[Decimal, Decimal] = await self._wait_for(stream, ready, "top of book")
+        result: tuple[Decimal, Decimal] = await self._wait_for(
+            stream, ready, "top of book", depth=False
+        )
         return result
 
     def _wake_l1(self, key: Hashable) -> None:
@@ -1016,7 +1075,7 @@ class IbGatewayTransport:
         try:
             result: tuple[
                 list[tuple[Decimal, Decimal]], list[tuple[Decimal, Decimal]]
-            ] = await self._wait_for(stream, ready, "depth")
+            ] = await self._wait_for(stream, ready, "depth", depth=True)
             return result
         finally:
             self._release_depth(stream)

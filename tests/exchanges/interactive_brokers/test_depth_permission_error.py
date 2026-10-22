@@ -1,24 +1,26 @@
-"""Acceptance tests for issue #75: permission errors must reach the waiting market-data request.
+"""Acceptance tests for issue #75: IB permission errors must reach the waiting market-data request.
 
-IB reports "Need additional market data permissions" (2152) and "not subscribed" (354) against
-the reqId of a market-data request. Today the router only fails waiters registered in
-``_pending_request_waiters``; the persistent depth and L1 streams register none, so the error is
-dropped and the caller waits out ``market_data_timeout`` and gets MarketDataTimeoutError.
+IB reports market-data permission problems against the reqId of a market-data request. The
+codes split into two groups, and the tests pin the difference:
 
-Pinned expectations (these tests are RED until the fix lands):
-- The waiting depth / L1 call raises MarketDataPermissionError promptly, not after the timeout.
-- The message keeps IB's text and the ``[IB <code>]`` prefix; ``error_code`` carries the code.
-- The released depth stream is cancelled at IB and forgotten by the transport.
-- Connection state is untouched and unrelated waiters keep waiting.
-- A permission error with reqId -1 (not tied to a request) is harmless.
+- HARD (354 "not subscribed"): the request can never produce data. The waiting depth / L1
+  call raises MarketDataPermissionError promptly, the released depth stream is cancelled at
+  IB and forgotten by the transport.
+- SOFT (2152 / 10089 / 10090 for depth, 10167 for L1): IB still delivers what it can, so a
+  waiter keeps waiting. It only fails, with MarketDataPermissionError, if no data arrives
+  before ``market_data_timeout``.
 
-The fake IB does not assign request ids, so ``_number_requests`` gives each reqMktDepth /
-reqMktData call a request id; tests inject errors against that id, as IB would.
+Also pinned: the message keeps IB's text and the ``[IB <code>]`` prefix, the connection is
+untouched, unrelated waiters keep waiting, and a permission error with reqId -1 is harmless.
+
+The fake IB assigns ib_async-style request ids (``_depth_req_ids`` / ``_mkt_data_req_ids``);
+tests inject IB errors against those ids, as IB would.
 """
 
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -31,47 +33,37 @@ from .test_persistent_market_data import (
     _EXPECTED_BIDS,
     Rig,
     _feed_levels,
+    _fire,
+    _set_l1,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
 
-    from ._doubles import MockIb
+    from ._doubles import FakeTicker
 
-_MARKET_DATA_TIMEOUT = 30.0  # far beyond the bound below: a timeout-based failure cannot pass
-_PROMPT = 2.0  # seconds a permission error must take to surface
+_MARKET_DATA_TIMEOUT = 30.0  # far beyond the bounds below: a timeout-based failure cannot pass
+_PROMPT = 2.0  # seconds within which a permission error must surface
+_SHORT_TIMEOUT = 0.3  # market_data_timeout for the no-data soft-code test
 
 _MSG_2152 = (
     "Exchanges - Top: IBEOS; OVERNIGHT; Need additional market data permissions - "
     "Depth: NASDAQ; BATS; ARCA"
 )
 _MSG_354 = "Requested market data is not subscribed."
+_MSG_10089 = "Requested market data requires additional subscription for API."
+_MSG_10090 = "Part of requested market data is not subscribed. Other ticks are still active."
+_MSG_10167 = "Requested market data is not subscribed. Displaying delayed market data."
+
+_SOFT_DEPTH = [(2152, _MSG_2152), (10089, _MSG_10089), (10090, _MSG_10090)]
 
 
-def _number_requests(ib: MockIb) -> dict[str, list[int]]:
-    """Give each reqMktDepth / reqMktData call the request id the connector sent to IB."""
-    ids: dict[str, list[int]] = {"depth": [], "l1": []}
-    next_id = iter(range(1001, 100_000))
-    send_depth, send_l1 = ib.reqMktDepth, ib.reqMktData
-
-    def req_depth(contract: Any, numRows: int = 10, isSmartDepth: bool = True) -> Any:  # noqa: N803
-        ids["depth"].append(next(next_id))
-        return send_depth(contract, numRows=numRows, isSmartDepth=isSmartDepth)
-
-    def req_l1(contract: Any, *args: Any, **kwargs: Any) -> Any:
-        ids["l1"].append(next(next_id))
-        return send_l1(contract, *args, **kwargs)
-
-    ib.reqMktDepth = req_depth
-    ib.reqMktData = req_l1
-    return ids
-
-
-async def _started_rig() -> tuple[Rig, dict[str, list[int]]]:
-    """Connected gateway (router attached to errorEvent) over the fake IB, requests numbered."""
-    rig = _real_rig(market_data_timeout=_MARKET_DATA_TIMEOUT)
+async def _started_rig(**spec_kwargs: Any) -> Rig:
+    """Connected gateway (router attached to errorEvent) over the fake IB."""
+    spec_kwargs.setdefault("market_data_timeout", _MARKET_DATA_TIMEOUT)
+    rig = _real_rig(**spec_kwargs)
     await rig.gateway.start()
-    return rig, _number_requests(rig.ib)
+    return rig
 
 
 async def _request_id(request_ids: list[int]) -> int:
@@ -83,22 +75,29 @@ async def _request_id(request_ids: list[int]) -> int:
     raise AssertionError("connector never sent the market data request")
 
 
-async def _fails_on_request(
-    rig: Rig,
-    call: Coroutine[Any, Any, Any],
-    request_ids: list[int],
-    code: int,
-    msg: str,
+async def _exception_within(task: asyncio.Future[Any], seconds: float) -> BaseException:
+    """Return the error *task* fails with; fail if it has none or is not done in time."""
+    done, _ = await asyncio.wait({task}, timeout=seconds)
+    if not done:
+        pytest.fail(f"no outcome within {seconds}s: the error did not reach the waiter")
+    exc = task.exception()
+    if exc is None:
+        pytest.fail(f"expected an error, got result {task.result()!r}")
+    return exc
+
+
+async def _hard_error(
+    rig: Rig, call: Coroutine[Any, Any, Any], request_ids: list[int], code: int, msg: str
 ) -> MarketDataPermissionError:
     """Run *call*, inject IB error *code* against its request id; return the prompt failure."""
     task = asyncio.ensure_future(call)
     try:
         rig.ib.errorEvent(await _request_id(request_ids), code, msg, None)
-        with pytest.raises(MarketDataPermissionError) as info:
-            await asyncio.wait_for(task, _PROMPT)
-        return info.value
+        exc = await _exception_within(task, _PROMPT)
     finally:
         await _cancel(task)
+    assert isinstance(exc, MarketDataPermissionError), repr(exc)
+    return exc
 
 
 async def _cancel(*tasks: asyncio.Future[Any]) -> None:
@@ -107,65 +106,66 @@ async def _cancel(*tasks: asyncio.Future[Any]) -> None:
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-# --------------------------------------------------------------------------- depth
+def _quote_later(ticker: FakeTicker, bid: float, ask: float, delay: float = 0.01) -> None:
+    """Deliver an L1 quote update shortly after the stream under test has been opened."""
+
+    def deliver() -> None:
+        _set_l1(ticker, bid, ask)
+        _fire(ticker)
+
+    asyncio.get_running_loop().call_later(delay, deliver)
 
 
-@pytest.mark.parametrize(("code", "msg"), [(2152, _MSG_2152), (354, _MSG_354)])
-async def test_depth_snapshot_raises_permission_error_promptly(code: int, msg: str) -> None:
-    rig, ids = await _started_rig()
-    resolved = _resolved()
-    await _fails_on_request(rig, rig.transport.depth_snapshot(resolved), ids["depth"], code, msg)
-
-
-async def test_get_orderbook_raises_permission_error_promptly() -> None:
-    rig, ids = await _started_rig()
-    await _fails_on_request(
-        rig, rig.gateway.get_orderbook("AAPL-USD"), ids["depth"], 2152, _MSG_2152
-    )
-
-
-async def test_permission_error_message_keeps_ib_text_and_code() -> None:
-    rig, ids = await _started_rig()
-    exc = await _fails_on_request(
-        rig, rig.transport.depth_snapshot(_resolved()), ids["depth"], 2152, _MSG_2152
-    )
-    assert exc.error_code == 2152
-    assert "Need additional market data permissions" in str(exc)
-    assert str(exc).startswith("[IB 2152]")
-
-
-async def test_depth_stream_is_cancelled_and_forgotten_after_permission_error() -> None:
-    rig, ids = await _started_rig()
-    resolved = _resolved()
-    await _fails_on_request(
-        rig, rig.transport.depth_snapshot(resolved), ids["depth"], 2152, _MSG_2152
-    )
+def _assert_depth_released(rig: Rig, resolved: Any) -> None:
     assert len(rig.ib._cancel_mkt_depth_calls) == 1
     assert rig.ib._cancel_mkt_depth_calls[0] is resolved.native
     assert rig.transport._depth_streams == {}
 
 
-# ------------------------------------------------------------------------------- L1
+# --------------------------------------------------------------------------- hard 354: depth
 
 
-@pytest.mark.parametrize(("code", "msg"), [(354, _MSG_354), (2152, _MSG_2152)])
-async def test_l1_mid_price_raises_permission_error_promptly(code: int, msg: str) -> None:
-    rig, ids = await _started_rig()
-    exc = await _fails_on_request(rig, rig.gateway.get_mid_price("AAPL-USD"), ids["l1"], code, msg)
-    assert exc.error_code == code
+async def test_hard_354_depth_snapshot_raises_permission_error_promptly() -> None:
+    rig = await _started_rig()
+    await _hard_error(
+        rig, rig.transport.depth_snapshot(_resolved()), rig.ib._depth_req_ids, 354, _MSG_354
+    )
 
 
-# ------------------------------------------------------- connection and other waiters
+async def test_hard_354_get_orderbook_raises_permission_error_promptly() -> None:
+    rig = await _started_rig()
+    await _hard_error(
+        rig, rig.gateway.get_orderbook("AAPL-USD"), rig.ib._depth_req_ids, 354, _MSG_354
+    )
 
 
-async def test_permission_error_leaves_connection_and_other_waiters_alone() -> None:
-    rig, ids = await _started_rig()
+async def test_hard_354_message_keeps_ib_text_and_code() -> None:
+    rig = await _started_rig()
+    exc = await _hard_error(
+        rig, rig.transport.depth_snapshot(_resolved()), rig.ib._depth_req_ids, 354, _MSG_354
+    )
+    assert exc.error_code == 354
+    assert str(exc).startswith("[IB 354]")
+    assert _MSG_354 in str(exc)
+
+
+async def test_hard_354_depth_stream_is_cancelled_and_forgotten() -> None:
+    rig = await _started_rig()
+    resolved = _resolved()
+    await _hard_error(
+        rig, rig.transport.depth_snapshot(resolved), rig.ib._depth_req_ids, 354, _MSG_354
+    )
+    _assert_depth_released(rig, resolved)
+
+
+async def test_hard_354_on_depth_leaves_connection_and_other_waiters_alone() -> None:
+    rig = await _started_rig()
     events: list[object] = []
     handle = rig.transport.subscribe_connection_state(events.append)
     other = asyncio.ensure_future(rig.transport.top_of_book(_resolved(272093, "MSFT")))
     try:
-        await _fails_on_request(
-            rig, rig.transport.depth_snapshot(_resolved()), ids["depth"], 2152, _MSG_2152
+        await _hard_error(
+            rig, rig.transport.depth_snapshot(_resolved()), rig.ib._depth_req_ids, 354, _MSG_354
         )
         assert rig.transport.is_connected
         assert events == []
@@ -175,14 +175,71 @@ async def test_permission_error_leaves_connection_and_other_waiters_alone() -> N
         await _cancel(other)
 
 
-async def test_permission_error_without_request_id_is_harmless() -> None:
-    rig, ids = await _started_rig()
+# ------------------------------------------------------------------- soft codes: depth
+
+
+@pytest.mark.parametrize(("code", "msg"), _SOFT_DEPTH)
+async def test_soft_depth_code_returns_snapshot_when_levels_arrive(code: int, msg: str) -> None:
+    rig = await _started_rig()
+    task = asyncio.ensure_future(rig.transport.depth_snapshot(_resolved()))
+    try:
+        rig.ib.errorEvent(await _request_id(rig.ib._depth_req_ids), code, msg, None)
+        _feed_levels(rig.ib._depth_ticker)
+        assert await asyncio.wait_for(task, _PROMPT) == (_EXPECTED_BIDS, _EXPECTED_ASKS)
+    finally:
+        await _cancel(task)
+
+
+async def test_soft_2152_without_data_raises_permission_error_at_timeout() -> None:
+    rig = await _started_rig(market_data_timeout=_SHORT_TIMEOUT)
+    resolved = _resolved()
+    task = asyncio.ensure_future(rig.transport.depth_snapshot(resolved))
+    try:
+        rig.ib.errorEvent(await _request_id(rig.ib._depth_req_ids), 2152, _MSG_2152, None)
+        exc = await _exception_within(task, _PROMPT)
+    finally:
+        await _cancel(task)
+    assert isinstance(exc, MarketDataPermissionError), repr(exc)
+    assert exc.error_code == 2152
+    assert str(exc).startswith("[IB 2152]")
+    assert "Need additional market data permissions" in str(exc)
+    _assert_depth_released(rig, resolved)
+
+
+# ------------------------------------------------------------------------ L1 mid price
+
+
+async def test_hard_354_on_l1_mid_price_raises_permission_error_promptly() -> None:
+    rig = await _started_rig()
+    exc = await _hard_error(
+        rig, rig.gateway.get_mid_price("AAPL-USD"), rig.ib._mkt_data_req_ids, 354, _MSG_354
+    )
+    assert exc.error_code == 354
+
+
+async def test_soft_10167_on_l1_still_returns_mid_price_when_quotes_arrive() -> None:
+    rig = await _started_rig()
+    task = asyncio.ensure_future(rig.gateway.get_mid_price("AAPL-USD"))
+    try:
+        rig.ib.errorEvent(await _request_id(rig.ib._mkt_data_req_ids), 10167, _MSG_10167, None)
+        _quote_later(rig.ib._l1_ticker, 150.0, 150.5, delay=0.0)
+        assert await asyncio.wait_for(task, _PROMPT) == Decimal("150.25")
+    finally:
+        await _cancel(task)
+
+
+# ------------------------------------------------------- reqId -1 is not tied to a request
+
+
+@pytest.mark.parametrize(("code", "msg"), [(2152, _MSG_2152), (354, _MSG_354)])
+async def test_permission_error_without_request_id_is_harmless(code: int, msg: str) -> None:
+    rig = await _started_rig()
     events: list[object] = []
     handle = rig.transport.subscribe_connection_state(events.append)
     snapshot = asyncio.ensure_future(rig.transport.depth_snapshot(_resolved()))
     try:
-        await _request_id(ids["depth"])
-        rig.ib.errorEvent(-1, 2152, _MSG_2152, None)
+        await _request_id(rig.ib._depth_req_ids)
+        rig.ib.errorEvent(-1, code, msg, None)
         _feed_levels(rig.ib._depth_ticker)
         bids, asks = await asyncio.wait_for(snapshot, _PROMPT)
     finally:

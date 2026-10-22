@@ -17,7 +17,10 @@ Requires:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -31,6 +34,12 @@ if not os.environ.get("IB_GATEWAY_HOST"):
 
 from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+
+if TYPE_CHECKING:
+    from market_connector.contracts.instrument import InstrumentRef
+    from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
+
+logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.ib_gateway
 
@@ -61,6 +70,53 @@ async def test_paper_gateway_round_trip(paper_spec: IbConnectionSpec) -> None:
     assert not g.ready
 
 
+_FLATTEN_TIMEOUT_S = 30.0
+_SETTLE_TIMEOUT_S = 5.0
+
+
+async def _cancel_and_flatten(gateway: Any, ref: InstrumentRef, handle: OrderHandle) -> None:
+    """Cancel a still-working order, then offset any filled quantity with a MARKET SELL.
+
+    Waits (bounded) until the offsetting order is FILLED so the paper account ends flat.
+    """
+    from decimal import Decimal
+
+    from market_connector.exchanges.interactive_brokers.order_handle import (
+        IBOrderState,
+        OrderHandle,
+    )
+    from market_connector.orders import HBOrder, OrderType, TradeType
+
+    terminal = {IBOrderState.FILLED, IBOrderState.CANCELLED, IBOrderState.REJECTED}
+    current = OrderHandle.from_trade(handle._trade)
+    if current.status not in terminal:
+        try:
+            await gateway.cancel_order(current)
+        except Exception:
+            # cancel can race a fill (e.g. IB 161); still flatten whatever filled.
+            logger.exception("cancel_order failed during cleanup; continuing to flatten")
+        deadline = asyncio.get_running_loop().time() + _SETTLE_TIMEOUT_S
+        current = OrderHandle.from_trade(handle._trade)
+        while current.status not in terminal and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.25)
+            current = OrderHandle.from_trade(handle._trade)
+
+    if current.filled_qty <= 0:
+        return
+
+    offset = await gateway.place_order(
+        ref,
+        HBOrder(
+            order_type=OrderType.MARKET,
+            side=TradeType.SELL,
+            amount=Decimal(current.filled_qty),
+            price=None,
+        ),
+    )
+    if offset.status is not IBOrderState.FILLED:
+        offset = await offset.wait_for(status=IBOrderState.FILLED, timeout=_FLATTEN_TIMEOUT_S)
+
+
 @pytest.mark.asyncio
 async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> None:
     """Resolve AAPL, place a paper MARKET BUY 1 share, await SUBMITTED, cancel.
@@ -81,6 +137,9 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
 
     spec = paper_spec
     gateway = build_ib_gateway(spec)
+    placed: OrderHandle | None = None
+    ref: InstrumentRef | None = None
+    body_ok = False
 
     try:
         await gateway.start()
@@ -102,6 +161,7 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
             price=None,
         )
         handle = await gateway.place_order(ref, hb_order)
+        placed = handle
         assert handle.status in {IBOrderState.SUBMITTED, IBOrderState.FILLED}, (
             f"Unexpected status after place_order: {handle.status!r}"
         )
@@ -111,5 +171,19 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
         assert cancelled.status in {IBOrderState.CANCELLED, IBOrderState.FILLED}, (
             f"Unexpected status after cancel_order: {cancelled.status!r}"
         )
+        body_ok = True
     finally:
-        await gateway.stop()
+        try:
+            if placed is not None and ref is not None:
+                await _cancel_and_flatten(gateway, ref, placed)
+        except Exception as cleanup_exc:
+            if body_ok:
+                raise
+            # Never mask the original test failure with a cleanup error.
+            msg = (
+                f"Paper-account cleanup failed ({cleanup_exc!r}); "
+                "account may not be flat; check positions"
+            )
+            logger.exception(msg)
+        finally:
+            await gateway.stop()

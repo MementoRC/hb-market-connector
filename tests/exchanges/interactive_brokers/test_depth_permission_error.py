@@ -206,6 +206,27 @@ async def test_soft_2152_without_data_raises_permission_error_at_timeout() -> No
     _assert_depth_released(rig, resolved)
 
 
+async def test_soft_timeout_does_not_drop_depth_stream_shared_with_another_holder() -> None:
+    rig = await _started_rig(market_data_timeout=_SHORT_TIMEOUT)
+    resolved = _resolved()
+    # A long-lived depth subscriber holds the contract's shared stream before the snapshot.
+    holder = rig.transport.subscribe("depth", resolved, lambda _book: None)
+    task = asyncio.ensure_future(rig.transport.depth_snapshot(resolved))
+    try:
+        rig.ib.errorEvent(await _request_id(rig.ib._depth_req_ids), 2152, _MSG_2152, None)
+        exc = await _exception_within(task, _PROMPT)
+        assert isinstance(exc, MarketDataPermissionError), repr(exc)
+        assert exc.error_code == 2152
+        assert rig.ib._cancel_mkt_depth_calls == []
+        (surviving,) = rig.transport._depth_streams.values()
+        _feed_levels(rig.ib._depth_ticker)
+        assert list(surviving.bids) == _EXPECTED_BIDS
+        assert list(surviving.asks) == _EXPECTED_ASKS
+    finally:
+        await _cancel(task)
+        holder.close()
+
+
 # ------------------------------------------------------------------------ L1 mid price
 
 

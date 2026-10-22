@@ -17,7 +17,10 @@ Requires:
 
 from __future__ import annotations
 
+import logging
 import os
+import sys
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -31,6 +34,12 @@ if not os.environ.get("IB_GATEWAY_HOST"):
 
 from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+
+if TYPE_CHECKING:
+    from market_connector.contracts.instrument import InstrumentRef
+    from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
+
+logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.ib_gateway
 
@@ -61,6 +70,47 @@ async def test_paper_gateway_round_trip(paper_spec: IbConnectionSpec) -> None:
     assert not g.ready
 
 
+_FLATTEN_TIMEOUT_S = 30.0
+
+
+async def _cancel_and_flatten(gateway: Any, ref: InstrumentRef, handle: OrderHandle) -> None:
+    """Cancel a still-working order, then offset any filled quantity with a MARKET SELL.
+
+    Waits (bounded) until the offsetting order is FILLED so the paper account ends flat.
+    """
+    from decimal import Decimal
+
+    from market_connector.exchanges.interactive_brokers.order_handle import (
+        IBOrderState,
+        OrderHandle,
+    )
+    from market_connector.orders import HBOrder, OrderType, TradeType
+
+    current = OrderHandle.from_trade(handle._trade)
+    if current.status not in {
+        IBOrderState.FILLED,
+        IBOrderState.CANCELLED,
+        IBOrderState.REJECTED,
+    }:
+        await gateway.cancel_order(current)
+        current = OrderHandle.from_trade(handle._trade)
+
+    if current.filled_qty <= 0:
+        return
+
+    offset = await gateway.place_order(
+        ref,
+        HBOrder(
+            order_type=OrderType.MARKET,
+            side=TradeType.SELL,
+            amount=Decimal(current.filled_qty),
+            price=None,
+        ),
+    )
+    if offset.status is not IBOrderState.FILLED:
+        offset = await offset.wait_for(status=IBOrderState.FILLED, timeout=_FLATTEN_TIMEOUT_S)
+
+
 @pytest.mark.asyncio
 async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> None:
     """Resolve AAPL, place a paper MARKET BUY 1 share, await SUBMITTED, cancel.
@@ -81,6 +131,8 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
 
     spec = paper_spec
     gateway = build_ib_gateway(spec)
+    placed: OrderHandle | None = None
+    ref: InstrumentRef | None = None
 
     try:
         await gateway.start()
@@ -102,6 +154,7 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
             price=None,
         )
         handle = await gateway.place_order(ref, hb_order)
+        placed = handle
         assert handle.status in {IBOrderState.SUBMITTED, IBOrderState.FILLED}, (
             f"Unexpected status after place_order: {handle.status!r}"
         )
@@ -112,4 +165,13 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
             f"Unexpected status after cancel_order: {cancelled.status!r}"
         )
     finally:
-        await gateway.stop()
+        try:
+            if placed is not None and ref is not None:
+                await _cancel_and_flatten(gateway, ref, placed)
+        except Exception:
+            # Never mask an in-flight assertion failure with a cleanup error.
+            if sys.exc_info()[0] is None:
+                raise
+            logger.exception("Paper-account cleanup failed; account may not be flat")
+        finally:
+            await gateway.stop()

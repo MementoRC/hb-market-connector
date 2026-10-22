@@ -17,9 +17,9 @@ Requires:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-import sys
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -71,6 +71,7 @@ async def test_paper_gateway_round_trip(paper_spec: IbConnectionSpec) -> None:
 
 
 _FLATTEN_TIMEOUT_S = 30.0
+_SETTLE_TIMEOUT_S = 5.0
 
 
 async def _cancel_and_flatten(gateway: Any, ref: InstrumentRef, handle: OrderHandle) -> None:
@@ -86,14 +87,19 @@ async def _cancel_and_flatten(gateway: Any, ref: InstrumentRef, handle: OrderHan
     )
     from market_connector.orders import HBOrder, OrderType, TradeType
 
+    terminal = {IBOrderState.FILLED, IBOrderState.CANCELLED, IBOrderState.REJECTED}
     current = OrderHandle.from_trade(handle._trade)
-    if current.status not in {
-        IBOrderState.FILLED,
-        IBOrderState.CANCELLED,
-        IBOrderState.REJECTED,
-    }:
-        await gateway.cancel_order(current)
+    if current.status not in terminal:
+        try:
+            await gateway.cancel_order(current)
+        except Exception:
+            # cancel can race a fill (e.g. IB 161); still flatten whatever filled.
+            logger.exception("cancel_order failed during cleanup; continuing to flatten")
+        deadline = asyncio.get_running_loop().time() + _SETTLE_TIMEOUT_S
         current = OrderHandle.from_trade(handle._trade)
+        while current.status not in terminal and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.25)
+            current = OrderHandle.from_trade(handle._trade)
 
     if current.filled_qty <= 0:
         return
@@ -133,6 +139,7 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
     gateway = build_ib_gateway(spec)
     placed: OrderHandle | None = None
     ref: InstrumentRef | None = None
+    body_ok = False
 
     try:
         await gateway.start()
@@ -164,14 +171,19 @@ async def test_paper_aapl_resolve_place_cancel(paper_spec: IbConnectionSpec) -> 
         assert cancelled.status in {IBOrderState.CANCELLED, IBOrderState.FILLED}, (
             f"Unexpected status after cancel_order: {cancelled.status!r}"
         )
+        body_ok = True
     finally:
         try:
             if placed is not None and ref is not None:
                 await _cancel_and_flatten(gateway, ref, placed)
-        except Exception:
-            # Never mask an in-flight assertion failure with a cleanup error.
-            if sys.exc_info()[0] is None:
+        except Exception as cleanup_exc:
+            if body_ok:
                 raise
-            logger.exception("Paper-account cleanup failed; account may not be flat")
+            # Never mask the original test failure with a cleanup error.
+            msg = (
+                f"Paper-account cleanup failed ({cleanup_exc!r}); "
+                "account may not be flat; check positions"
+            )
+            logger.exception(msg)
         finally:
             await gateway.stop()

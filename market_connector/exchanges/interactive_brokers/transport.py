@@ -187,21 +187,22 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
     action = "BUY" if hb_order.side == TradeType.BUY else "SELL"
 
     if hb_order.order_type == OrderType.MARKET:
-        return Order(
-            action=action,
-            orderType="MKT",
-            totalQuantity=float(hb_order.amount),
-        )
+        market = Order(action=action, orderType="MKT", totalQuantity=float(hb_order.amount))
+        # Explicit DAY: without it IB answers 10349 and ib_async locally cancels the trade.
+        market.tif = "DAY"
+        return market
 
     if hb_order.order_type == OrderType.LIMIT:
         if hb_order.price is None:
             raise ValueError("LIMIT order requires non-None price")
-        return Order(
+        limit = Order(
             action=action,
             orderType="LMT",
             totalQuantity=float(hb_order.amount),
             lmtPrice=float(hb_order.price),
         )
+        limit.tif = "DAY"
+        return limit
 
     raise NotImplementedError(
         f"Order type {hb_order.order_type!r} not supported in Stage 2. "
@@ -619,12 +620,16 @@ class IbGatewayTransport:
         """
         from market_connector.exchanges.interactive_brokers.order_handle import (  # noqa: PLC0415
             OrderHandle,
+            is_synthetic_cancel,
         )
 
         fut: asyncio.Future[OrderHandle] = asyncio.get_running_loop().create_future()
         self._error_router._pending_order_waiters[trade.order.orderId] = fut
 
         def _on_status(*_args: Any) -> None:
+            # A synthetic cancel from an informational code is not IB's verdict; keep waiting.
+            if is_synthetic_cancel(trade):
+                return
             try:
                 new_handle = OrderHandle.from_trade(trade)
             except ValueError:

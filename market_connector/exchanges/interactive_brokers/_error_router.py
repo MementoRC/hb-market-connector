@@ -42,6 +42,11 @@ _ERROR_TABLE: dict[int, type[IbError]] = {
     10089: MarketDataPermissionError,
 }
 
+# Order-scoped informational codes: IB is telling us about a preset, not failing the
+# order. ib_async still flips the Trade to "Cancelled" locally for them, so they must
+# never fail an order waiter or be treated as a cancellation. 10349 = TIF set to DAY.
+INFORMATIONAL_ORDER_CODES = frozenset({10349})
+
 # Connectivity lost: 1100 (lost), 2110 (TWS-to-server broken), 502/504 (API socket).
 _CONNECTION_LOST_CODES = frozenset({1100, 2110, 502, 504})
 
@@ -140,6 +145,10 @@ class _ErrorRouter:
             logger.info("IB error %d (market depth reset): %s", code, msg)
             for reset_cb in list(self._depth_reset_listeners):
                 reset_cb()
+            return
+
+        if code in INFORMATIONAL_ORDER_CODES:
+            logger.info("IB order info %d: %s", code, msg)
             return
 
         if code in _CONNECTION_LOST_CODES:

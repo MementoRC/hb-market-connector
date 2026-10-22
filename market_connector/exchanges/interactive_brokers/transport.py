@@ -33,6 +33,7 @@ else:
     except ImportError:  # pragma: no cover - optional dep
         IB = None  # noqa: F841
 
+from market_connector.contracts.protocols import ResolvedContract
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
@@ -43,7 +44,7 @@ from market_connector.hb_compat.event_bus import EventBus
 from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Hashable
     from datetime import datetime
 
     from ib_async import Contract, Ticker
@@ -57,6 +58,17 @@ logger = get_logger(__name__)
 
 # EventBus topic carrying ConnectionStateEvent payloads.
 CONNECTION_TOPIC = "connection"
+
+
+def _stream_key(contract: Any) -> Hashable:
+    """Registry key for a contract: its stable IB id, not the (possibly unhashable) object."""
+    contract_id: Hashable | None = getattr(contract, "contract_id", None)
+    return contract_id if contract_id else contract
+
+
+def _native(contract: Any) -> Any:
+    """Unwrap a ResolvedContract to the ib_async Contract IB calls expect."""
+    return contract.native if isinstance(contract, ResolvedContract) else contract
 
 
 @dataclass(frozen=True)
@@ -282,8 +294,8 @@ class IbGatewayTransport:
         self._subscribe_seq: int = 0
         self._subscriptions: dict[str, _ActiveSubscription] = {}
         # Persistent per-contract streams: one L1 ticker and one shared depth stream each.
-        self._l1_streams: dict[Any, _Stream] = {}
-        self._depth_streams: dict[Any, _Stream] = {}
+        self._l1_streams: dict[Hashable, _Stream] = {}
+        self._depth_streams: dict[Hashable, _Stream] = {}
         # Fill de-duplication: execId base (final ".NN" removed) -> last full execId.
         self._seen_fills: OrderedDict[str, str] = OrderedDict()
         self._seen_fees: OrderedDict[str, None] = OrderedDict()
@@ -763,7 +775,7 @@ class IbGatewayTransport:
 
     def _issue_stream(self, sub: _ActiveSubscription) -> None:
         """Send the IB request for a trades *sub* and hook the resulting ticker."""
-        ticker = self._ib.reqTickByTickData(sub.contract, "AllLast", 0, False)
+        ticker = self._ib.reqTickByTickData(_native(sub.contract), "AllLast", 0, False)
         ticker.updateEvent += sub.dispatch
         sub.ticker = ticker
 
@@ -775,7 +787,7 @@ class IbGatewayTransport:
 
     def _cancel_stream(self, sub: _ActiveSubscription) -> None:
         """Cancel the IB-side tick-by-tick stream for a trades *sub*."""
-        self._ib.cancelTickByTickData(sub.contract, "AllLast")
+        self._ib.cancelTickByTickData(_native(sub.contract), "AllLast")
 
     def resubscribe_all(self, *, cancel_old: bool = True) -> None:
         """Re-issue every open IB request on a fresh ticker.
@@ -816,9 +828,11 @@ class IbGatewayTransport:
     def _request_persistent(self, stream: _Stream, *, depth: bool) -> None:
         """Send the reqMktDepth / reqMktData request and hook its ticker."""
         if depth:
-            ticker = self._ib.reqMktDepth(stream.contract, numRows=_DEPTH_ROWS, isSmartDepth=True)
+            ticker = self._ib.reqMktDepth(
+                _native(stream.contract), numRows=_DEPTH_ROWS, isSmartDepth=True
+            )
         else:
-            ticker = self._ib.reqMktData(stream.contract)
+            ticker = self._ib.reqMktData(_native(stream.contract))
         ticker.updateEvent += stream.hook
         stream.ticker = ticker
 
@@ -829,9 +843,9 @@ class IbGatewayTransport:
 
     def _cancel_persistent(self, stream: _Stream, *, depth: bool) -> None:
         if depth:
-            self._ib.cancelMktDepth(stream.contract, isSmartDepth=True)
+            self._ib.cancelMktDepth(_native(stream.contract), isSmartDepth=True)
         else:
-            self._ib.cancelMktData(stream.contract)
+            self._ib.cancelMktData(_native(stream.contract))
 
     # -- persistent streams -------------------------------------------------
 
@@ -841,9 +855,11 @@ class IbGatewayTransport:
             for stream in list(streams.values()):
                 self._drop_stream(streams, stream, depth=depth)
 
-    def _drop_stream(self, streams: dict[Any, _Stream], stream: _Stream, *, depth: bool) -> None:
+    def _drop_stream(
+        self, streams: dict[Hashable, _Stream], stream: _Stream, *, depth: bool
+    ) -> None:
         """Forget *stream*, stop its timer, detach its hook and cancel it at IB."""
-        streams.pop(stream.contract, None)
+        streams.pop(_stream_key(stream.contract), None)
         if stream.idle is not None:
             stream.idle.cancel()
             stream.idle = None
@@ -856,15 +872,16 @@ class IbGatewayTransport:
 
     def _acquire_depth(self, contract: Any) -> _Stream:
         """Return the contract's shared depth stream (opening it) with one more user."""
-        stream = self._depth_streams.get(contract)
+        key = _stream_key(contract)
+        stream = self._depth_streams.get(key)
         if stream is None:
 
-            def hook(ticker: Any, _contract: Any = contract) -> None:
-                self._on_depth_update(self._depth_streams.get(_contract), ticker)
+            def hook(ticker: Any, _key: Hashable = key) -> None:
+                self._on_depth_update(self._depth_streams.get(_key), ticker)
 
             stream = _Stream(contract=contract, hook=hook)
             self._request_persistent(stream, depth=True)
-            self._depth_streams[contract] = stream
+            self._depth_streams[key] = stream
         if stream.idle is not None:
             stream.idle.cancel()
             stream.idle = None
@@ -874,7 +891,7 @@ class IbGatewayTransport:
     def _release_depth(self, stream: _Stream) -> None:
         """Drop one user; the last one arms the idle-release timer."""
         stream.refs -= 1
-        if stream.refs > 0 or self._depth_streams.get(stream.contract) is not stream:
+        if stream.refs > 0 or self._depth_streams.get(_stream_key(stream.contract)) is not stream:
             return
         if stream.idle is not None:
             stream.idle.cancel()
@@ -888,7 +905,7 @@ class IbGatewayTransport:
 
     def _idle_expired(self, stream: _Stream) -> None:
         stream.idle = None
-        if stream.refs <= 0 and self._depth_streams.get(stream.contract) is stream:
+        if stream.refs <= 0 and self._depth_streams.get(_stream_key(stream.contract)) is stream:
             self._drop_stream(self._depth_streams, stream, depth=True)
 
     def _on_depth_update(self, stream: _Stream | None, ticker: Any) -> None:
@@ -956,11 +973,12 @@ class IbGatewayTransport:
         Raises MarketDataTimeoutError when both sides are not valid within
         ``IbConnectionSpec.market_data_timeout``.
         """
-        stream = self._l1_streams.get(contract)
+        key = _stream_key(contract)
+        stream = self._l1_streams.get(key)
         if stream is None:
-            stream = _Stream(contract=contract, hook=lambda _ticker: self._wake_l1(contract))
+            stream = _Stream(contract=contract, hook=lambda _ticker: self._wake_l1(key))
             self._request_persistent(stream, depth=False)
-            self._l1_streams[contract] = stream
+            self._l1_streams[key] = stream
 
         def ready() -> tuple[Decimal, Decimal] | None:
             ticker = stream.ticker
@@ -975,8 +993,8 @@ class IbGatewayTransport:
         result: tuple[Decimal, Decimal] = await self._wait_for(stream, ready, "top of book")
         return result
 
-    def _wake_l1(self, contract: Any) -> None:
-        stream = self._l1_streams.get(contract)
+    def _wake_l1(self, key: Hashable) -> None:
+        stream = self._l1_streams.get(key)
         if stream is not None:
             stream.wake()
 

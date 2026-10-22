@@ -89,6 +89,9 @@ class MarketDataMixin:
         from market_connector.exchanges.interactive_brokers.interval_map import (  # noqa: PLC0415
             to_ib_bar_size,
         )
+        from market_connector.exchanges.interactive_brokers.transport import (  # noqa: PLC0415
+            _native,
+        )
         from market_connector.primitives import CandleData  # noqa: PLC0415
 
         bar_size = to_ib_bar_size(interval)  # raises InvalidIntervalError early for bad intervals
@@ -96,7 +99,7 @@ class MarketDataMixin:
         duration = _duration_string(interval, limit)
 
         bars = await self._transport._ib.reqHistoricalDataAsync(
-            contract,
+            _native(contract),
             endDateTime="",
             durationStr=duration,
             barSizeSetting=bar_size,

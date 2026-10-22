@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from market_connector.exchanges.interactive_brokers.transport import _native
 from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
@@ -121,7 +122,7 @@ class SubscriptionsMixin:
             try:
                 # ib_async TickByTickAllLast: time (datetime), price, size, exchange, conditions
                 tick_ns = int(tick.time.timestamp() * 1e9)  # type: ignore[attr-defined]
-                trade_id = _synthetic_trade_id(self._tick_counter, contract.conId, tick_ns)
+                trade_id = _synthetic_trade_id(self._tick_counter, _native(contract).conId, tick_ns)
                 # Late import to avoid circular dep.
                 from market_connector.primitives import TradeEvent, TradeType  # noqa: PLC0415
 

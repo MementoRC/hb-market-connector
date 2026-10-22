@@ -27,7 +27,9 @@ class IBOrderState(StrEnum):
 
 _TRADE_STATUS_MAP: dict[str, IBOrderState] = {
     "PendingSubmit": IBOrderState.PENDING,
-    "PreSubmitted": IBOrderState.PENDING,
+    # IB has accepted the order at PreSubmitted (permId assigned); only
+    # PendingSubmit/ApiPending are unacknowledged.
+    "PreSubmitted": IBOrderState.SUBMITTED,
     "PendingCancel": IBOrderState.PENDING,
     "Submitted": IBOrderState.SUBMITTED,
     "ApiPending": IBOrderState.SUBMITTED,

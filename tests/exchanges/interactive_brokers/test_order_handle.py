@@ -32,7 +32,7 @@ class TestTradeStatusMap:
         "raw,expected",
         [
             ("PendingSubmit", IBOrderState.PENDING),
-            ("PreSubmitted", IBOrderState.PENDING),
+            ("PreSubmitted", IBOrderState.SUBMITTED),
             ("PendingCancel", IBOrderState.PENDING),
             ("Submitted", IBOrderState.SUBMITTED),
             ("ApiPending", IBOrderState.SUBMITTED),

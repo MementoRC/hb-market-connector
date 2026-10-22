@@ -41,6 +41,17 @@ class FakeClient:
         self.connect_options.append(opts)
 
 
+class FakeWrapper:
+    """Minimal ib_async Wrapper: the request-id bookkeeping for live tickers."""
+
+    def __init__(self) -> None:
+        self.ticker2ReqId: dict[str, dict[FakeTicker, int]] = {  # noqa: N815
+            "mktData": {},
+            "mktDepth": {},
+        }
+        self.reqId2Ticker: dict[int, FakeTicker] = {}  # noqa: N815
+
+
 class MockIb:
     """Mock ib_async.IB instance supporting market data and historical data methods."""
 
@@ -77,6 +88,20 @@ class MockIb:
         self.cancel_mkt_depth_smart: list[bool] = []
         # Ordered "reqMktData"/"cancelMktData"/"cancelMktDepth"/"disconnect" markers.
         self.event_log: list[str] = []
+        # ib_async-style request ids: the wrapper maps each live ticker to its reqId.
+        self.wrapper = FakeWrapper()
+        self._next_req_id = 1001
+        # Request ids in send order, for injecting IB errors against a specific request.
+        self._depth_req_ids: list[int] = []
+        self._mkt_data_req_ids: list[int] = []
+
+    def _start_ticker(self, req_type: str, ticker: FakeTicker) -> int:
+        """Allocate the next reqId for *ticker* and record it as ib_async's wrapper does."""
+        req_id = self._next_req_id
+        self._next_req_id += 1
+        self.wrapper.ticker2ReqId[req_type][ticker] = req_id
+        self.wrapper.reqId2Ticker[req_id] = ticker
+        return req_id
 
     async def connectAsync(self, **kwargs: object) -> None:  # noqa: N802
         """Record connection parameters; fail while ``connect_failures`` > 0."""
@@ -123,6 +148,7 @@ class MockIb:
         """Return a pre-configured FakeTicker with domBids/domAsks."""
         self.req_mkt_depth_calls.append(contract)
         self.req_mkt_depth_smart.append(isSmartDepth)
+        self._depth_req_ids.append(self._start_ticker("mktDepth", self._depth_ticker))
         return self._depth_ticker
 
     def cancelMktDepth(self, contract: object, isSmartDepth: bool = True) -> None:  # noqa: N802, N803
@@ -142,6 +168,7 @@ class MockIb:
         """Return the pre-configured L1 FakeTicker (bid/ask/updateEvent)."""
         self.req_mkt_data_calls.append(contract)
         self.event_log.append("reqMktData")
+        self._mkt_data_req_ids.append(self._start_ticker("mktData", self._l1_ticker))
         return self._l1_ticker
 
     def cancelMktData(self, contract: object) -> None:  # noqa: N802

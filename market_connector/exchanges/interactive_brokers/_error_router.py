@@ -87,6 +87,8 @@ class _ErrorRouter:
         self._cancel_reasons: dict[int, str] = {}
         # Called as cb() on 317 (market depth RESET: listeners must empty their books).
         self._depth_reset_listeners: list[Callable[[], None]] = []
+        # Called as cb(req_id, code, msg) for every error; stream owners filter by reqId.
+        self._stream_error_listeners: list[Callable[[int, int, str], None]] = []
 
     @property
     def is_connected(self) -> bool:
@@ -122,6 +124,10 @@ class _ErrorRouter:
             for data_cb in list(self._data_lost_listeners):
                 data_cb(code, msg)
             return
+
+        # Persistent-stream owners match req_id against their live requests (-1 never matches).
+        for stream_cb in list(self._stream_error_listeners):
+            stream_cb(req_id, code, msg)
 
         # Code 10090: market data partially unavailable — log warning, do not raise.
         if code == 10090:

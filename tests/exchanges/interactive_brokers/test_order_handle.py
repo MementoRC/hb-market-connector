@@ -35,7 +35,7 @@ class TestTradeStatusMap:
             ("PreSubmitted", IBOrderState.SUBMITTED),
             ("PendingCancel", IBOrderState.PENDING),
             ("Submitted", IBOrderState.SUBMITTED),
-            ("ApiPending", IBOrderState.SUBMITTED),
+            ("ApiPending", IBOrderState.PENDING),
             ("Filled", IBOrderState.FILLED),
             ("Cancelled", IBOrderState.CANCELLED),
             ("ApiCancelled", IBOrderState.CANCELLED),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -72,6 +73,11 @@ class MockIb:
         self.executions_result: list[object] = []
         self.executions_error: Exception | None = None
         self.client = FakeClient(self)
+        # whatIfOrderAsync: (contract, order) calls, result served, optional error, hang switch.
+        self.what_if_calls: list[tuple[object, object]] = []
+        self.what_if_result: object = make_order_state()
+        self.what_if_error: Exception | None = None
+        self.what_if_hang: bool = False
         # Account state served by managedAccounts()/accountValues()/positions().
         self.managed_accounts: list[str] = []
         self.account_value_rows: list[object] = []
@@ -203,6 +209,15 @@ class MockIb:
             raise self.executions_error
         return list(self.executions_result)
 
+    async def whatIfOrderAsync(self, contract: object, order: object) -> object:  # noqa: N802
+        """Record the call; raise ``what_if_error``, hang, or return ``what_if_result``."""
+        self.what_if_calls.append((contract, order))
+        if self.what_if_error is not None:
+            raise self.what_if_error
+        if self.what_if_hang:
+            await asyncio.Event().wait()
+        return self.what_if_result
+
     async def reqHistoricalDataAsync(self, contract: object, **kwargs: object) -> list[object]:  # noqa: N802
         """Return pre-configured historical bars."""
         return list(self._historical_bars)
@@ -221,6 +236,33 @@ class MockIb:
     def cancelTickByTickData(self, contract: object, tickType: str) -> None:  # noqa: N802, N803
         """Record that tick-by-tick cancellation was called."""
         self._cancel_tick_by_tick_calls.append((contract, tickType))
+
+
+def make_order_state(**kw: Any) -> Any:
+    """Real ib_async.OrderState with sensible what-if margin strings (override via kwargs)."""
+    try:
+        from ib_async import OrderState  # noqa: PLC0415
+    except ImportError:  # optional extra not installed
+        OrderState = lambda **kw: SimpleNamespace(**kw)  # noqa: E731, N806
+
+    fields: dict[str, Any] = {
+        "initMarginBefore": "1000.00",
+        "initMarginChange": "250.50",
+        "initMarginAfter": "1250.50",
+        "maintMarginBefore": "800.00",
+        "maintMarginChange": "200.25",
+        "maintMarginAfter": "1000.25",
+        "equityWithLoanBefore": "50000.00",
+        "equityWithLoanChange": "-100.00",
+        "equityWithLoanAfter": "49900.00",
+        "commission": 1.25,
+        "minCommission": 1.0,
+        "maxCommission": 2.5,
+        "commissionCurrency": "USD",
+        "warningText": "",
+    }
+    fields.update(kw)
+    return OrderState(**fields)
 
 
 def make_execution(  # noqa: PLR0913

@@ -108,6 +108,14 @@ class CancelAllError(ExceptionGroup):  # noqa: N818
         return CancelAllError(self.message, excs, self.cancelled)
 
 
+class IbAccountConfigError(Exception):
+    """The configured IB account cannot be used; fix ``IbConnectionSpec.account_id``.
+
+    Raised on connect when several accounts are managed and none is configured,
+    or when the configured account is not among the managed ones. NOT an IB error code.
+    """
+
+
 class AmbiguousContractError(Exception):
     """reqContractDetails returned more than one match. NOT an IB error code; a domain decision."""
 

@@ -72,6 +72,12 @@ class MockIb:
         self.executions_result: list[object] = []
         self.executions_error: Exception | None = None
         self.client = FakeClient(self)
+        # Account state served by managedAccounts()/accountValues()/positions().
+        self.managed_accounts: list[str] = []
+        self.account_value_rows: list[object] = []
+        self.position_rows: list[object] = []
+        self.account_values_calls: list[str] = []
+        self.positions_calls: list[str] = []
         self.connected = False
         self.disconnect_calls = 0
         # Number of upcoming connectAsync calls that raise before one succeeds.
@@ -114,6 +120,20 @@ class MockIb:
 
     def isConnected(self) -> bool:  # noqa: N802
         return self.connected
+
+    def managedAccounts(self) -> list[str]:  # noqa: N802
+        """Synchronous, like ib_async.IB.managedAccounts (empty unless a test sets it)."""
+        return list(self.managed_accounts)
+
+    def accountValues(self, account: str = "") -> list[object]:  # noqa: N802
+        """Synchronous account-value cache, like ib_async.IB.accountValues."""
+        self.account_values_calls.append(account)
+        return list(self.account_value_rows)
+
+    def positions(self, account: str = "") -> list[object]:
+        """Synchronous position cache, like ib_async.IB.positions."""
+        self.positions_calls.append(account)
+        return list(self.position_rows)
 
     def disconnect(self) -> None:
         """Like ib_async.IB.disconnect: closes the socket and fires disconnectedEvent."""

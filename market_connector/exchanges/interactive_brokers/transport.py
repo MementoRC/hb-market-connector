@@ -37,6 +37,7 @@ from market_connector.contracts.protocols import ResolvedContract
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
+    IbAccountConfigError,
     MarketDataPermissionError,
     MarketDataTimeoutError,
     OrderRejectedError,
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
 
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
+    from market_connector.exchanges.interactive_brokers.positions import IbPosition
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
     from market_connector.orders import HBOrder, TradeType
 
@@ -357,6 +359,8 @@ class IbGatewayTransport:
             )
         self._spec = spec
         self._ib = IB()
+        # Resolved on connect: the configured account, else the single managed one.
+        self._account: str | None = spec.account_id
         self._handle_registry: dict[int, OrderHandle] = {}
         self._error_router = _ErrorRouter(market_data_type=spec.resolved_market_data_type)
         self._first_status_timeout: float = 30.0
@@ -386,6 +390,11 @@ class IbGatewayTransport:
     def is_connected(self) -> bool:
         return bool(self._ib.isConnected())
 
+    @property
+    def account(self) -> str | None:
+        """Account orders, balances and positions are scoped to; None until one is known."""
+        return self._account
+
     async def connect(self) -> None:
         """Connect to IB Gateway. Auth is handled by Gateway externally
         (interactive 2FA login at Gateway startup); this just opens the socket.
@@ -413,6 +422,7 @@ class IbGatewayTransport:
             account=self._spec.account_id or "",
             raiseSyncErrors=True,
         )
+        self._resolve_account()
         try:
             self._attach_handlers()
             self._apply_market_data_type()
@@ -422,6 +432,27 @@ class IbGatewayTransport:
             self._detach_handlers()
             raise
         self._error_router.set_connected(True)
+
+    def _resolve_account(self) -> None:
+        """Pick the account to trade on from IB's managed list, or reject the configuration.
+
+        Disconnects before raising so a misconfigured session never stays open.
+        """
+        accounts = list(self._ib.managedAccounts())
+        configured = self._spec.account_id
+        if configured is None and len(accounts) > 1:
+            self._ib.disconnect()
+            raise IbAccountConfigError(
+                f"IB manages several accounts ({', '.join(accounts)}); "
+                "set IbConnectionSpec.account_id to choose one"
+            )
+        if configured is not None and accounts and configured not in accounts:
+            self._ib.disconnect()
+            raise IbAccountConfigError(
+                f"IbConnectionSpec.account_id {configured!r} is not managed by this login; "
+                f"available accounts: {', '.join(accounts)}"
+            )
+        self._account = configured or (accounts[0] if accounts else None)
 
     def _attach_handlers(self) -> None:
         if self._handlers_attached:
@@ -589,6 +620,11 @@ class IbGatewayTransport:
             self._publish_state("reconnecting")
             try:
                 await self._connect_once()
+            except IbAccountConfigError as exc:
+                # Retrying cannot fix a configuration error: stop and report disconnected.
+                logger.error("IB reconnect aborted, account configuration invalid: %s", exc)
+                self._publish_state("disconnected", message=str(exc))
+                return
             except Exception as exc:
                 logger.warning("IB reconnect attempt failed (next delay %.1fs): %s", delay, exc)
                 delay = min(delay * 2, self._spec.reconnect_max_delay)
@@ -618,6 +654,43 @@ class IbGatewayTransport:
         self._detach_handlers()
         self._error_router.set_connected(False)
         self._ib.disconnect()
+
+    async def get_balance(self, currency: str) -> Decimal:
+        """Return the balance of *currency* for the resolved account; 0 when IB reports none.
+
+        Hybrid rule: IB reports AvailableFunds only in the account's base currency,
+        so use it when present and fall back to TotalCashValue (reported per currency).
+        """
+        rows = self._ib.accountValues(self.account or "")
+        wanted = currency.upper()
+        by_tag: dict[str, str] = {}
+        for row in rows:
+            if self.account is not None and row.account != self.account:
+                continue
+            if row.currency.upper() == wanted and row.tag in ("AvailableFunds", "TotalCashValue"):
+                by_tag[row.tag] = row.value
+        value = by_tag.get("AvailableFunds", by_tag.get("TotalCashValue"))
+        return Decimal(value) if value is not None else Decimal("0")
+
+    async def get_positions(self) -> list[IbPosition]:
+        """Return the open positions of the resolved account (all managed accounts if unset)."""
+        from market_connector.exchanges.interactive_brokers.positions import (  # noqa: PLC0415
+            IbPosition,
+        )
+
+        return [
+            IbPosition(
+                account=pos.account,
+                symbol=pos.contract.symbol,
+                sec_type=pos.contract.secType,
+                con_id=pos.contract.conId,
+                exchange=pos.contract.exchange or pos.contract.primaryExchange,
+                currency=pos.contract.currency,
+                quantity=Decimal(str(pos.position)),
+                avg_cost=Decimal(str(pos.avgCost)),
+            )
+            for pos in self._ib.positions(self.account or "")
+        ]
 
     async def request(self, method: str, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
@@ -700,6 +773,8 @@ class IbGatewayTransport:
         )
 
         ib_order = _hb_to_ib_order(hb_order)
+        if self.account is not None:
+            ib_order.account = self.account
         trade = self._ib.placeOrder(native_contract, ib_order)
         initial = OrderHandle.from_trade(trade, self._spec.client_id)
         self._handle_registry[trade.order.orderId] = initial

@@ -45,22 +45,37 @@ class IbContractResolver:
     def __init__(self, transport: IbGatewayTransport) -> None:
         self._transport = transport
         self._cache: OrderedDict[InstrumentRef, ResolvedContract] = OrderedDict()
+        self._by_con_id: dict[int, ResolvedContract] = {}
         self._lock = asyncio.Lock()
+
+    def _lookup(self, ref: InstrumentRef) -> ResolvedContract | None:
+        """Return a cached contract by ref, falling back to the conId index."""
+        cached = self._cache.get(ref)
+        if cached is None and ref.con_id is not None:
+            cached = self._by_con_id.get(ref.con_id)
+        return cached
+
+    def _drop_con_id(self, resolved: ResolvedContract) -> None:
+        """Remove resolved's conId from the index unless another cached entry shares it."""
+        con_id = int(resolved.contract_id)
+        if not any(int(r.contract_id) == con_id for r in self._cache.values()):
+            self._by_con_id.pop(con_id, None)
 
     async def resolve(self, ref: InstrumentRef) -> ResolvedContract:
         """Resolve an InstrumentRef to a ResolvedContract.
 
-        Cache hit returns immediately without acquiring the lock. On miss, the
-        lock serializes concurrent resolves for the same key (double-checked).
+        Cache hit (by ref or by conId) returns immediately without acquiring the
+        lock. On miss, the lock serializes concurrent resolves for the same key
+        (double-checked).
         """
         # Fast path — no lock required for cache hit.
-        cached = self._cache.get(ref)
+        cached = self._lookup(ref)
         if cached is not None:
             return cached
 
         async with self._lock:
             # Double-checked: another coroutine may have populated while we waited.
-            cached = self._cache.get(ref)
+            cached = self._lookup(ref)
             if cached is not None:
                 return cached
 
@@ -86,9 +101,11 @@ class IbContractResolver:
             )
 
             if len(self._cache) >= _MAX_CACHE:
-                self._cache.popitem(last=False)  # FIFO eviction
+                _, evicted = self._cache.popitem(last=False)  # FIFO eviction
+                self._drop_con_id(evicted)
 
             self._cache[ref] = resolved
+            self._by_con_id[int(resolved.contract_id)] = resolved
             return resolved
 
     async def resolve_from_pair(self, pair: str) -> ResolvedContract:
@@ -100,8 +117,11 @@ class IbContractResolver:
         """Remove a specific entry from the cache, or clear all entries."""
         if ref is None:
             self._cache.clear()
+            self._by_con_id.clear()
         else:
-            self._cache.pop(ref, None)
+            removed = self._cache.pop(ref, None)
+            if removed is not None:
+                self._by_con_id.pop(int(removed.contract_id), None)
 
     @staticmethod
     def _parse_pair(pair: str) -> InstrumentRef:

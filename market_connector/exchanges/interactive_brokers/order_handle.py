@@ -43,9 +43,33 @@ _TRADE_STATUS_MAP: dict[str, IBOrderState] = {
 _UNACKNOWLEDGED_STATUSES = frozenset({"PendingSubmit", "ApiPending"})
 
 
+_VALIDATION_ERROR = "ValidationError"
+
+
+def _effective_status(trade: Trade) -> str:
+    """IB status of *trade*, looking through ib_async's ``ValidationError`` overlay.
+
+    ib_async overwrites the status with "ValidationError" on warning codes (e.g. 399)
+    and never restores it, though it is a warning and not an IB order state. Recover
+    the latest real status from the trade log; failing that, infer it from permId.
+    A permId means IB accepted the order, so an unacknowledged log status is stale.
+    """
+    raw: str = trade.orderStatus.status
+    if raw != _VALIDATION_ERROR:
+        return raw
+    prior = "PendingSubmit"
+    for entry in reversed(trade.log):
+        if entry.status != _VALIDATION_ERROR and entry.status in _TRADE_STATUS_MAP:
+            prior = str(entry.status)
+            break
+    if prior in _UNACKNOWLEDGED_STATUSES and trade.order.permId:
+        return "Submitted"
+    return prior
+
+
 def is_unacknowledged(trade: Trade) -> bool:
     """True while IB has not yet acknowledged the order (PendingSubmit/ApiPending)."""
-    return trade.orderStatus.status in _UNACKNOWLEDGED_STATUSES
+    return _effective_status(trade) in _UNACKNOWLEDGED_STATUSES
 
 
 def is_synthetic_cancel(trade: Trade) -> bool:
@@ -75,11 +99,12 @@ class OrderHandle:
     def from_trade(cls, trade: Trade, own_client_id: int | None = None) -> OrderHandle:
         """Snapshot *trade*; ``owned`` is True when *own_client_id* is None or matches."""
         raw = trade.orderStatus.status
+        effective = _effective_status(trade)
         if is_synthetic_cancel(trade):
             base_state = IBOrderState.PENDING
         else:
             try:
-                base_state = _TRADE_STATUS_MAP[raw]
+                base_state = _TRADE_STATUS_MAP[effective]
             except KeyError as exc:
                 raise ValueError(f"Unknown IB order status: {raw}") from exc
         filled = Decimal(str(trade.orderStatus.filled))

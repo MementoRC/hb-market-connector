@@ -161,7 +161,12 @@ class TestContractTemplate:
 
     @pytest.mark.asyncio
     async def test_expiry_used_when_no_contract_month(self, transport, fake_ib) -> None:
-        ref = _ref(symbol="ES", instrument_type=InstrumentType.FUTURE, expiry=date(2026, 12, 18))
+        ref = _ref(
+            symbol="ES",
+            instrument_type=InstrumentType.FUTURE,
+            exchange_hint="CME",
+            expiry=date(2026, 12, 18),
+        )
         t = await _template(transport, fake_ib, ref)
         assert t.lastTradeDateOrContractMonth == "20261218"
 
@@ -170,6 +175,7 @@ class TestContractTemplate:
         ref = _ref(
             symbol="ES",
             instrument_type=InstrumentType.FUTURE,
+            exchange_hint="CME",
             expiry=date(2026, 12, 18),
             contract_month="202612",
         )
@@ -178,7 +184,12 @@ class TestContractTemplate:
 
     @pytest.mark.asyncio
     async def test_local_symbol(self, transport, fake_ib) -> None:
-        ref = _ref(symbol="ES", instrument_type=InstrumentType.FUTURE, local_symbol="ESZ6")
+        ref = _ref(
+            symbol="ES",
+            instrument_type=InstrumentType.FUTURE,
+            exchange_hint="CME",
+            local_symbol="ESZ6",
+        )
         t = await _template(transport, fake_ib, ref)
         assert t.localSymbol == "ESZ6"
 

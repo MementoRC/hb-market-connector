@@ -38,6 +38,7 @@ _HB_TO_KRAKEN: dict[str, str] = {
     "MARKET": "market",
     # Conditional types — only reachable when _for_bleed/add-new-order-types is integrated
     "STOP_LOSS": "stop-loss",
+    "STOP_LOSS_LIMIT": "stop-loss-limit",
     "TAKE_PROFIT": "take-profit",
     "TRAILING_STOP": "trailing-stop",
     # Limit-maker passthrough (hb-market-connector primitives)
@@ -52,7 +53,8 @@ def kraken_ordertype_from_hb(
     """Translate a hummingbot ``OrderType`` value to a Kraken order-type string.
 
     Accepts:
-    - ``market_connector.primitives.OrderType`` members (``LIMIT``, ``MARKET``, ``LIMIT_MAKER``)
+    - ``market_connector.primitives.OrderType`` members (``LIMIT``, ``MARKET``, ``LIMIT_MAKER``,
+      ``STOP_LOSS``, ``STOP_LOSS_LIMIT``)
     - hummingbot ``OrderType`` members with conditional values when available
     - plain strings (case-insensitive; returned normalised to lowercase)
     - any Enum-like object exposing a ``.name`` attribute
@@ -65,7 +67,7 @@ def kraken_ordertype_from_hb(
 
     Returns:
         Kraken order-type string, e.g. ``"limit"``, ``"market"``,
-        ``"stop-loss"``, ``"take-profit"``, ``"trailing-stop"``.
+        ``"stop-loss"``, ``"stop-loss-limit"``, ``"take-profit"``, ``"trailing-stop"``.
 
     Raises:
         ValueError: If the input cannot be mapped to a known Kraken order type.

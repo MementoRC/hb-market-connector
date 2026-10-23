@@ -185,7 +185,14 @@ class TestOrdertypeTranslationE2E:
 
     def test_all_known_types_produce_valid_kraken_strings(self) -> None:
         """kraken_ordertype_from_hb must handle all market_connector.primitives.OrderType."""
-        valid_kraken_strings = {"limit", "market", "stop-loss", "take-profit", "trailing-stop"}
+        valid_kraken_strings = {
+            "limit",
+            "market",
+            "stop-loss",
+            "stop-loss-limit",
+            "take-profit",
+            "trailing-stop",
+        }
         for ot in OrderType:
             result = kraken_ordertype_from_hb(ot)
             assert result in valid_kraken_strings, (

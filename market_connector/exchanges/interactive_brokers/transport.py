@@ -164,28 +164,45 @@ class FeeEvent:
 
 
 def _hb_to_ib_order(hb_order: HBOrder) -> Any:
-    """Map an HBOrder to an ib_async Order. Stage 2 supports MARKET and LIMIT only.
+    """Map an HBOrder to an ib_async Order.
 
-    LIMIT_MAKER and any future conditional order types raise NotImplementedError —
-    they land in Stage 4 when conditional order routing is implemented.
+    Supported types:
+        MARKET: ``MKT`` order.
+        LIMIT: ``LMT`` order at ``price``.
+        STOP_LOSS: ``STP`` order triggered at ``stop_price`` (``auxPrice``).
+        STOP_LOSS_LIMIT: ``STP LMT`` order triggered at ``stop_price`` (``auxPrice``)
+            and placed at ``price`` (``lmtPrice``).
+
+    ``stop_price`` is only valid for STOP_LOSS/STOP_LOSS_LIMIT. LIMIT_MAKER (post-only)
+    is rejected because IB has no post-only equivalent. Other types are unsupported.
 
     Args:
         hb_order: Immutable order placement request with order_type, side,
-            amount, optional price, time_in_force (-> ``tif``) and outside_rth
-            (-> ``outsideRth``, set only when True).
+            amount, optional price, optional stop_price, time_in_force (-> ``tif``)
+            and outside_rth (-> ``outsideRth``, set only when True).
 
     Returns:
         An ``ib_async.Order`` instance ready to pass to ``IB.placeOrder``.
 
     Raises:
-        ValueError: When a LIMIT order is submitted without a price.
-        NotImplementedError: When an order type beyond MARKET/LIMIT is requested.
+        ValueError: When a required price/stop_price is missing, or a stop_price is
+            supplied for a non-stop order type.
+        NotImplementedError: For LIMIT_MAKER or any other unsupported order type.
     """
     from ib_async import Order  # noqa: PLC0415 — lazy, ib_async is optional
 
     from market_connector.orders import OrderType, TradeType  # noqa: PLC0415
 
     action = "BUY" if hb_order.side == TradeType.BUY else "SELL"
+
+    if hb_order.stop_price is not None and hb_order.order_type in (
+        OrderType.MARKET,
+        OrderType.LIMIT,
+    ):
+        raise ValueError(
+            "stop_price is only valid for STOP_LOSS/STOP_LOSS_LIMIT orders, "
+            f"not {hb_order.order_type}"
+        )
 
     if hb_order.order_type == OrderType.MARKET:
         market = Order(action=action, orderType="MKT", totalQuantity=float(hb_order.amount))
@@ -209,9 +226,45 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
             limit.outsideRth = True
         return limit
 
+    if hb_order.order_type == OrderType.STOP_LOSS:
+        if hb_order.stop_price is None:
+            raise ValueError("STOP_LOSS order requires non-None stop_price")
+        stop = Order(
+            action=action,
+            orderType="STP",
+            totalQuantity=float(hb_order.amount),
+            auxPrice=float(hb_order.stop_price),
+        )
+        stop.tif = str(hb_order.time_in_force)
+        if hb_order.outside_rth:
+            stop.outsideRth = True
+        return stop
+
+    if hb_order.order_type == OrderType.STOP_LOSS_LIMIT:
+        if hb_order.stop_price is None:
+            raise ValueError("STOP_LOSS_LIMIT order requires non-None stop_price")
+        if hb_order.price is None:
+            raise ValueError("STOP_LOSS_LIMIT order requires non-None price")
+        stop_limit = Order(
+            action=action,
+            orderType="STP LMT",
+            totalQuantity=float(hb_order.amount),
+            lmtPrice=float(hb_order.price),
+            auxPrice=float(hb_order.stop_price),
+        )
+        stop_limit.tif = str(hb_order.time_in_force)
+        if hb_order.outside_rth:
+            stop_limit.outsideRth = True
+        return stop_limit
+
+    if hb_order.order_type == OrderType.LIMIT_MAKER:
+        raise NotImplementedError(
+            "LIMIT_MAKER (post-only) is not supported by Interactive Brokers; "
+            "place a LIMIT order instead."
+        )
+
     raise NotImplementedError(
-        f"Order type {hb_order.order_type!r} not supported in Stage 2. "
-        f"Conditional order types (LIMIT_MAKER, etc.) land in Stage 4."
+        f"Order type {hb_order.order_type!r} is not supported by the IB transport."
     )
 
 

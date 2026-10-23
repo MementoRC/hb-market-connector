@@ -41,6 +41,8 @@ class OrderType(_StrValue):
     LIMIT = "LIMIT"
     MARKET = "MARKET"
     LIMIT_MAKER = "LIMIT_MAKER"
+    STOP_LOSS = "STOP_LOSS"
+    STOP_LOSS_LIMIT = "STOP_LOSS_LIMIT"
 
 
 class TradeType(_StrValue):

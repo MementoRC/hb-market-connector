@@ -2,7 +2,7 @@
 
 HBOrder is the input type passed to ExecutionGateway.place_order and the
 transport-level _hb_to_ib_order mapper. It carries the fields that
-describe a placement request (including time-in-force and outside-RTH);
+describe a placement request (including time-in-force, outside-RTH and stop price);
 exchange-specific connectors consume it and produce connector-native
 order objects.
 
@@ -45,5 +45,6 @@ class HBOrder(BaseModel):
     side: TradeType
     amount: Decimal
     price: Decimal | None = None
+    stop_price: Decimal | None = None
     time_in_force: TimeInForce = TimeInForce.DAY
     outside_rth: bool = False

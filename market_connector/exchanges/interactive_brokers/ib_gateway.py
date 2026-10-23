@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.contracts.protocols import ContractResolver
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
+    from market_connector.exchanges.interactive_brokers.positions import IbPosition
     from market_connector.exchanges.interactive_brokers.transport import (
         ConnectionStateEvent,
         FeeEvent,
@@ -154,4 +155,9 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         return self._transport.open_orders()
 
     async def get_balance(self, currency: str) -> Decimal:
-        raise NotImplementedError("get_balance() is implemented in Stage 4")
+        """Delegate to transport: available balance of *currency* for the resolved account."""
+        return await self._transport.get_balance(currency)
+
+    async def get_positions(self) -> list[IbPosition]:
+        """Delegate to transport: open positions of the resolved account."""
+        return await self._transport.get_positions()

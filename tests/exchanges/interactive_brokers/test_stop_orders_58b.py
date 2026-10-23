@@ -69,8 +69,11 @@ class TestStopLossMapping:
         assert ib_order.outsideRth is False
 
     def test_stp_does_not_set_lmt_price(self):
+        from ib_async import Order  # noqa: PLC0415
+
         ib_order = _hb_to_ib_order(_stop_loss())
-        assert ib_order.lmtPrice in (0.0, None) or ib_order.lmtPrice != ib_order.lmtPrice
+        # ib_async marks an unset price with Order's own default (sent to IB as an empty field).
+        assert ib_order.lmtPrice == Order().lmtPrice
 
     def test_stp_gtc_outside_rth(self):
         ib_order = _hb_to_ib_order(_stop_loss(time_in_force="GTC", outside_rth=True))

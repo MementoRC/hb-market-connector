@@ -100,8 +100,6 @@ class IbContractResolver:
 
             details_list = await self._transport._resolve_via_ib(ref)
 
-            if len(details_list) == 0:
-                raise await self._not_found_error(ref)
             if len(details_list) > 1:
                 candidates = tuple(
                     _format_contract(d.contract, with_exchange=True)
@@ -117,27 +115,32 @@ class IbContractResolver:
                     ),
                 )
 
-            details = details_list[0]
-            # Import here to avoid circular dependency at module level.
-            from market_connector.contracts.protocols import ResolvedContract  # noqa: PLC0415
+            if details_list:
+                details = details_list[0]
+                # Import here to avoid circular dependency at module level.
+                from market_connector.contracts.protocols import ResolvedContract  # noqa: PLC0415
 
-            resolved = ResolvedContract(
-                ref=ref,
-                native=details.contract,
-                contract_id=str(details.contract.conId),
-                metadata={
-                    "primary_exchange": getattr(details.contract, "primaryExchange", None),
-                    "trading_hours": getattr(details, "tradingHours", None),
-                },
-            )
+                resolved = ResolvedContract(
+                    ref=ref,
+                    native=details.contract,
+                    contract_id=str(details.contract.conId),
+                    metadata={
+                        "primary_exchange": getattr(details.contract, "primaryExchange", None),
+                        "trading_hours": getattr(details, "tradingHours", None),
+                    },
+                )
 
-            if len(self._cache) >= _MAX_CACHE:
-                _, evicted = self._cache.popitem(last=False)  # FIFO eviction
-                self._drop_con_id(evicted)
+                if len(self._cache) >= _MAX_CACHE:
+                    _, evicted = self._cache.popitem(last=False)  # FIFO eviction
+                    self._drop_con_id(evicted)
 
-            self._cache[ref] = resolved
-            self._by_con_id[int(resolved.contract_id)] = resolved
-            return resolved
+                self._cache[ref] = resolved
+                self._by_con_id[int(resolved.contract_id)] = resolved
+                return resolved
+
+        # Not found: the similar-symbol search (match_symbols, up to 3s) runs
+        # outside the lock so it cannot block other resolves. Never cached.
+        raise await self._not_found_error(ref)
 
     async def _not_found_error(self, ref: InstrumentRef) -> ContractNotFoundError:
         """Build a not-found error, suggesting similar symbols for symbol-based refs."""

@@ -1,0 +1,12 @@
+# ~/ib-gateway/docker-compose.yml
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${IBKR_PAPER_USER}
+      TWS_PASSWORD: ${IBKR_PAPER_PASSWORD}
+      TRADING_MODE: paper
+      READ_ONLY_API: "no"
+    ports:
+      - "127.0.0.1:14002:4004"

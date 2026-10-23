@@ -127,6 +127,7 @@ class IbContractResolver:
                     metadata={
                         "primary_exchange": getattr(details.contract, "primaryExchange", None),
                         "trading_hours": getattr(details, "tradingHours", None),
+                        "contract_details": details,
                     },
                 )
 

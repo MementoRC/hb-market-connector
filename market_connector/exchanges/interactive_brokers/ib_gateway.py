@@ -34,6 +34,7 @@ from market_connector.exchanges.interactive_brokers.mixins import (
     MarketDataMixin,
     SubscriptionsMixin,
 )
+from market_connector.exchanges.interactive_brokers.trading_rules import IbTradingRules
 
 
 class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
@@ -122,6 +123,20 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
             )
         resolved = await self.contract_resolver.resolve(ref)
         return await self._transport.place_order(resolved.native, hb_order)
+
+    async def get_trading_rules(self, ref: InstrumentRef) -> IbTradingRules:
+        """Resolve contract (cached) and derive trading rules from its details.
+
+        Raises RuntimeError if no contract_resolver has been wired, and
+        ContractNotFoundError if the instrument cannot be resolved.
+        """
+        if self.contract_resolver is None:
+            raise RuntimeError(
+                "Gateway has no contract_resolver; cannot get trading rules. "
+                "Use build_ib_gateway() to construct a fully-wired gateway."
+            )
+        resolved = await self.contract_resolver.resolve(ref)
+        return IbTradingRules.from_contract_details(resolved.metadata["contract_details"])
 
     async def cancel_order(self, handle: OrderHandle) -> OrderHandle:
         """Delegate cancel to transport (idempotent on terminal orders)."""

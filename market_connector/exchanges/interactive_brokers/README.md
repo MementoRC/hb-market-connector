@@ -38,6 +38,29 @@ services:
 - Paper account: register a separate paper login from the IBKR client portal.
 - 2FA: use the IBKR Mobile soft-token (TOTP) for headless automation.
 
+## Client IDs and open-order visibility
+
+- Use one stable, unique `client_id` per bot. Order ids come from ib_async's
+  `nextValidId` per client, so two bots sharing a `client_id` will collide on
+  order ids.
+- `client_id=0` is the master client: it also binds orders placed manually in
+  TWS (requires TWS "bind automatic orders" / `reqAutoOpenOrders`). Only one
+  client can be 0 at a time.
+- `fetch_all_open_orders` (default on) calls `reqAllOpenOrdersAsync` on every
+  connect and reconnect, so orders from other clients (and, for client 0, TWS)
+  appear in `open_orders()` read-only with `owned=False`. IB does not keep
+  other clients' orders live-updated after that snapshot.
+- `cancel_order` refuses handles with `owned=False` (`ValueError`), and
+  `cancel_all` cancels only orders owned by this client; it never issues a
+  global cancel.
+- Orders placed by a previous run under a different `client_id` are visible
+  (`owned=False`) but cannot be cancelled by this bot: IB only lets the
+  originating client cancel an order, so keep one stable `client_id` per bot.
+- For a `client_id=0` bot, `cancel_all` will skip manual TWS orders (clientId 0
+  with orderId <= 0); cancel them explicitly with `cancel_order` if intended.
+- `cancel_all` attempts every owned order and raises `CancelAllError` (an
+  `ExceptionGroup` carrying `.cancelled`) if any cancel fails.
+
 ## Stage roadmap
 
 | Stage | Scope | Status |
@@ -58,3 +81,22 @@ pixi run test market_connector/exchanges/interactive_brokers/
 # Integration tests (requires running IB Gateway)
 pixi run test -m ib_gateway
 ```
+
+Live tests are gated on `IB_GATEWAY_HOST` and skip when it is unset:
+
+- `IB_GATEWAY_HOST` — Gateway host (default `127.0.0.1` once the gate is enabled).
+- `IB_GATEWAY_PORT` — Gateway API port (default `4002`, the paper port).
+
+```bash
+IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 pixi run test -m ib_gateway
+```
+
+Live-port guard: the tests fail before connecting if `IB_GATEWAY_PORT` is a known
+live-trading default (4001 IB Gateway live, 7496 TWS live). The guard cannot detect
+a live Gateway on a non-default port, so always point `IB_GATEWAY_PORT` at a paper
+Gateway.
+
+If 4002 is occupied locally, map the Gateway to another host port and set
+`IB_GATEWAY_PORT` accordingly. For gnzsnz/ib-gateway the paper API is relayed on
+container port 4004, so e.g. `ports: ["127.0.0.1:4012:4004"]` with
+`IB_GATEWAY_PORT=4012`.

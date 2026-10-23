@@ -359,6 +359,7 @@ class IbGatewayTransport:
             self._attach_handlers()
             self._apply_market_data_type()
             await self._reconcile_executions()
+            await self._sync_all_open_orders()
         except BaseException:
             self._detach_handlers()
             raise
@@ -485,6 +486,19 @@ class IbGatewayTransport:
         except Exception as exc:
             logger.warning("IB execution reconcile failed: %s", exc)
 
+    async def _sync_all_open_orders(self) -> None:
+        """Pull open orders of all API clients via reqAllOpenOrdersAsync.
+
+        Runs after every successful (re)connect when ``fetch_all_open_orders``
+        is set. Failure is logged and never fails the connect.
+        """
+        if not self._spec.fetch_all_open_orders:
+            return
+        try:
+            await self._ib.reqAllOpenOrdersAsync()
+        except Exception as exc:
+            logger.warning("IB all-open-orders sync failed: %s", exc)
+
     def _publish_state(self, state: str, code: int | None = None, message: str = "") -> None:
         """Publish a ConnectionStateEvent on the connection topic."""
         self._event_bus.publish(CONNECTION_TOPIC, ConnectionStateEvent(state, code, message))
@@ -598,7 +612,7 @@ class IbGatewayTransport:
 
         ib_order = _hb_to_ib_order(hb_order)
         trade = self._ib.placeOrder(native_contract, ib_order)
-        initial = OrderHandle.from_trade(trade)
+        initial = OrderHandle.from_trade(trade, self._spec.client_id)
         self._handle_registry[trade.order.orderId] = initial
 
         try:
@@ -635,7 +649,7 @@ class IbGatewayTransport:
             if is_unacknowledged(trade):
                 return
             try:
-                new_handle = OrderHandle.from_trade(trade)
+                new_handle = OrderHandle.from_trade(trade, self._spec.client_id)
             except ValueError:
                 return
             if not fut.done():
@@ -669,6 +683,12 @@ class IbGatewayTransport:
             OrderHandle,
         )
 
+        if not handle.owned:
+            raise ValueError(
+                f"order {handle.order_id} belongs to client_id {handle.client_id}, not this "
+                f"client ({self._spec.client_id}); cannot cancel orders of another API client"
+            )
+
         terminals = {IBOrderState.FILLED, IBOrderState.CANCELLED, IBOrderState.REJECTED}
         if handle.status in terminals:
             return handle
@@ -679,7 +699,7 @@ class IbGatewayTransport:
 
         def _on_status(*_args: Any) -> None:
             try:
-                new_handle = OrderHandle.from_trade(handle._trade)
+                new_handle = OrderHandle.from_trade(handle._trade, self._spec.client_id)
             except ValueError:
                 return
             # Ignore intermediate PendingCancel — wait for a decisive status.
@@ -723,10 +743,42 @@ class IbGatewayTransport:
         for trade in trades:
             order_id = trade.order.orderId
             # Reconstruct to get current status snapshot; registry slot is preserved.
-            handle = OrderHandle.from_trade(trade)
+            handle = OrderHandle.from_trade(trade, self._spec.client_id)
             self._handle_registry[order_id] = handle
             result.append(handle)
         return result
+
+    async def cancel_all(self) -> list[OrderHandle]:
+        """Cancel every open order owned by this client, sequentially.
+
+        Orders of other API clients and manual TWS orders are skipped;
+        reqGlobalCancel is never used. Every eligible order is attempted.
+        Raises ConnectionLostError if the transport is not connected (unwrapped).
+        Raises CancelAllError (an ExceptionGroup whose ``cancelled`` lists the
+        successful cancels) if any individual cancel fails.
+        """
+        from market_connector.exchanges.interactive_brokers.exceptions import (  # noqa: PLC0415
+            CancelAllError,
+        )
+
+        targets = [h for h in self.open_orders() if h.owned and not h.manual]
+        cancelled: list[OrderHandle] = []
+        errors: list[Exception] = []
+        failed_ids: list[int] = []
+        for handle in targets:
+            try:
+                cancelled.append(await self.cancel_order(handle))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+                failed_ids.append(handle.order_id)
+        if errors:
+            ids = ", ".join(str(i) for i in failed_ids)
+            raise CancelAllError(
+                f"cancel_all: {len(errors)} of {len(targets)} cancels failed (order ids: {ids})",
+                errors,
+                cancelled,
+            )
+        return cancelled
 
     def subscribe(
         self,

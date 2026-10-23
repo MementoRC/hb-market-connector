@@ -83,7 +83,7 @@ class FakeTrade(SimpleNamespace):
 
 def _make_trade() -> FakeTrade:
     return FakeTrade(
-        order=SimpleNamespace(orderId=_ORDER_ID, permId=0, tif=""),
+        order=SimpleNamespace(orderId=_ORDER_ID, permId=0, tif="", clientId=0),
         orderStatus=SimpleNamespace(status="PendingSubmit", filled=0.0, avgFillPrice=0.0),
         log=[],
         advancedError="",

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Self
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
 
 
 class IbError(Exception):
@@ -75,6 +80,25 @@ class HistoricalDataError(IbError):
     IB codes: 162 (service error, unless pacing or permissions), 165 (farm
     disconnected — transient; caller may retry).
     """
+
+
+class CancelAllError(ExceptionGroup):  # noqa: N818
+    """One or more cancels failed in ``cancel_all``; ``cancelled`` holds the successes."""
+
+    cancelled: list[OrderHandle]
+
+    def __new__(
+        cls,
+        message: str,
+        exceptions: Sequence[Exception],
+        cancelled: list[OrderHandle] | None = None,
+    ) -> Self:
+        self = super().__new__(cls, message, exceptions)
+        self.cancelled = list(cancelled) if cancelled is not None else []
+        return self
+
+    def derive(self, excs: Sequence[Exception], /) -> CancelAllError:  # type: ignore[override]
+        return CancelAllError(self.message, excs, self.cancelled)
 
 
 class AmbiguousContractError(Exception):

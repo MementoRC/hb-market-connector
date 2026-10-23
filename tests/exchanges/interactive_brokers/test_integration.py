@@ -8,7 +8,11 @@ To run:
     1. Start IB Gateway via Docker: gnzsnz/ib-gateway with paper credentials.
        See README for the recommended docker-compose setup.
     2. Set env vars: IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4002 [IB_PAPER_ACCOUNT=...]
-    3. Run: pixi run test tests/exchanges/interactive_brokers/test_integration.py
+       (IB_GATEWAY_PORT defaults to 4002; use e.g. 4012 if 4002 is taken locally.
+       Live ports 4001/7496 are refused; a live Gateway on a non-default port
+       cannot be detected, so always point at a paper Gateway.)
+    3. Run: IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 pixi run test -m ib_gateway \\
+           tests/exchanges/interactive_brokers/test_integration.py
 
 Requires:
     - IBKR_PAPER_USER and IBKR_PAPER_PASSWORD env vars (consumed by the Docker container).
@@ -35,6 +39,8 @@ if not os.environ.get("IB_GATEWAY_HOST"):
 from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
+from ._live import live_endpoint
+
 if TYPE_CHECKING:
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
@@ -46,13 +52,16 @@ pytestmark = pytest.mark.ib_gateway
 
 @pytest.fixture
 def paper_spec() -> IbConnectionSpec:
-    return IbConnectionSpec(
-        host=os.environ.get("IB_GATEWAY_HOST", "127.0.0.1"),
-        port=int(os.environ.get("IB_GATEWAY_PORT", "4002")),
+    host, port = live_endpoint()  # fails on live-trading ports before anything connects
+    spec = IbConnectionSpec(
+        host=host,
+        port=port,
         client_id=int(os.environ.get("IB_CLIENT_ID", "999")),  # avoid clash with default
         account_id=os.environ.get("IB_PAPER_ACCOUNT"),
         paper=True,
     )
+    assert spec.paper
+    return spec
 
 
 @pytest.mark.asyncio

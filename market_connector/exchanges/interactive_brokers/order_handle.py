@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -67,9 +67,13 @@ class OrderHandle:
     filled_qty: Decimal
     avg_fill_price: Decimal | None
     _trade: Trade
+    client_id: int = 0
+    owned: bool = True
+    manual: bool = False
 
     @classmethod
-    def from_trade(cls, trade: Trade) -> OrderHandle:
+    def from_trade(cls, trade: Trade, own_client_id: int | None = None) -> OrderHandle:
+        """Snapshot *trade*; ``owned`` is True when *own_client_id* is None or matches."""
         raw = trade.orderStatus.status
         if is_synthetic_cancel(trade):
             base_state = IBOrderState.PENDING
@@ -83,6 +87,7 @@ class OrderHandle:
         if base_state is IBOrderState.SUBMITTED and filled > 0:
             base_state = IBOrderState.PARTIALLY_FILLED
         avg_px = trade.orderStatus.avgFillPrice
+        client_id = trade.order.clientId
         return cls(
             order_id=trade.order.permId if trade.order.permId else trade.order.orderId,
             status=base_state,
@@ -90,6 +95,9 @@ class OrderHandle:
             filled_qty=filled,
             avg_fill_price=Decimal(str(avg_px)) if avg_px else None,
             _trade=trade,
+            client_id=client_id,
+            owned=own_client_id is None or client_id == own_client_id,
+            manual=client_id == 0 and trade.order.orderId <= 0,
         )
 
     async def wait_for(
@@ -110,7 +118,7 @@ class OrderHandle:
 
         def _on_status(*_: Any) -> None:
             try:
-                new_handle = OrderHandle.from_trade(self._trade)
+                new_handle = replace(OrderHandle.from_trade(self._trade), owned=self.owned)
             except ValueError:
                 return
             if new_handle.status in targets:

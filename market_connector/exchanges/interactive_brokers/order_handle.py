@@ -32,12 +32,20 @@ _TRADE_STATUS_MAP: dict[str, IBOrderState] = {
     "PreSubmitted": IBOrderState.SUBMITTED,
     "PendingCancel": IBOrderState.PENDING,
     "Submitted": IBOrderState.SUBMITTED,
-    "ApiPending": IBOrderState.SUBMITTED,
+    # ApiPending is unacknowledged (IB has not accepted the order yet), like PendingSubmit.
+    "ApiPending": IBOrderState.PENDING,
     "Filled": IBOrderState.FILLED,
     "Cancelled": IBOrderState.CANCELLED,
     "ApiCancelled": IBOrderState.CANCELLED,
     "Inactive": IBOrderState.REJECTED,
 }
+
+_UNACKNOWLEDGED_STATUSES = frozenset({"PendingSubmit", "ApiPending"})
+
+
+def is_unacknowledged(trade: Trade) -> bool:
+    """True while IB has not yet acknowledged the order (PendingSubmit/ApiPending)."""
+    return trade.orderStatus.status in _UNACKNOWLEDGED_STATUSES
 
 
 def is_synthetic_cancel(trade: Trade) -> bool:

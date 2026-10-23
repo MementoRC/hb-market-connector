@@ -35,7 +35,7 @@ class TestTradeStatusMap:
             ("PreSubmitted", IBOrderState.SUBMITTED),
             ("PendingCancel", IBOrderState.PENDING),
             ("Submitted", IBOrderState.SUBMITTED),
-            ("ApiPending", IBOrderState.SUBMITTED),
+            ("ApiPending", IBOrderState.PENDING),
             ("Filled", IBOrderState.FILLED),
             ("Cancelled", IBOrderState.CANCELLED),
             ("ApiCancelled", IBOrderState.CANCELLED),
@@ -116,7 +116,7 @@ class TestOrderHandleFromTrade:
         trade = self._make_trade(status="ApiPending")
         handle = OrderHandle.from_trade(trade)
         assert handle.raw_status == "ApiPending"
-        assert handle.status == IBOrderState.SUBMITTED
+        assert handle.status == IBOrderState.PENDING
 
     def test_handle_is_frozen(self):
         trade = self._make_trade()

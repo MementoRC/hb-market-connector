@@ -621,6 +621,7 @@ class IbGatewayTransport:
         from market_connector.exchanges.interactive_brokers.order_handle import (  # noqa: PLC0415
             OrderHandle,
             is_synthetic_cancel,
+            is_unacknowledged,
         )
 
         fut: asyncio.Future[OrderHandle] = asyncio.get_running_loop().create_future()
@@ -630,12 +631,12 @@ class IbGatewayTransport:
             # A synthetic cancel from an informational code is not IB's verdict; keep waiting.
             if is_synthetic_cancel(trade):
                 return
+            # PendingSubmit/ApiPending are not an acknowledgement; keep waiting.
+            if is_unacknowledged(trade):
+                return
             try:
                 new_handle = OrderHandle.from_trade(trade)
             except ValueError:
-                return
-            # Ignore the initial PendingSubmit echo — wait for a real status.
-            if new_handle.raw_status == "PendingSubmit":
                 return
             if not fut.done():
                 fut.set_result(new_handle)

@@ -31,6 +31,13 @@ _INSTRUMENT_TYPE_TO_SECTYPE: dict[InstrumentType, str] = {
     InstrumentType.INDEX: "IND",
 }
 
+# Default IB exchange per InstrumentType when no exchange_hint is given.
+# Types not listed fall back to "SMART"; FUTURE has no default (exchange required).
+_INSTRUMENT_TYPE_TO_DEFAULT_EXCHANGE: dict[InstrumentType, str] = {
+    InstrumentType.CRYPTO: "PAXOS",
+    InstrumentType.FOREX: "IDEALPRO",
+}
+
 
 class IbContractResolver:
     """Resolves InstrumentRef → ResolvedContract via ib_async reqContractDetails.

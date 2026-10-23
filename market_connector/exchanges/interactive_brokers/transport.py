@@ -576,15 +576,23 @@ class IbGatewayTransport:
         """
         from ib_async import Contract  # noqa: PLC0415 — lazy, ib_async is optional
 
+        from market_connector.contracts.instrument import InstrumentType  # noqa: PLC0415
         from market_connector.exchanges.interactive_brokers.contract_resolver import (  # noqa: PLC0415
+            _INSTRUMENT_TYPE_TO_DEFAULT_EXCHANGE,
             _INSTRUMENT_TYPE_TO_SECTYPE,
         )
 
-        exchange = getattr(ref, "exchange_hint", None) or "SMART"
+        hint = getattr(ref, "exchange_hint", None)
         if ref.con_id is not None:
             # conId is unique on its own; extra fields would only risk a mismatch.
-            template = Contract(conId=ref.con_id, exchange=exchange)
+            template = Contract(conId=ref.con_id, exchange=hint or "SMART")
             return await self._ib.reqContractDetailsAsync(template)
+
+        if hint is None and ref.instrument_type is InstrumentType.FUTURE:
+            raise ValueError(
+                f"{ref.symbol}: an exchange is required for futures (no exchange_hint or con_id)"
+            )
+        exchange = hint or _INSTRUMENT_TYPE_TO_DEFAULT_EXCHANGE.get(ref.instrument_type, "SMART")
 
         fields: dict[str, Any] = {
             "symbol": ref.symbol,

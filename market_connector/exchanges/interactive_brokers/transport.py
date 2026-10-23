@@ -171,7 +171,8 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
 
     Args:
         hb_order: Immutable order placement request with order_type, side,
-            amount, and optional price.
+            amount, optional price, time_in_force (-> ``tif``) and outside_rth
+            (-> ``outsideRth``, set only when True).
 
     Returns:
         An ``ib_async.Order`` instance ready to pass to ``IB.placeOrder``.
@@ -189,7 +190,9 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
     if hb_order.order_type == OrderType.MARKET:
         market = Order(action=action, orderType="MKT", totalQuantity=float(hb_order.amount))
         # Explicit DAY: without it IB answers 10349 and ib_async locally cancels the trade.
-        market.tif = "DAY"
+        market.tif = str(hb_order.time_in_force)
+        if hb_order.outside_rth:
+            market.outsideRth = True
         return market
 
     if hb_order.order_type == OrderType.LIMIT:
@@ -201,7 +204,9 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
             totalQuantity=float(hb_order.amount),
             lmtPrice=float(hb_order.price),
         )
-        limit.tif = "DAY"
+        limit.tif = str(hb_order.time_in_force)
+        if hb_order.outside_rth:
+            limit.outsideRth = True
         return limit
 
     raise NotImplementedError(

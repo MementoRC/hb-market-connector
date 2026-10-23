@@ -60,6 +60,10 @@ services:
   with orderId <= 0); cancel them explicitly with `cancel_order` if intended.
 - `cancel_all` attempts every owned order and raises `CancelAllError` (an
   `ExceptionGroup` carrying `.cancelled`) if any cancel fails.
+- `what_if(ref, order)` previews an order's margin, equity-with-loan and
+  commission impact (`IbWhatIfResult`, exact `Decimal`, `None` when IB leaves a
+  value unset) without placing anything. It raises `WhatIfTimeoutError` after
+  `IbConnectionSpec.what_if_timeout` seconds (default 10).
 
 ## Stage roadmap
 

@@ -20,7 +20,14 @@ class IbError(Exception):
 
 
 class ContractNotFoundError(IbError):
-    """IB error 200 — no security definition for contract."""
+    """IB error 200 — no security definition for contract.
+
+    ``candidates`` holds formatted similar-symbol suggestions (may be empty).
+    """
+
+    def __init__(self, error_code: int, message: str, *, candidates: tuple[str, ...] = ()) -> None:
+        super().__init__(error_code, message)
+        self.candidates = candidates
 
 
 class OrderRejectedError(IbError):
@@ -104,6 +111,15 @@ class CancelAllError(ExceptionGroup):  # noqa: N818
 class AmbiguousContractError(Exception):
     """reqContractDetails returned more than one match. NOT an IB error code; a domain decision."""
 
-    def __init__(self, matches: list[Any]) -> None:
-        super().__init__(f"reqContractDetails returned {len(matches)} matches; expected 1")
+    def __init__(
+        self,
+        matches: list[Any],
+        *,
+        candidates: tuple[str, ...] = (),
+        message: str | None = None,
+    ) -> None:
+        super().__init__(
+            message or f"reqContractDetails returned {len(matches)} matches; expected 1"
+        )
         self.matches = matches
+        self.candidates = candidates

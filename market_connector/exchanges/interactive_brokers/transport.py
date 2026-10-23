@@ -572,6 +572,10 @@ class IbGatewayTransport:
             "use typed methods on IbGatewayTransport directly"
         )
 
+    async def match_symbols(self, pattern: str) -> list[Any]:
+        """Return IB ContractDescriptions matching pattern (reqMatchingSymbols); [] if none."""
+        return await self._ib.reqMatchingSymbolsAsync(pattern) or []
+
     async def _resolve_via_ib(self, ref: InstrumentRef) -> list:
         """Call ib_async.reqContractDetailsAsync with a Contract template built from ref.
 

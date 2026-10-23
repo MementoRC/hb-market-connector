@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from market_connector.contracts.instrument import InstrumentRef, InstrumentType
 from market_connector.exchanges.interactive_brokers.exceptions import (
@@ -18,6 +18,18 @@ if TYPE_CHECKING:
 
 
 _MAX_CACHE = 1024
+_MAX_CANDIDATES = 5
+_MATCH_TIMEOUT_S = 3.0
+
+
+def _format_contract(contract: Any, *, with_exchange: bool = False) -> str:
+    """Format a contract as 'SYM SECTYPE [EXCH] PRIMARY CCY conId=N' for error messages."""
+    parts = [contract.symbol, contract.secType]
+    if with_exchange:
+        parts.append(contract.exchange)
+    parts += [contract.primaryExchange, contract.currency, f"conId={contract.conId}"]
+    return " ".join(str(p) for p in parts)
+
 
 # Map InstrumentType → IB secType string.
 _INSTRUMENT_TYPE_TO_SECTYPE: dict[InstrumentType, str] = {
@@ -88,32 +100,68 @@ class IbContractResolver:
 
             details_list = await self._transport._resolve_via_ib(ref)
 
-            if len(details_list) == 0:
-                raise ContractNotFoundError(200, f"No security definition for {ref}")
             if len(details_list) > 1:
-                raise AmbiguousContractError(matches=details_list)
+                candidates = tuple(
+                    _format_contract(d.contract, with_exchange=True)
+                    for d in details_list[:_MAX_CANDIDATES]
+                )
+                raise AmbiguousContractError(
+                    matches=details_list,
+                    candidates=candidates,
+                    message=(
+                        f"reqContractDetails returned {len(details_list)} matches "
+                        f"for {ref.symbol}; set primary_exchange or con_id to "
+                        "disambiguate. Candidates: " + "; ".join(candidates)
+                    ),
+                )
 
-            details = details_list[0]
-            # Import here to avoid circular dependency at module level.
-            from market_connector.contracts.protocols import ResolvedContract  # noqa: PLC0415
+            if details_list:
+                details = details_list[0]
+                # Import here to avoid circular dependency at module level.
+                from market_connector.contracts.protocols import ResolvedContract  # noqa: PLC0415
 
-            resolved = ResolvedContract(
-                ref=ref,
-                native=details.contract,
-                contract_id=str(details.contract.conId),
-                metadata={
-                    "primary_exchange": getattr(details.contract, "primaryExchange", None),
-                    "trading_hours": getattr(details, "tradingHours", None),
-                },
+                resolved = ResolvedContract(
+                    ref=ref,
+                    native=details.contract,
+                    contract_id=str(details.contract.conId),
+                    metadata={
+                        "primary_exchange": getattr(details.contract, "primaryExchange", None),
+                        "trading_hours": getattr(details, "tradingHours", None),
+                    },
+                )
+
+                if len(self._cache) >= _MAX_CACHE:
+                    _, evicted = self._cache.popitem(last=False)  # FIFO eviction
+                    self._drop_con_id(evicted)
+
+                self._cache[ref] = resolved
+                self._by_con_id[int(resolved.contract_id)] = resolved
+                return resolved
+
+        # Not found: the similar-symbol search (match_symbols, up to 3s) runs
+        # outside the lock so it cannot block other resolves. Never cached.
+        raise await self._not_found_error(ref)
+
+    async def _not_found_error(self, ref: InstrumentRef) -> ContractNotFoundError:
+        """Build a not-found error, suggesting similar symbols for symbol-based refs."""
+        if ref.con_id is not None:
+            return ContractNotFoundError(200, f"No security definition for conId={ref.con_id}")
+        candidates: tuple[str, ...] = ()
+        try:
+            matches = await asyncio.wait_for(
+                self._transport.match_symbols(ref.symbol), timeout=_MATCH_TIMEOUT_S
             )
-
-            if len(self._cache) >= _MAX_CACHE:
-                _, evicted = self._cache.popitem(last=False)  # FIFO eviction
-                self._drop_con_id(evicted)
-
-            self._cache[ref] = resolved
-            self._by_con_id[int(resolved.contract_id)] = resolved
-            return resolved
+            candidates = tuple(_format_contract(m.contract) for m in matches[:_MAX_CANDIDATES])
+        except Exception:  # noqa: BLE001 - suggestions are best-effort
+            candidates = ()
+        hint = (
+            "Did you mean: " + "; ".join(candidates)
+            if candidates
+            else "No similar symbols were found"
+        )
+        return ContractNotFoundError(
+            200, f"No security definition for {ref.symbol}. {hint}", candidates=candidates
+        )
 
     async def resolve_from_pair(self, pair: str) -> ResolvedContract:
         """Parse a 'SYMBOL-CURRENCY' pair string and delegate to resolve()."""

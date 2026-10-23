@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 # ruff: noqa: N815  (fakes mirror ib_async camelCase field names)
+import asyncio
 import sys
 from dataclasses import dataclass, field
 from typing import Any
@@ -184,6 +185,51 @@ class TestGuards:
     def test_legacy_ambiguous_construction_still_works(self) -> None:
         err = AmbiguousContractError(matches=[1, 2])
         assert err.matches == [1, 2]
+
+
+class ParkedSearchTransport(FakeTransport):
+    """Not-found for APPL (its symbol search parks on an event); single match for AAPL."""
+
+    def __init__(self) -> None:
+        super().__init__(matches=[_desc("AAPL", "NASDAQ", 265598)])
+        self.search_entered = asyncio.Event()
+        self.release_search = asyncio.Event()
+        self.search_parked_during_b = False
+
+    async def _resolve_via_ib(self, ref: InstrumentRef) -> list[FakeDetails]:
+        self.resolve_calls += 1
+        if ref.symbol == "AAPL":
+            self.search_parked_during_b = (
+                self.search_entered.is_set() and not self.release_search.is_set()
+            )
+            return [_detail("SMART", "NASDAQ", 265598)]
+        return []
+
+    async def match_symbols(self, pattern: str) -> list[FakeDescription]:
+        self.search_entered.set()
+        await self.release_search.wait()
+        return await super().match_symbols(pattern)
+
+
+class TestSlowSearchDoesNotBlock:
+    @pytest.mark.asyncio
+    async def test_slow_not_found_search_does_not_block_other_resolve(self) -> None:
+        t = ParkedSearchTransport()
+        resolver = IbContractResolver(t)  # type: ignore[arg-type]
+        task_a = asyncio.ensure_future(resolver.resolve(_ref("APPL")))
+        try:
+            await asyncio.wait_for(t.search_entered.wait(), timeout=1.0)
+            resolved = await asyncio.wait_for(resolver.resolve(_ref("AAPL")), timeout=1.0)
+            assert resolved.contract_id == "265598"
+            assert t.search_parked_during_b
+            t.release_search.set()
+            with pytest.raises(ContractNotFoundError) as ei:
+                await asyncio.wait_for(task_a, timeout=1.0)
+            assert ei.value.candidates == ("AAPL STK NASDAQ USD conId=265598",)
+        finally:
+            t.release_search.set()
+            task_a.cancel()
+            await asyncio.gather(task_a, return_exceptions=True)
 
 
 class FakeIb:

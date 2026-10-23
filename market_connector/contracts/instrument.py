@@ -35,7 +35,11 @@ class OptionRight(StrEnum):
 
 @dataclass(frozen=True)
 class InstrumentRef:
-    """Structured instrument identifier (peer to ConnectorPair)."""
+    """Structured instrument identifier (peer to ConnectorPair).
+
+    con_id, primary_exchange, local_symbol and contract_month are optional
+    broker-side contract fields; unlike ``extras`` they take part in eq/hash.
+    """
 
     symbol: str
     instrument_type: InstrumentType
@@ -44,4 +48,8 @@ class InstrumentRef:
     expiry: date | None = None
     strike: Decimal | None = None
     option_right: OptionRight | None = None
+    con_id: int | None = None
+    primary_exchange: str | None = None
+    local_symbol: str | None = None
+    contract_month: str | None = None
     extras: Mapping[str, Any] = field(default_factory=dict, hash=False)

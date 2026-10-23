@@ -580,12 +580,31 @@ class IbGatewayTransport:
             _INSTRUMENT_TYPE_TO_SECTYPE,
         )
 
-        template = Contract(
-            symbol=ref.symbol,
-            secType=_INSTRUMENT_TYPE_TO_SECTYPE.get(ref.instrument_type, "STK"),
-            currency=ref.quote_currency or "USD",
-            exchange=getattr(ref, "exchange_hint", None) or "SMART",
-        )
+        exchange = getattr(ref, "exchange_hint", None) or "SMART"
+        if ref.con_id is not None:
+            # conId is unique on its own; extra fields would only risk a mismatch.
+            template = Contract(conId=ref.con_id, exchange=exchange)
+            return await self._ib.reqContractDetailsAsync(template)
+
+        fields: dict[str, Any] = {
+            "symbol": ref.symbol,
+            "secType": _INSTRUMENT_TYPE_TO_SECTYPE.get(ref.instrument_type, "STK"),
+            "currency": ref.quote_currency or "USD",
+            "exchange": exchange,
+        }
+        if ref.primary_exchange:
+            fields["primaryExchange"] = ref.primary_exchange
+        if ref.contract_month:
+            fields["lastTradeDateOrContractMonth"] = ref.contract_month
+        elif ref.expiry is not None:
+            fields["lastTradeDateOrContractMonth"] = ref.expiry.strftime("%Y%m%d")
+        if ref.local_symbol:
+            fields["localSymbol"] = ref.local_symbol
+        if ref.strike is not None:
+            fields["strike"] = float(ref.strike)
+        if ref.option_right is not None:
+            fields["right"] = ref.option_right.value[0]  # CALL -> "C", PUT -> "P"
+        template = Contract(**fields)
         return await self._ib.reqContractDetailsAsync(template)
 
     async def place_order(self, native_contract: Any, hb_order: HBOrder) -> OrderHandle:

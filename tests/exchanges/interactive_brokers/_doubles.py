@@ -127,6 +127,10 @@ class MockIb:
     def isConnected(self) -> bool:  # noqa: N802
         return self.connected
 
+    def openTrades(self) -> list:  # noqa: N802
+        """Synchronous open-trades cache, like ib_async.IB.openTrades (always empty here)."""
+        return []
+
     def managedAccounts(self) -> list[str]:  # noqa: N802
         """Synchronous, like ib_async.IB.managedAccounts (empty unless a test sets it)."""
         return list(self.managed_accounts)

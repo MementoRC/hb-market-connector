@@ -66,9 +66,7 @@ def _market_order() -> HBOrder:
     return HBOrder(order_type=OrderType.MARKET, side=TradeType.SELL, amount=Decimal(5))
 
 
-async def _make(
-    *, connect: bool = True, **spec_kw: Any
-) -> tuple[IbGatewayTransport, MockIb]:
+async def _make(*, connect: bool = True, **spec_kw: Any) -> tuple[IbGatewayTransport, MockIb]:
     ib = MockIb()
     ib.managed_accounts = [ACCT]
     with patch(_IB_PATH, return_value=ib):

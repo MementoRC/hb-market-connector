@@ -199,7 +199,7 @@ class TestOpenOrdersValidationError:
 
         handles = gateway.get_open_orders()
 
-        assert [(h.order_id, h.status) for h in handles] == [(_ORDER_ID, IBOrderState.SUBMITTED)]
+        assert [(h.order_id, h.status) for h in handles] == [(_PERM_ID, IBOrderState.SUBMITTED)]
 
 
 class TestGuards:

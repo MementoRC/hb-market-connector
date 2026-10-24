@@ -213,7 +213,7 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         return await self._transport.get_positions()
 
     async def get_pnl(self) -> IbPnL:
-        """Delegate to transport: account-level PnL snapshot."""
+        """Delegate to transport: account-level PnL snapshot (first answer may be stale)."""
         return await self._transport.get_pnl()
 
     async def get_position_pnl(self, ref: InstrumentRef) -> IbPositionPnL:

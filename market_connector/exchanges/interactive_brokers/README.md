@@ -70,7 +70,11 @@ services:
   (`reqPnL` / `reqPnLSingle`), takes the first answer and cancels; concurrent
   calls for the same account/position share one request. They raise
   `PnlTimeoutError` after `IbConnectionSpec.pnl_timeout` seconds (default 10).
-  Streaming PnL is not supported yet.
+  Streaming PnL is not supported yet (tracked in #98).
+  The first IB answer can be stale (seen: daily_pnl 0.0, then -2.0872 a second
+  later); for a settled daily figure take a second reading. `get_position_pnl` for a
+  contract with no position still answers (position 0, `unrealized_pnl`/`value`
+  `None`); it does not time out.
 - `place_bracket(ref, entry, take_profit, stop_loss)` and `place_oca(ref, orders,
   oca_type=OcaType.CANCEL_WITH_BLOCK)` place linked orders (`IbBracket` /
   `IbOcaGroup` of handles). If any leg is rejected or does not acknowledge, every
@@ -78,6 +82,9 @@ services:
   A rejection then raises `LinkedOrderRejectedError` (`.handles`, `.cancel_errors` for
   any failed rollback cancel); any other failure (e.g. the status timeout) re-raises
   the original error.
+  Live paper finding: manually cancelling ONE member of an OCA group makes IB cancel
+  ALL members (code 202 per leg), so the other handles also end `CANCELLED` and a
+  later `cancel_all()` finds nothing.
 
 ## Stage roadmap
 

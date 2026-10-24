@@ -228,3 +228,22 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
             )
         resolved = await self.contract_resolver.resolve(ref)
         return await self._transport.get_position_pnl(resolved.native.conId)
+
+    def subscribe_pnl(self, callback: Callable[[IbPnL], None]) -> SubscriptionHandle:
+        """Delegate to transport: stream account-level PnL updates to *callback*."""
+        return self._transport.subscribe_pnl(callback)
+
+    async def subscribe_position_pnl(
+        self, ref: InstrumentRef, callback: Callable[[IbPositionPnL], None]
+    ) -> SubscriptionHandle:
+        """Resolve contract then stream that position's PnL updates to *callback*.
+
+        Raises RuntimeError if no contract_resolver has been wired.
+        """
+        if self.contract_resolver is None:
+            raise RuntimeError(
+                "Gateway has no contract_resolver; cannot subscribe to position PnL. "
+                "Use build_ib_gateway() to construct a fully-wired gateway."
+            )
+        resolved = await self.contract_resolver.resolve(ref)
+        return self._transport.subscribe_position_pnl(resolved.native.conId, callback)

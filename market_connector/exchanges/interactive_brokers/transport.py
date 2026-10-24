@@ -364,6 +364,23 @@ class _Stream:
                 fut.set_result(None)
 
 
+@dataclass
+class _PnlFeed:
+    """A live reqPnL / reqPnLSingle request shared by streams and snapshots.
+
+    ``handler`` is hooked on pnlEvent / pnlSingleEvent for the feed's lifetime (it survives
+    resubscribes); ``latest`` is the last converted value, ``waiters`` the snapshot futures
+    awaiting the next one.
+    """
+
+    key: tuple[Any, ...]
+    handler: Callable[[Any], None]
+    refs: int = 0
+    latest: Any = None
+    callbacks: list[Callable[[Any], None]] = field(default_factory=list)
+    waiters: list[asyncio.Future[Any]] = field(default_factory=list)
+
+
 class IbGatewayTransport:
     """Connection wrapper around ib_async.IB.
 
@@ -388,9 +405,9 @@ class IbGatewayTransport:
         # Resolved on connect: the configured account, else the single managed one.
         self._account: str | None = spec.account_id
         self._handle_registry: dict[int, OrderHandle] = {}
-        # In-flight PnL snapshot requests shared by concurrent callers, keyed by
-        # (account,) / (account, con_id); value is [task, waiter_count].
-        self._pnl_inflight: dict[tuple[Any, ...], list[Any]] = {}
+        # Live PnL requests, one refcounted feed per (account, "") / (account, "", con_id);
+        # streams and snapshots on the same key share it.
+        self._pnl_feeds: dict[tuple[Any, ...], _PnlFeed] = {}
         self._error_router = _ErrorRouter(market_data_type=spec.resolved_market_data_type)
         self._first_status_timeout: float = 30.0
         self._event_bus = EventBus(name="ib-ws")
@@ -979,99 +996,155 @@ class IbGatewayTransport:
             )
         return self.account
 
-    async def _share_pnl_request(
-        self, key: tuple[Any, ...], start: Callable[[], Awaitable[Any]]
-    ) -> Any:
-        """Run one PnL request per *key*; concurrent callers await the same task.
-
-        A caller's cancellation does not kill the shared request while other callers
-        still wait; when the last waiter leaves, the request is cancelled (which
-        cancels the IB subscription) and awaited before returning.
-        """
-        entry = self._pnl_inflight.get(key)
-        if entry is None or entry[0].done():
-            entry = [asyncio.ensure_future(start()), 0]
-            self._pnl_inflight[key] = entry
-        task = entry[0]
-        entry[1] += 1
-        try:
-            return await asyncio.shield(task)
-        finally:
-            entry[1] -= 1
-            if entry[1] == 0:
-                if self._pnl_inflight.get(key) is entry:
-                    del self._pnl_inflight[key]
-                if not task.done():
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
-
-    async def get_pnl(self) -> IbPnL:
-        """Return a one-shot account PnL snapshot (reqPnL, first answer, then cancelPnL).
-
-        Raises ConnectionLostError if not connected, IbAccountConfigError if no account
-        is resolved, PnlTimeoutError if IB does not answer within ``pnl_timeout``.
-        Concurrent calls share one IB subscription. The first answer may be stale;
-        take a second reading for a settled daily figure (streaming: #98).
-        """
-        account = self._pnl_account()
-        result: IbPnL = await self._share_pnl_request(
-            (account,), lambda: self._request_pnl(account)
-        )
-        return result
-
-    async def get_position_pnl(self, con_id: int) -> IbPositionPnL:
-        """Return a one-shot PnL snapshot for one position (reqPnLSingle, then cancel).
-
-        Same errors and sharing semantics as ``get_pnl``, keyed per ``con_id``.
-        """
-        account = self._pnl_account()
-        result: IbPositionPnL = await self._share_pnl_request(
-            (account, con_id), lambda: self._request_position_pnl(account, con_id)
-        )
-        return result
-
-    async def _request_pnl(self, account: str) -> IbPnL:
-        from market_connector.exchanges.interactive_brokers.pnl import IbPnL  # noqa: PLC0415
-
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-
-        def _on_pnl(pnl: Any) -> None:
-            if pnl.account == account and not future.done():
-                future.set_result(pnl)
-
-        self._ib.pnlEvent += _on_pnl
-        try:
-            self._ib.reqPnL(account, "")
+    def _acquire_pnl(self, key: tuple[Any, ...]) -> _PnlFeed:
+        """Return the live feed for *key* (opening its IB request) with one more user."""
+        feed = self._pnl_feeds.get(key)
+        if feed is None:
+            feed = _PnlFeed(key=key, handler=lambda _pnl: None)
+            feed.handler = self._make_pnl_handler(feed)
+            event = self._pnl_event(key)
+            event += feed.handler
             try:
-                pnl = await self._await_pnl(future)
-            finally:
-                self._ib.cancelPnL(account, "")
-        finally:
-            self._ib.pnlEvent -= _on_pnl
-        return IbPnL.from_pnl(pnl)
+                self._pnl_request(key)
+            except Exception:
+                event -= feed.handler
+                raise
+            self._pnl_feeds[key] = feed
+        feed.refs += 1
+        return feed
 
-    async def _request_position_pnl(self, account: str, con_id: int) -> IbPositionPnL:
+    def _release_pnl(self, feed: _PnlFeed) -> None:
+        """Drop one user; the last one unhooks the feed and cancels it at IB."""
+        feed.refs -= 1
+        if feed.refs <= 0 and self._pnl_feeds.get(feed.key) is feed:
+            self._drop_pnl_feed(feed)
+
+    def _drop_pnl_feed(self, feed: _PnlFeed, *, exc: Exception | None = None) -> None:
+        """Forget *feed*, detach its handler, fail snapshot waiters with *exc*, cancel at IB."""
+        self._pnl_feeds.pop(feed.key, None)
+        event = self._pnl_event(feed.key)
+        event -= feed.handler
+        if exc is not None:
+            for fut in feed.waiters:
+                if not fut.done():
+                    fut.set_exception(exc)
+        feed.waiters.clear()
+        try:
+            self._pnl_cancel(feed.key)
+        except Exception as cancel_exc:
+            logger.warning("IB cancel of PnL feed %r failed: %s", feed.key, cancel_exc)
+
+    def _pnl_event(self, key: tuple[Any, ...]) -> Any:
+        return self._ib.pnlSingleEvent if len(key) == 3 else self._ib.pnlEvent
+
+    def _pnl_request(self, key: tuple[Any, ...]) -> None:
+        if len(key) == 3:
+            self._ib.reqPnLSingle(*key)
+        else:
+            self._ib.reqPnL(*key)
+
+    def _pnl_cancel(self, key: tuple[Any, ...]) -> None:
+        if len(key) == 3:
+            self._ib.cancelPnLSingle(*key)
+        else:
+            self._ib.cancelPnL(*key)
+
+    def _make_pnl_handler(self, feed: _PnlFeed) -> Callable[[Any], None]:
+        """Build the event handler of *feed*: filter by key, convert, store, wake, fan out."""
         from market_connector.exchanges.interactive_brokers.pnl import (  # noqa: PLC0415
+            IbPnL,
             IbPositionPnL,
         )
 
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        account = feed.key[0]
+        single = len(feed.key) == 3
 
-        def _on_pnl_single(pnl: Any) -> None:
-            if pnl.account == account and pnl.conId == con_id and not future.done():
-                future.set_result(pnl)
+        def handler(pnl: Any) -> None:
+            if pnl.account != account or (single and pnl.conId != feed.key[2]):
+                return
+            value = IbPositionPnL.from_pnl_single(pnl) if single else IbPnL.from_pnl(pnl)
+            feed.latest = value
+            for fut in feed.waiters:
+                if not fut.done():
+                    fut.set_result(value)
+            feed.waiters.clear()
+            for callback in list(feed.callbacks):
+                try:
+                    callback(value)
+                except Exception:
+                    logger.exception("IB PnL callback for %r raised", feed.key)
 
-        self._ib.pnlSingleEvent += _on_pnl_single
+        return handler
+
+    async def _snapshot_pnl(self, key: tuple[Any, ...]) -> Any:
+        """Return the feed's latest value, awaiting the next one if none has arrived yet."""
+        feed = self._acquire_pnl(key)
         try:
-            self._ib.reqPnLSingle(account, "", con_id)
+            if feed.latest is not None:
+                return feed.latest
+            future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+            feed.waiters.append(future)
             try:
-                pnl = await self._await_pnl(future)
+                return await self._await_pnl(future)
             finally:
-                self._ib.cancelPnLSingle(account, "", con_id)
+                if future in feed.waiters:
+                    feed.waiters.remove(future)
         finally:
-            self._ib.pnlSingleEvent -= _on_pnl_single
-        return IbPositionPnL.from_pnl_single(pnl)
+            self._release_pnl(feed)
+
+    def _subscribe_pnl_feed(
+        self, key: tuple[Any, ...], callback: Callable[[Any], None], channel: str, contract: object
+    ) -> SubscriptionHandle:
+        feed = self._acquire_pnl(key)
+        feed.callbacks.append(callback)
+
+        def cleanup() -> None:
+            with contextlib.suppress(ValueError):
+                feed.callbacks.remove(callback)
+            self._release_pnl(feed)
+
+        return SubscriptionHandle(channel=channel, contract=contract, _cleanup=cleanup)
+
+    async def get_pnl(self) -> IbPnL:
+        """Return an account PnL snapshot (reqPnL, first answer, then cancelPnL).
+
+        Raises ConnectionLostError if not connected, IbAccountConfigError if no account
+        is resolved, PnlTimeoutError if IB does not answer within ``pnl_timeout``.
+        Concurrent calls share one IB subscription; with an active ``subscribe_pnl``
+        stream the stream's latest value is returned and nothing is requested or
+        cancelled. The first answer may be stale; take a second reading (or stream)
+        for a settled daily figure.
+        """
+        result: IbPnL = await self._snapshot_pnl((self._pnl_account(), ""))
+        return result
+
+    async def get_position_pnl(self, con_id: int) -> IbPositionPnL:
+        """Return a PnL snapshot for one position (reqPnLSingle, then cancel).
+
+        Same errors and sharing semantics as ``get_pnl``, keyed per ``con_id``.
+        """
+        result: IbPositionPnL = await self._snapshot_pnl((self._pnl_account(), "", con_id))
+        return result
+
+    def subscribe_pnl(self, callback: Callable[[IbPnL], None]) -> SubscriptionHandle:
+        """Stream account PnL updates to *callback*; one shared IB request per account.
+
+        Raises ConnectionLostError if not connected, IbAccountConfigError if no account
+        is resolved. The stream survives reconnects and is released by ``disconnect()``;
+        the IB request is cancelled when the last subscriber (and snapshot) leaves.
+        """
+        return self._subscribe_pnl_feed((self._pnl_account(), ""), callback, "pnl", None)
+
+    def subscribe_position_pnl(
+        self, con_id: int, callback: Callable[[IbPositionPnL], None]
+    ) -> SubscriptionHandle:
+        """Stream one position's PnL updates to *callback*; shared per ``con_id``.
+
+        Same errors and lifecycle as ``subscribe_pnl``.
+        """
+        return self._subscribe_pnl_feed(
+            (self._pnl_account(), "", con_id), callback, "pnl_single", con_id
+        )
 
     async def _await_pnl(self, future: asyncio.Future[Any]) -> Any:
         timeout = self._spec.pnl_timeout
@@ -1339,6 +1412,18 @@ class IbGatewayTransport:
             self._resubscribe_stream(stream, cancel_old, depth=False)
         for stream in list(self._depth_streams.values()):
             self._resubscribe_stream(stream, cancel_old, depth=True)
+        for feed in list(self._pnl_feeds.values()):
+            self._resubscribe_pnl(feed, cancel_old)
+
+    def _resubscribe_pnl(self, feed: _PnlFeed, cancel_old: bool) -> None:
+        """Re-issue a PnL request; the handler, callbacks and refs stay in place."""
+        feed.latest = None  # pre-drop value is stale; snapshots wait for the fresh one
+        try:
+            if cancel_old:
+                self._pnl_cancel(feed.key)
+            self._pnl_request(feed.key)
+        except Exception as exc:
+            logger.warning("IB resubscribe of PnL feed %r failed: %s", feed.key, exc)
 
     def _resubscribe_stream(self, stream: _Stream, cancel_old: bool, *, depth: bool) -> None:
         """Move a persistent stream onto a freshly requested ticker."""
@@ -1390,6 +1475,8 @@ class IbGatewayTransport:
         for streams, depth in ((self._l1_streams, False), (self._depth_streams, True)):
             for stream in list(streams.values()):
                 self._drop_stream(streams, stream, depth=depth)
+        for feed in list(self._pnl_feeds.values()):
+            self._drop_pnl_feed(feed, exc=ConnectionLostError(1100, "transport disconnected"))
 
     def _drop_stream(
         self, streams: dict[Hashable, _Stream], stream: _Stream, *, depth: bool

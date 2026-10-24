@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from market_connector.contracts.protocols import ContractResolver
     from market_connector.exchanges.interactive_brokers.linked_orders import IbBracket, IbOcaGroup
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
+    from market_connector.exchanges.interactive_brokers.pnl import IbPnL, IbPositionPnL
     from market_connector.exchanges.interactive_brokers.positions import IbPosition
     from market_connector.exchanges.interactive_brokers.transport import (
         ConnectionStateEvent,
@@ -210,3 +211,20 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
     async def get_positions(self) -> list[IbPosition]:
         """Delegate to transport: open positions of the resolved account."""
         return await self._transport.get_positions()
+
+    async def get_pnl(self) -> IbPnL:
+        """Delegate to transport: account-level PnL snapshot."""
+        return await self._transport.get_pnl()
+
+    async def get_position_pnl(self, ref: InstrumentRef) -> IbPositionPnL:
+        """Resolve contract then fetch the PnL snapshot of that position.
+
+        Raises RuntimeError if no contract_resolver has been wired.
+        """
+        if self.contract_resolver is None:
+            raise RuntimeError(
+                "Gateway has no contract_resolver; cannot get position PnL. "
+                "Use build_ib_gateway() to construct a fully-wired gateway."
+            )
+        resolved = await self.contract_resolver.resolve(ref)
+        return await self._transport.get_position_pnl(resolved.native.conId)

@@ -107,6 +107,10 @@ class WhatIfTimeoutError(IbError):
     """IB did not answer a what-if order within ``what_if_timeout``."""
 
 
+class PnlTimeoutError(IbError):
+    """IB did not answer a PnL request within ``pnl_timeout``."""
+
+
 class HistoricalDataError(IbError):
     """IB historical data request failed or the farm is temporarily disconnected.
 

@@ -43,6 +43,7 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     MarketDataPermissionError,
     MarketDataTimeoutError,
     OrderRejectedError,
+    PnlTimeoutError,
     WhatIfTimeoutError,
 )
 from market_connector.exchanges.interactive_brokers.linked_orders import OcaType
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.linked_orders import IbBracket, IbOcaGroup
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
+    from market_connector.exchanges.interactive_brokers.pnl import IbPnL, IbPositionPnL
     from market_connector.exchanges.interactive_brokers.positions import IbPosition
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
     from market_connector.exchanges.interactive_brokers.what_if import IbWhatIfResult
@@ -386,6 +388,9 @@ class IbGatewayTransport:
         # Resolved on connect: the configured account, else the single managed one.
         self._account: str | None = spec.account_id
         self._handle_registry: dict[int, OrderHandle] = {}
+        # In-flight PnL snapshot requests shared by concurrent callers, keyed by
+        # (account,) / (account, con_id); value is [task, waiter_count].
+        self._pnl_inflight: dict[tuple[Any, ...], list[Any]] = {}
         self._error_router = _ErrorRouter(market_data_type=spec.resolved_market_data_type)
         self._first_status_timeout: float = 30.0
         self._event_bus = EventBus(name="ib-ws")
@@ -963,6 +968,116 @@ class IbGatewayTransport:
         except TimeoutError as exc:
             raise WhatIfTimeoutError(0, f"no what-if answer within {timeout}s") from exc
         return IbWhatIfResult.from_order_state(state)
+
+    def _pnl_account(self) -> str:
+        """Return the resolved account for a PnL request; guards connection and account."""
+        if not self._error_router.is_connected:
+            raise ConnectionLostError(1100, "transport not connected")
+        if self.account is None:
+            raise IbAccountConfigError(
+                "no IB account is resolved; set IbConnectionSpec.account_id to request PnL"
+            )
+        return self.account
+
+    async def _share_pnl_request(
+        self, key: tuple[Any, ...], start: Callable[[], Awaitable[Any]]
+    ) -> Any:
+        """Run one PnL request per *key*; concurrent callers await the same task.
+
+        A caller's cancellation does not kill the shared request while other callers
+        still wait; when the last waiter leaves, the request is cancelled (which
+        cancels the IB subscription) and awaited before returning.
+        """
+        entry = self._pnl_inflight.get(key)
+        if entry is None or entry[0].done():
+            entry = [asyncio.ensure_future(start()), 0]
+            self._pnl_inflight[key] = entry
+        task = entry[0]
+        entry[1] += 1
+        try:
+            return await asyncio.shield(task)
+        finally:
+            entry[1] -= 1
+            if entry[1] == 0:
+                if self._pnl_inflight.get(key) is entry:
+                    del self._pnl_inflight[key]
+                if not task.done():
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+
+    async def get_pnl(self) -> IbPnL:
+        """Return a one-shot account PnL snapshot (reqPnL, first answer, then cancelPnL).
+
+        Raises ConnectionLostError if not connected, IbAccountConfigError if no account
+        is resolved, PnlTimeoutError if IB does not answer within ``pnl_timeout``.
+        Concurrent calls share one IB subscription.
+        """
+        account = self._pnl_account()
+        result: IbPnL = await self._share_pnl_request(
+            (account,), lambda: self._request_pnl(account)
+        )
+        return result
+
+    async def get_position_pnl(self, con_id: int) -> IbPositionPnL:
+        """Return a one-shot PnL snapshot for one position (reqPnLSingle, then cancel).
+
+        Same errors and sharing semantics as ``get_pnl``, keyed per ``con_id``.
+        """
+        account = self._pnl_account()
+        result: IbPositionPnL = await self._share_pnl_request(
+            (account, con_id), lambda: self._request_position_pnl(account, con_id)
+        )
+        return result
+
+    async def _request_pnl(self, account: str) -> IbPnL:
+        from market_connector.exchanges.interactive_brokers.pnl import IbPnL  # noqa: PLC0415
+
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+
+        def _on_pnl(pnl: Any) -> None:
+            if pnl.account == account and not future.done():
+                future.set_result(pnl)
+
+        self._ib.pnlEvent += _on_pnl
+        try:
+            self._ib.reqPnL(account, "")
+            try:
+                pnl = await self._await_pnl(future)
+            finally:
+                self._ib.cancelPnL(account, "")
+        finally:
+            self._ib.pnlEvent -= _on_pnl
+        return IbPnL.from_pnl(pnl)
+
+    async def _request_position_pnl(self, account: str, con_id: int) -> IbPositionPnL:
+        from market_connector.exchanges.interactive_brokers.pnl import (  # noqa: PLC0415
+            IbPositionPnL,
+        )
+
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+
+        def _on_pnl_single(pnl: Any) -> None:
+            if pnl.account == account and pnl.conId == con_id and not future.done():
+                future.set_result(pnl)
+
+        self._ib.pnlSingleEvent += _on_pnl_single
+        try:
+            self._ib.reqPnLSingle(account, "", con_id)
+            try:
+                pnl = await self._await_pnl(future)
+            finally:
+                self._ib.cancelPnLSingle(account, "", con_id)
+        finally:
+            self._ib.pnlSingleEvent -= _on_pnl_single
+        return IbPositionPnL.from_pnl_single(pnl)
+
+    async def _await_pnl(self, future: asyncio.Future[Any]) -> Any:
+        timeout = self._spec.pnl_timeout
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except TimeoutError as exc:
+            raise PnlTimeoutError(0, f"no PnL answer within {timeout}s") from exc
 
     async def _wait_first_status_update(self, trade: Any) -> OrderHandle:
         """Await the first meaningful status update for a submitted trade.

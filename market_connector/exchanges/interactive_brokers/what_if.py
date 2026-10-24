@@ -9,15 +9,17 @@ trading rules. Floats are converted through ``repr`` so ``0.35`` becomes
 
 from __future__ import annotations
 
-import math
-import sys
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-_UNSET_DOUBLE = sys.float_info.max
+from market_connector.exchanges.interactive_brokers._ib_numbers import (
+    UNSET_DOUBLE,
+    decimal_or_none,
+)
+
 # IB serialises the sentinel via repr, which is just below the exact binary value.
-_UNSET_MARGIN = Decimal(repr(_UNSET_DOUBLE))
+_UNSET_MARGIN = Decimal(repr(UNSET_DOUBLE))
 
 
 def _margin(value: Any) -> Decimal | None:
@@ -31,13 +33,6 @@ def _margin(value: Any) -> Decimal | None:
     if not parsed.is_finite() or abs(parsed) >= _UNSET_MARGIN:
         return None
     return parsed
-
-
-def _commission(value: Any) -> Decimal | None:
-    """Convert an IB commission float; None when None, NaN or the unset sentinel."""
-    if value is None or value == _UNSET_DOUBLE or math.isnan(value):
-        return None
-    return Decimal(repr(float(value)))
 
 
 def _text(value: Any) -> str | None:
@@ -77,9 +72,9 @@ class IbWhatIfResult:
             equity_with_loan_before=_margin(getattr(state, "equityWithLoanBefore", None)),
             equity_with_loan_change=_margin(getattr(state, "equityWithLoanChange", None)),
             equity_with_loan_after=_margin(getattr(state, "equityWithLoanAfter", None)),
-            commission=_commission(getattr(state, "commission", None)),
-            min_commission=_commission(getattr(state, "minCommission", None)),
-            max_commission=_commission(getattr(state, "maxCommission", None)),
+            commission=decimal_or_none(getattr(state, "commission", None)),
+            min_commission=decimal_or_none(getattr(state, "minCommission", None)),
+            max_commission=decimal_or_none(getattr(state, "maxCommission", None)),
             commission_currency=_text(getattr(state, "commissionCurrency", None)),
             warning_text=_text(getattr(state, "warningText", None)),
         )

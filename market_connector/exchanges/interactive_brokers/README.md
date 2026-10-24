@@ -64,6 +64,13 @@ services:
   commission impact (`IbWhatIfResult`, exact `Decimal`, `None` when IB leaves a
   value unset) without placing anything. It raises `WhatIfTimeoutError` after
   `IbConnectionSpec.what_if_timeout` seconds (default 10).
+- `get_pnl()` and `get_position_pnl(ref)` return one-shot PnL snapshots
+  (`IbPnL` / `IbPositionPnL`, exact `Decimal`; `None` when IB leaves a value
+  unset, zero is a real value) for the resolved account. Each call subscribes
+  (`reqPnL` / `reqPnLSingle`), takes the first answer and cancels; concurrent
+  calls for the same account/position share one request. They raise
+  `PnlTimeoutError` after `IbConnectionSpec.pnl_timeout` seconds (default 10).
+  Streaming PnL is not supported yet.
 - `place_bracket(ref, entry, take_profit, stop_loss)` and `place_oca(ref, orders,
   oca_type=OcaType.CANCEL_WITH_BLOCK)` place linked orders (`IbBracket` /
   `IbOcaGroup` of handles). If any leg is rejected or does not acknowledge, every
@@ -79,7 +86,7 @@ services:
 | 1 | Framework promotion + connector skeleton | ✅ LANDED (#25) |
 | 2 | Transport + orders + contract resolver | ✅ LANDED (#26) |
 | 3 | Market data + subscriptions mixins | ✅ LANDED (merged) |
-| 4 | Accounts mixin (get_balance + subscribe_orders) | Planned |
+| 4 | Accounts (balances, positions, what-if, PnL snapshots, bracket/OCA) | ✅ LANDED |
 | 5 | Non-STOCK contracts + subscription multiplexing | Planned |
 | 6 | Reconnection / hardening / production polish | Planned |
 

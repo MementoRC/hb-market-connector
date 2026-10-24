@@ -122,6 +122,93 @@ class MockIb:
         self.cancel_order_calls: list[Any] = []
         # orderIds whose cancelOrder raises, mapped to the exception.
         self.cancel_errors: dict[int, Exception] = {}
+        # PnL subscriptions (ib_async 2.1 semantics): real PnL/PnLSingle objects filled and
+        # emitted asynchronously after the request unless ``pnl_hang`` is set.
+        self.pnlEvent = FakeEvent()  # noqa: N815
+        self.pnlSingleEvent = FakeEvent()  # noqa: N815
+        self.pnl_hang: bool = False
+        self.pnl_values: dict[str, float] = {
+            "dailyPnL": 12.34,
+            "unrealizedPnL": -5.5,
+            "realizedPnL": 0.0,
+        }
+        self.pnl_single_values: dict[str, float] = {
+            "dailyPnL": 1.5,
+            "unrealizedPnL": 20.25,
+            "realizedPnL": float("nan"),
+            "position": 100,
+            "value": 15000.0,
+        }
+        self.pnl_req_calls: list[tuple[str, str]] = []
+        self.pnl_cancel_calls: list[tuple[str, str]] = []
+        self.pnl_single_req_calls: list[tuple[str, str, int]] = []
+        self.pnl_single_cancel_calls: list[tuple[str, str, int]] = []
+        self._pnl_keys: set[tuple[str, str]] = set()
+        self._pnl_single_keys: set[tuple[str, str, int]] = set()
+
+    def reqPnL(self, account: str, modelCode: str = "") -> Any:  # noqa: N802, N803
+        """Like ib_async.IB.reqPnL: asserts on a duplicate key, emits pnlEvent later."""
+        from ib_async import PnL  # noqa: PLC0415
+
+        key = (account, modelCode)
+        assert key not in self._pnl_keys
+        self._pnl_keys.add(key)
+        self.pnl_req_calls.append(key)
+        pnl = PnL(account, modelCode)
+        if not self.pnl_hang:
+
+            def _emit() -> None:
+                for name, value in self.pnl_values.items():
+                    setattr(pnl, name, value)
+                self.pnlEvent(pnl)
+
+            asyncio.get_running_loop().call_soon(_emit)
+        return pnl
+
+    def cancelPnL(self, account: str, modelCode: str = "") -> None:  # noqa: N802, N803
+        self.pnl_cancel_calls.append((account, modelCode))
+        self._pnl_keys.discard((account, modelCode))
+
+    def reqPnLSingle(self, account: str, modelCode: str, conId: int) -> Any:  # noqa: N802, N803
+        """Like ib_async.IB.reqPnLSingle: asserts on a duplicate key, emits later."""
+        from ib_async import PnLSingle  # noqa: PLC0415
+
+        key = (account, modelCode, conId)
+        assert key not in self._pnl_single_keys
+        self._pnl_single_keys.add(key)
+        self.pnl_single_req_calls.append(key)
+        pnl = PnLSingle(account, modelCode, conId)
+        if not self.pnl_hang:
+
+            def _emit() -> None:
+                for name, value in self.pnl_single_values.items():
+                    setattr(pnl, name, value)
+                self.pnlSingleEvent(pnl)
+
+            asyncio.get_running_loop().call_soon(_emit)
+        return pnl
+
+    def cancelPnLSingle(self, account: str, modelCode: str, conId: int) -> None:  # noqa: N802, N803
+        self.pnl_single_cancel_calls.append((account, modelCode, conId))
+        self._pnl_single_keys.discard((account, modelCode, conId))
+
+    def emit_other_pnl(self, account: str = "DU9999999", **values: float) -> None:
+        """Fire pnlEvent for an unrelated account."""
+        from ib_async import PnL  # noqa: PLC0415
+
+        pnl = PnL(account, "")
+        for name, value in {"dailyPnL": 999.0, "unrealizedPnL": 999.0, **values}.items():
+            setattr(pnl, name, value)
+        self.pnlEvent(pnl)
+
+    def emit_other_pnl_single(self, con_id: int = 999999, account: str = "") -> None:
+        """Fire pnlSingleEvent for an unrelated conId."""
+        from ib_async import PnLSingle  # noqa: PLC0415
+
+        pnl = PnLSingle(account, "", con_id)
+        pnl.position = 7
+        pnl.dailyPnL = 999.0
+        self.pnlSingleEvent(pnl)
 
     def placeOrder(self, contract: Any, order: Any) -> Any:  # noqa: N802
         """Record the order and return a real PendingSubmit ib_async Trade."""

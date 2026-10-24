@@ -343,6 +343,8 @@ class TestPlaceBracketRejection:
         assert FIRST_ID in {o.orderId for o in ib.cancel_order_calls}
 
     async def test_timed_out_leg_rolls_back_siblings_and_reraises(self) -> None:
+        # The timed-out stop leg never got a first status, so it may still be live at IB:
+        # it must be cancelled too, not just the acknowledged siblings.
         transport, ib = await _make()
         transport._first_status_timeout = 0.1
 
@@ -361,6 +363,7 @@ class TestPlaceBracketRejection:
         assert type(exc) is TimeoutError
         assert not isinstance(exc, _linked_error())
         assert {o.orderId for o in ib.cancel_order_calls} >= {FIRST_ID, FIRST_ID + 1}
+        assert FIRST_ID + 2 in {o.orderId for o in ib.cancel_order_calls}
 
 
 # --------------------------------------------------------------------------- D
@@ -493,6 +496,8 @@ class TestPlaceOca:
         assert _ids(exc.cancel_errors) == {FIRST_ID}
 
     async def test_timed_out_member_rolls_back_and_reraises(self) -> None:
+        # The timed-out member never got a first status, so it may still be live at IB:
+        # it must be cancelled too, not just the acknowledged member.
         transport, ib = await _make()
         transport._first_status_timeout = 0.1
 
@@ -509,6 +514,7 @@ class TestPlaceOca:
         assert type(exc) is TimeoutError
         assert not isinstance(exc, _linked_error())
         assert FIRST_ID in {o.orderId for o in ib.cancel_order_calls}
+        assert FIRST_ID + 1 in {o.orderId for o in ib.cancel_order_calls}
 
 
 # --------------------------------------------------------------------------- E

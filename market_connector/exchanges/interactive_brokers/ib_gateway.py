@@ -10,12 +10,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from decimal import Decimal
 
     from market_connector.auth.passthrough import PassThroughSigner
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.contracts.protocols import ContractResolver
+    from market_connector.exchanges.interactive_brokers.linked_orders import IbBracket, IbOcaGroup
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.positions import IbPosition
     from market_connector.exchanges.interactive_brokers.transport import (
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
         StreamTransport,
     )
 
+from market_connector.exchanges.interactive_brokers.linked_orders import OcaType
 from market_connector.exchanges.interactive_brokers.mixins import (
     MarketDataMixin,
     SubscriptionsMixin,
@@ -125,6 +127,39 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
             )
         resolved = await self.contract_resolver.resolve(ref)
         return await self._transport.place_order(resolved.native, hb_order)
+
+    async def place_bracket(
+        self, ref: InstrumentRef, entry: HBOrder, take_profit: HBOrder, stop_loss: HBOrder
+    ) -> IbBracket:
+        """Resolve contract once then place an entry with take-profit and stop-loss children.
+
+        Raises RuntimeError if no contract_resolver has been wired.
+        """
+        if self.contract_resolver is None:
+            raise RuntimeError(
+                "Gateway has no contract_resolver; cannot place orders. "
+                "Use build_ib_gateway() to construct a fully-wired gateway."
+            )
+        resolved = await self.contract_resolver.resolve(ref)
+        return await self._transport.place_bracket(resolved.native, entry, take_profit, stop_loss)
+
+    async def place_oca(
+        self,
+        ref: InstrumentRef,
+        orders: Sequence[HBOrder],
+        oca_type: OcaType = OcaType.CANCEL_WITH_BLOCK,
+    ) -> IbOcaGroup:
+        """Resolve contract once then place *orders* as one OCA group.
+
+        Raises RuntimeError if no contract_resolver has been wired.
+        """
+        if self.contract_resolver is None:
+            raise RuntimeError(
+                "Gateway has no contract_resolver; cannot place orders. "
+                "Use build_ib_gateway() to construct a fully-wired gateway."
+            )
+        resolved = await self.contract_resolver.resolve(ref)
+        return await self._transport.place_oca(resolved.native, orders, oca_type)
 
     async def what_if(self, ref: InstrumentRef, hb_order: HBOrder) -> IbWhatIfResult:
         """Resolve contract then preview the order's margin and commission impact.

@@ -41,6 +41,28 @@ class OrderRejectedError(IbError):
         self.advanced_reject = advanced_reject
 
 
+class LinkedOrderRejectedError(OrderRejectedError):
+    """A leg of a bracket or OCA group was rejected; the other legs were cancelled.
+
+    ``error_code``/``message`` are the rejected leg's. ``handles`` holds every placed
+    leg in placement order; ``cancel_errors`` maps the order id of each sibling whose
+    rollback cancel failed to the exception (empty when the rollback was clean).
+    """
+
+    def __init__(
+        self,
+        error_code: int,
+        message: str,
+        advanced_reject: str | None = None,
+        *,
+        handles: tuple[OrderHandle, ...] = (),
+        cancel_errors: dict[int, Exception] | None = None,
+    ) -> None:
+        super().__init__(error_code, message, advanced_reject)
+        self.handles = handles
+        self.cancel_errors = cancel_errors or {}
+
+
 class OrderCancelledError(IbError):
     """IB error 202 — order cancelled; ``reason`` is IB's cancellation text."""
 

@@ -64,6 +64,13 @@ services:
   commission impact (`IbWhatIfResult`, exact `Decimal`, `None` when IB leaves a
   value unset) without placing anything. It raises `WhatIfTimeoutError` after
   `IbConnectionSpec.what_if_timeout` seconds (default 10).
+- `place_bracket(ref, entry, take_profit, stop_loss)` and `place_oca(ref, orders,
+  oca_type=OcaType.CANCEL_WITH_BLOCK)` place linked orders (`IbBracket` /
+  `IbOcaGroup` of handles). If any leg is rejected or does not acknowledge, every
+  other leg not known to be rejected (including an unacknowledged one) is cancelled.
+  A rejection then raises `LinkedOrderRejectedError` (`.handles`, `.cancel_errors` for
+  any failed rollback cancel); any other failure (e.g. the status timeout) re-raises
+  the original error.
 
 ## Stage roadmap
 

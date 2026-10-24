@@ -129,6 +129,9 @@ class MockIb:
 
         if not order.orderId:
             order.orderId = self.client.getReqId()
+        if self.connect_calls:
+            # Like ib_async.IB.placeOrder: stamp the connected API client id.
+            order.clientId = self.connect_calls[-1]["clientId"]
         self.placed_orders.append(order)
         self.placed_contracts.append(contract)
         trade = Trade(

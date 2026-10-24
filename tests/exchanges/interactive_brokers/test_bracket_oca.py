@@ -342,6 +342,26 @@ class TestPlaceBracketRejection:
         assert _ids(exc.cancel_errors) == {FIRST_ID + 1}
         assert FIRST_ID in {o.orderId for o in ib.cancel_order_calls}
 
+    async def test_timed_out_leg_rolls_back_siblings_and_reraises(self) -> None:
+        transport, ib = await _make()
+        transport._first_status_timeout = 0.1
+
+        async def ack_all_but_sl() -> None:
+            await _when_placed(ib, 3)
+            parent, tp, _sl_order = ib.placed_orders
+            ib.emit_status(parent.orderId, "Submitted")
+            ib.emit_status(tp.orderId, "Submitted")
+
+        results = await asyncio.gather(
+            ack_all_but_sl(),
+            transport.place_bracket(MagicMock(), _entry(), _tp(), _sl()),
+            return_exceptions=True,
+        )
+        exc = results[1]
+        assert type(exc) is TimeoutError
+        assert not isinstance(exc, _linked_error())
+        assert {o.orderId for o in ib.cancel_order_calls} >= {FIRST_ID, FIRST_ID + 1}
+
 
 # --------------------------------------------------------------------------- D
 
@@ -471,6 +491,24 @@ class TestPlaceOca:
         exc = results[1]
         assert isinstance(exc, _linked_error())
         assert _ids(exc.cancel_errors) == {FIRST_ID}
+
+    async def test_timed_out_member_rolls_back_and_reraises(self) -> None:
+        transport, ib = await _make()
+        transport._first_status_timeout = 0.1
+
+        async def ack_first_only() -> None:
+            await _when_placed(ib, 2)
+            ib.emit_status(ib.placed_orders[0].orderId, "Submitted")
+
+        results = await asyncio.gather(
+            ack_first_only(),
+            transport.place_oca(MagicMock(), _oca_orders()),
+            return_exceptions=True,
+        )
+        exc = results[1]
+        assert type(exc) is TimeoutError
+        assert not isinstance(exc, _linked_error())
+        assert FIRST_ID in {o.orderId for o in ib.cancel_order_calls}
 
 
 # --------------------------------------------------------------------------- E

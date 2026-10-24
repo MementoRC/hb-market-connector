@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import uuid
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -38,21 +39,24 @@ from market_connector.exchanges.interactive_brokers._error_router import _ErrorR
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     IbAccountConfigError,
+    LinkedOrderRejectedError,
     MarketDataPermissionError,
     MarketDataTimeoutError,
     OrderRejectedError,
     WhatIfTimeoutError,
 )
+from market_connector.exchanges.interactive_brokers.linked_orders import OcaType
 from market_connector.hb_compat.event_bus import EventBus
 from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Hashable
+    from collections.abc import Awaitable, Callable, Hashable, Sequence
     from datetime import datetime
 
     from ib_async import Contract, Ticker
 
     from market_connector.contracts.instrument import InstrumentRef
+    from market_connector.exchanges.interactive_brokers.linked_orders import IbBracket, IbOcaGroup
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.positions import IbPosition
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
@@ -270,6 +274,24 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
     raise NotImplementedError(
         f"Order type {hb_order.order_type!r} is not supported by the IB transport."
     )
+
+
+def _validate_bracket(entry: HBOrder, take_profit: HBOrder, stop_loss: HBOrder) -> None:
+    """Reject a malformed bracket with ValueError before anything reaches IB."""
+    from market_connector.orders import OrderType  # noqa: PLC0415
+
+    if entry.order_type not in (OrderType.MARKET, OrderType.LIMIT):
+        raise ValueError(f"bracket entry must be MARKET or LIMIT, not {entry.order_type}")
+    if take_profit.order_type != OrderType.LIMIT:
+        raise ValueError(f"bracket take_profit must be LIMIT, not {take_profit.order_type}")
+    if stop_loss.order_type not in (OrderType.STOP_LOSS, OrderType.STOP_LOSS_LIMIT):
+        raise ValueError(
+            f"bracket stop_loss must be STOP_LOSS or STOP_LOSS_LIMIT, not {stop_loss.order_type}"
+        )
+    if take_profit.side == entry.side or stop_loss.side == entry.side:
+        raise ValueError("bracket children must be on the opposite side of the entry")
+    if take_profit.amount != entry.amount or stop_loss.amount != entry.amount:
+        raise ValueError("bracket children must have the same amount as the entry")
 
 
 @dataclass(frozen=True)
@@ -770,17 +792,28 @@ class IbGatewayTransport:
 
             raise ConnectionLostError(1100, "transport not connected")
 
+        trade = self._submit_leg(native_contract, _hb_to_ib_order(hb_order))
+        return await self._await_leg(trade)
+
+    def _submit_leg(self, native_contract: Any, ib_order: Any) -> Any:
+        """Stamp the account, hand *ib_order* to IB and register its initial handle.
+
+        Synchronous on purpose: bracket legs must reach IB back to back, with no await between.
+        """
         from market_connector.exchanges.interactive_brokers.order_handle import (  # noqa: PLC0415
             OrderHandle,
         )
 
-        ib_order = _hb_to_ib_order(hb_order)
         if self.account is not None:
             ib_order.account = self.account
         trade = self._ib.placeOrder(native_contract, ib_order)
-        initial = OrderHandle.from_trade(trade, self._spec.client_id)
-        self._handle_registry[trade.order.orderId] = initial
+        self._handle_registry[trade.order.orderId] = OrderHandle.from_trade(
+            trade, self._spec.client_id
+        )
+        return trade
 
+    async def _await_leg(self, trade: Any) -> OrderHandle:
+        """Await the first status of a submitted *trade* and record the resulting handle."""
         try:
             new_handle = await self._wait_first_status_update(trade)
         except OrderRejectedError as exc:
@@ -790,6 +823,112 @@ class IbGatewayTransport:
             ) from exc
         self._handle_registry[trade.order.orderId] = new_handle
         return new_handle
+
+    def _require_connected(self) -> None:
+        if not self._error_router.is_connected:
+            raise ConnectionLostError(1100, "transport not connected")
+
+    async def place_bracket(
+        self, native_contract: Any, entry: HBOrder, take_profit: HBOrder, stop_loss: HBOrder
+    ) -> IbBracket:
+        """Place an entry with attached take-profit and stop-loss children as one bracket.
+
+        The entry must be MARKET/LIMIT, the take-profit LIMIT and the stop-loss
+        STOP_LOSS/STOP_LOSS_LIMIT; both children take the opposite side and the
+        entry's amount. All validation runs before any IB call (ValueError). The
+        three legs are sent back to back with the transmit flag only on the last,
+        so IB activates the bracket atomically.
+
+        If any leg is rejected, every other leg that is not already terminal is
+        cancelled and LinkedOrderRejectedError is raised (see ``place_oca``).
+        Raises ConnectionLostError if not connected.
+        """
+        from market_connector.exchanges.interactive_brokers.linked_orders import (  # noqa: PLC0415
+            IbBracket,
+        )
+
+        self._require_connected()
+        _validate_bracket(entry, take_profit, stop_loss)
+        ib_orders = [_hb_to_ib_order(o) for o in (entry, take_profit, stop_loss)]
+        parent_id = self._ib.client.getReqId()
+        ids = [parent_id, self._ib.client.getReqId(), self._ib.client.getReqId()]
+        for ib_order, order_id, transmit in zip(ib_orders, ids, (False, False, True), strict=True):
+            ib_order.orderId = order_id
+            ib_order.parentId = 0 if order_id == parent_id else parent_id
+            ib_order.transmit = transmit
+        trades = [self._submit_leg(native_contract, o) for o in ib_orders]
+        parent, tp_handle, sl_handle = await self._settle_legs(trades)
+        return IbBracket(parent=parent, take_profit=tp_handle, stop_loss=sl_handle)
+
+    async def place_oca(
+        self,
+        native_contract: Any,
+        orders: Sequence[HBOrder],
+        oca_type: OcaType = OcaType.CANCEL_WITH_BLOCK,
+    ) -> IbOcaGroup:
+        """Place *orders* as one OCA (one-cancels-all) group under a fresh group name.
+
+        Needs at least two orders (ValueError before any IB call). Handles come
+        back in input order once every member has a first status. If any member is
+        rejected, the others that are not already terminal are cancelled and
+        LinkedOrderRejectedError is raised, carrying all handles and any cancel
+        failures. Raises ConnectionLostError if not connected.
+        """
+        from market_connector.exchanges.interactive_brokers.linked_orders import (  # noqa: PLC0415
+            IbOcaGroup,
+        )
+
+        self._require_connected()
+        if len(orders) < 2:
+            raise ValueError(f"an OCA group needs at least 2 orders, got {len(orders)}")
+        ib_orders = [_hb_to_ib_order(o) for o in orders]
+        group = f"hb-oca-{uuid.uuid4().hex}"
+        for ib_order in ib_orders:
+            ib_order.ocaGroup = group
+            ib_order.ocaType = int(oca_type)
+            ib_order.transmit = True
+        trades = [self._submit_leg(native_contract, o) for o in ib_orders]
+        handles = await self._settle_legs(trades)
+        return IbOcaGroup(group=group, oca_type=oca_type, orders=handles)
+
+    async def _settle_legs(self, trades: list[Any]) -> tuple[OrderHandle, ...]:
+        """Await the first status of every leg; roll the group back if one is rejected.
+
+        On a rejection, each other leg is cancelled (terminal ones are left alone by
+        ``cancel_order``), cancel failures are collected, and LinkedOrderRejectedError
+        is raised from the original rejection. Other failures (e.g. a status timeout)
+        propagate unchanged and leave the legs in place.
+        """
+        results = await asyncio.gather(
+            *(self._await_leg(t) for t in trades), return_exceptions=True
+        )
+        failures = [r for r in results if isinstance(r, BaseException)]
+        if not failures:
+            return tuple(r for r in results if not isinstance(r, BaseException))
+        rejected = next((r for r in failures if isinstance(r, OrderRejectedError)), None)
+        if rejected is None:
+            raise failures[0]
+
+        handles = tuple(
+            self._handle_registry[t.order.orderId] if isinstance(r, BaseException) else r
+            for t, r in zip(trades, results, strict=True)
+        )
+        cancel_errors: dict[int, Exception] = {}
+        for handle, result in zip(handles, results, strict=True):
+            if result is rejected:
+                continue
+            try:
+                # These legs were placed by this client, whatever the trade snapshot says.
+                await self.cancel_order(replace(handle, owned=True))
+            except Exception as exc:  # noqa: BLE001
+                cancel_errors[handle.order_id] = exc
+        raise LinkedOrderRejectedError(
+            rejected.error_code,
+            rejected.message,
+            rejected.advanced_reject,
+            handles=handles,
+            cancel_errors=cancel_errors,
+        ) from rejected
 
     async def what_if(self, native_contract: Any, hb_order: HBOrder) -> IbWhatIfResult:
         """Ask IB for the margin and commission impact of an order without placing it.

@@ -41,6 +41,10 @@ def _field_names(cls: type) -> set[str]:
         ("cancelMktDepth", {"contract", "isSmartDepth"}),
         ("reqTickByTickData", {"contract", "tickType", "numberOfTicks", "ignoreSize"}),
         ("cancelTickByTickData", {"contract", "tickType"}),
+        ("reqPnL", {"account", "modelCode"}),
+        ("cancelPnL", {"account", "modelCode"}),
+        ("reqPnLSingle", {"account", "modelCode", "conId"}),
+        ("cancelPnLSingle", {"account", "modelCode", "conId"}),
     ],
 )
 def test_ib_method_accepts_params(method: str, params: set[str]) -> None:
@@ -58,6 +62,20 @@ def test_ib_method_accepts_params(method: str, params: set[str]) -> None:
         ("BarData", {"date", "open", "high", "low", "close", "volume"}),
         ("DOMLevel", {"price", "size"}),
         ("TickByTickAllLast", {"time", "price", "size"}),
+        ("PnL", {"account", "modelCode", "dailyPnL", "unrealizedPnL", "realizedPnL"}),
+        (
+            "PnLSingle",
+            {
+                "account",
+                "modelCode",
+                "conId",
+                "dailyPnL",
+                "unrealizedPnL",
+                "realizedPnL",
+                "position",
+                "value",
+            },
+        ),
     ],
 )
 def test_object_fields(cls_name: str, fields: set[str]) -> None:
@@ -66,6 +84,12 @@ def test_object_fields(cls_name: str, fields: set[str]) -> None:
 
 async def test_ib_exposes_error_event() -> None:
     assert hasattr(ib_async.IB(), "errorEvent")
+
+
+async def test_ib_exposes_pnl_events() -> None:
+    ib = ib_async.IB()
+    assert hasattr(ib, "pnlEvent")
+    assert hasattr(ib, "pnlSingleEvent")
 
 
 async def test_trade_exposes_status_event_and_order() -> None:

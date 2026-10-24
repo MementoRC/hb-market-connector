@@ -839,9 +839,11 @@ class IbGatewayTransport:
         three legs are sent back to back with the transmit flag only on the last,
         so IB activates the bracket atomically.
 
-        If any leg is rejected, every other leg that is not already terminal is
-        cancelled and LinkedOrderRejectedError is raised (see ``place_oca``).
-        Raises ConnectionLostError if not connected.
+        If any leg fails (rejected, timed out or otherwise), every other placed leg
+        not known to be rejected is cancelled. A rejection then raises
+        LinkedOrderRejectedError (see ``place_oca``); any other failure re-raises the
+        original exception after the rollback. Raises ConnectionLostError if not
+        connected.
         """
         from market_connector.exchanges.interactive_brokers.linked_orders import (  # noqa: PLC0415
             IbBracket,
@@ -869,10 +871,12 @@ class IbGatewayTransport:
         """Place *orders* as one OCA (one-cancels-all) group under a fresh group name.
 
         Needs at least two orders (ValueError before any IB call). Handles come
-        back in input order once every member has a first status. If any member is
-        rejected, the others that are not already terminal are cancelled and
-        LinkedOrderRejectedError is raised, carrying all handles and any cancel
-        failures. Raises ConnectionLostError if not connected.
+        back in input order once every member has a first status. If any member
+        fails (rejected, timed out or otherwise), every other placed member not known
+        to be rejected is cancelled. A rejection raises LinkedOrderRejectedError,
+        carrying all handles and any cancel failures; any other failure re-raises the
+        original exception after the rollback. Raises ConnectionLostError if not
+        connected.
         """
         from market_connector.exchanges.interactive_brokers.linked_orders import (  # noqa: PLC0415
             IbOcaGroup,

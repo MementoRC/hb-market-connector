@@ -881,7 +881,7 @@ class IbGatewayTransport:
         to be rejected is cancelled. A rejection raises LinkedOrderRejectedError,
         carrying all handles and any cancel failures; any other failure re-raises the
         original exception after the rollback. Raises ConnectionLostError if not
-        connected.
+        connected. Cancelling any one member makes IB cancel the whole group.
         """
         from market_connector.exchanges.interactive_brokers.linked_orders import (  # noqa: PLC0415
             IbOcaGroup,
@@ -1011,7 +1011,8 @@ class IbGatewayTransport:
 
         Raises ConnectionLostError if not connected, IbAccountConfigError if no account
         is resolved, PnlTimeoutError if IB does not answer within ``pnl_timeout``.
-        Concurrent calls share one IB subscription.
+        Concurrent calls share one IB subscription. The first answer may be stale;
+        take a second reading for a settled daily figure (streaming: #98).
         """
         account = self._pnl_account()
         result: IbPnL = await self._share_pnl_request(

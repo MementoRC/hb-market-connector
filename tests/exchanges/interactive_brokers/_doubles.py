@@ -36,6 +36,15 @@ class FakeClient:
     def __init__(self, owner: MockIb) -> None:
         self._owner = owner
         self.connect_options: list[str] = []
+        # ib_async Client.getReqId: increasing ints from a settable start.
+        self.next_req_id = 100
+        self.req_id_calls = 0
+
+    def getReqId(self) -> int:  # noqa: N802
+        self.req_id_calls += 1
+        req_id = self.next_req_id
+        self.next_req_id += 1
+        return req_id
 
     def setConnectOptions(self, opts: str) -> None:  # noqa: N802
         self._owner.call_order.append("setConnectOptions")
@@ -106,6 +115,47 @@ class MockIb:
         # Request ids in send order, for injecting IB errors against a specific request.
         self._depth_req_ids: list[int] = []
         self._mkt_data_req_ids: list[int] = []
+        # placeOrder/cancelOrder recordings; trades are real ib_async Trade objects.
+        self.placed_orders: list[Any] = []
+        self.placed_contracts: list[Any] = []
+        self.trades_by_order_id: dict[int, Any] = {}
+        self.cancel_order_calls: list[Any] = []
+        # orderIds whose cancelOrder raises, mapped to the exception.
+        self.cancel_errors: dict[int, Exception] = {}
+
+    def placeOrder(self, contract: Any, order: Any) -> Any:  # noqa: N802
+        """Record the order and return a real PendingSubmit ib_async Trade."""
+        from ib_async import OrderStatus, Trade  # noqa: PLC0415
+
+        if not order.orderId:
+            order.orderId = self.client.getReqId()
+        self.placed_orders.append(order)
+        self.placed_contracts.append(contract)
+        trade = Trade(
+            contract=contract,
+            order=order,
+            orderStatus=OrderStatus(orderId=order.orderId, status="PendingSubmit"),
+        )
+        self.trades_by_order_id[order.orderId] = trade
+        return trade
+
+    def cancelOrder(self, order: Any) -> None:  # noqa: N802
+        """Record the cancel; raise the configured error for this orderId, if any."""
+        self.cancel_order_calls.append(order)
+        if order.orderId in self.cancel_errors:
+            raise self.cancel_errors[order.orderId]
+
+    def emit_status(self, order_id: int, status: str, *, perm_id: int | None = None) -> None:
+        """Set the trade's status and fire its statusEvent, like an IB order update."""
+        trade = self.trades_by_order_id[order_id]
+        trade.orderStatus.status = status
+        if perm_id is not None:
+            trade.order.permId = perm_id
+        trade.statusEvent.emit(trade)
+
+    def emit_error(self, order_id: int, code: int = 201, msg: str = "order rejected") -> None:
+        """Fire IB errorEvent for *order_id* (reqId == orderId), as the real wire does."""
+        self.errorEvent(order_id, code, msg, None)
 
     def _start_ticker(self, req_type: str, ticker: FakeTicker) -> int:
         """Allocate the next reqId for *ticker* and record it as ib_async's wrapper does."""

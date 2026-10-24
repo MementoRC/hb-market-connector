@@ -894,8 +894,10 @@ class IbGatewayTransport:
     async def _settle_legs(self, trades: list[Any]) -> tuple[OrderHandle, ...]:
         """Await the first status of every leg; roll the group back if any leg fails.
 
-        On a failure, each other placed leg is cancelled (terminal ones are left alone by
-        ``cancel_order``) and cancel failures are collected. A rejection raises
+        Rollback rule: only legs known dead (failed with OrderRejectedError) are skipped.
+        Every other placed leg, including one that timed out or failed otherwise (it may
+        be live at IB), is cancelled; ``cancel_order`` leaves already-terminal trades
+        alone. Cancel failures are collected. A rejection raises
         LinkedOrderRejectedError from the original; any other failure (e.g. a status
         timeout) is re-raised unchanged after the rollback.
         """
@@ -913,7 +915,7 @@ class IbGatewayTransport:
         )
         cancel_errors: dict[int, Exception] = {}
         for handle, result in zip(handles, results, strict=True):
-            if isinstance(result, BaseException):
+            if isinstance(result, OrderRejectedError):
                 continue
             try:
                 await self.cancel_order(handle)

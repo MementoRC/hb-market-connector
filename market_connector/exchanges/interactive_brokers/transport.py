@@ -18,7 +18,7 @@ import asyncio
 import contextlib
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -892,12 +892,12 @@ class IbGatewayTransport:
         return IbOcaGroup(group=group, oca_type=oca_type, orders=handles)
 
     async def _settle_legs(self, trades: list[Any]) -> tuple[OrderHandle, ...]:
-        """Await the first status of every leg; roll the group back if one is rejected.
+        """Await the first status of every leg; roll the group back if any leg fails.
 
-        On a rejection, each other leg is cancelled (terminal ones are left alone by
-        ``cancel_order``), cancel failures are collected, and LinkedOrderRejectedError
-        is raised from the original rejection. Other failures (e.g. a status timeout)
-        propagate unchanged and leave the legs in place.
+        On a failure, each other placed leg is cancelled (terminal ones are left alone by
+        ``cancel_order``) and cancel failures are collected. A rejection raises
+        LinkedOrderRejectedError from the original; any other failure (e.g. a status
+        timeout) is re-raised unchanged after the rollback.
         """
         results = await asyncio.gather(
             *(self._await_leg(t) for t in trades), return_exceptions=True
@@ -906,8 +906,6 @@ class IbGatewayTransport:
         if not failures:
             return tuple(r for r in results if not isinstance(r, BaseException))
         rejected = next((r for r in failures if isinstance(r, OrderRejectedError)), None)
-        if rejected is None:
-            raise failures[0]
 
         handles = tuple(
             self._handle_registry[t.order.orderId] if isinstance(r, BaseException) else r
@@ -915,13 +913,16 @@ class IbGatewayTransport:
         )
         cancel_errors: dict[int, Exception] = {}
         for handle, result in zip(handles, results, strict=True):
-            if result is rejected:
+            if isinstance(result, BaseException):
                 continue
             try:
-                # These legs were placed by this client, whatever the trade snapshot says.
-                await self.cancel_order(replace(handle, owned=True))
+                await self.cancel_order(handle)
             except Exception as exc:  # noqa: BLE001
+                if rejected is None:
+                    logger.exception("IB rollback cancel of order %s failed", handle.order_id)
                 cancel_errors[handle.order_id] = exc
+        if rejected is None:
+            raise failures[0]
         raise LinkedOrderRejectedError(
             rejected.error_code,
             rejected.message,

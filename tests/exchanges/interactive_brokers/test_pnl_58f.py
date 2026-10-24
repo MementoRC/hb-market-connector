@@ -310,7 +310,7 @@ class TestTransportGetPositionPnl:
             transport.get_position_pnl(CON_ID),  # type: ignore[attr-defined]
             transport.get_position_pnl(756733),  # type: ignore[attr-defined]
         )
-        assert sorted(ib.pnl_single_req_calls) == [(ACCT, "", 756733), (ACCT, "", CON_ID)]
+        assert sorted(ib.pnl_single_req_calls) == sorted([(ACCT, "", CON_ID), (ACCT, "", 756733)])
         assert first.con_id == CON_ID
         assert second.con_id == 756733
 

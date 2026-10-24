@@ -41,6 +41,7 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     MarketDataPermissionError,
     MarketDataTimeoutError,
     OrderRejectedError,
+    WhatIfTimeoutError,
 )
 from market_connector.hb_compat.event_bus import EventBus
 from market_connector.hb_compat.logging import get_logger
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.positions import IbPosition
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
+    from market_connector.exchanges.interactive_brokers.what_if import IbWhatIfResult
     from market_connector.orders import HBOrder, TradeType
 
 logger = get_logger(__name__)
@@ -788,6 +790,33 @@ class IbGatewayTransport:
             ) from exc
         self._handle_registry[trade.order.orderId] = new_handle
         return new_handle
+
+    async def what_if(self, native_contract: Any, hb_order: HBOrder) -> IbWhatIfResult:
+        """Ask IB for the margin and commission impact of an order without placing it.
+
+        Nothing is submitted or tracked. Raises ConnectionLostError if not
+        connected, ValueError/NotImplementedError for orders that cannot be
+        translated (before any IB call), WhatIfTimeoutError if IB does not
+        answer within ``what_if_timeout``; IB errors propagate unchanged.
+        """
+        if not self._error_router.is_connected:
+            raise ConnectionLostError(1100, "transport not connected")
+
+        from market_connector.exchanges.interactive_brokers.what_if import (  # noqa: PLC0415
+            IbWhatIfResult,
+        )
+
+        ib_order = _hb_to_ib_order(hb_order)
+        if self.account is not None:
+            ib_order.account = self.account
+        timeout = self._spec.what_if_timeout
+        try:
+            state = await asyncio.wait_for(
+                self._ib.whatIfOrderAsync(native_contract, ib_order), timeout=timeout
+            )
+        except TimeoutError as exc:
+            raise WhatIfTimeoutError(0, f"no what-if answer within {timeout}s") from exc
+        return IbWhatIfResult.from_order_state(state)
 
     async def _wait_first_status_update(self, trade: Any) -> OrderHandle:
         """Await the first meaningful status update for a submitted trade.

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         IbGatewayTransport,
         SubscriptionHandle,
     )
+    from market_connector.exchanges.interactive_brokers.what_if import IbWhatIfResult
     from market_connector.orders import HBOrder
     from market_connector.transport.protocols import (
         RequestTransport,
@@ -124,6 +125,19 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
             )
         resolved = await self.contract_resolver.resolve(ref)
         return await self._transport.place_order(resolved.native, hb_order)
+
+    async def what_if(self, ref: InstrumentRef, hb_order: HBOrder) -> IbWhatIfResult:
+        """Resolve contract then preview the order's margin and commission impact.
+
+        Places nothing. Raises RuntimeError if no contract_resolver has been wired.
+        """
+        if self.contract_resolver is None:
+            raise RuntimeError(
+                "Gateway has no contract_resolver; cannot run what-if. "
+                "Use build_ib_gateway() to construct a fully-wired gateway."
+            )
+        resolved = await self.contract_resolver.resolve(ref)
+        return await self._transport.what_if(resolved.native, hb_order)
 
     async def get_trading_rules(self, ref: InstrumentRef) -> IbTradingRules:
         """Resolve contract (cached) and derive trading rules from its details.

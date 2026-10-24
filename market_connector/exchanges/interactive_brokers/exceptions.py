@@ -81,6 +81,10 @@ class MarketDataTimeoutError(IbError):
     """No usable market data (top-of-book or depth) arrived within ``market_data_timeout``."""
 
 
+class WhatIfTimeoutError(IbError):
+    """IB did not answer a what-if order within ``what_if_timeout``."""
+
+
 class HistoricalDataError(IbError):
     """IB historical data request failed or the farm is temporarily disconnected.
 

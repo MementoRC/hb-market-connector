@@ -37,6 +37,7 @@ class IbConnectionSpec:
     reconnect_initial_delay: float = 1.0  # seconds before the first reconnect attempt
     reconnect_max_delay: float = 60.0  # backoff cap in seconds
     market_data_timeout: float = 5.0  # seconds to wait for first top-of-book / depth data
+    what_if_timeout: float = 10.0  # seconds to wait for IB's what-if margin/commission answer
     depth_idle_release: float = 60.0  # seconds an unused depth stream stays open
     fetch_all_open_orders: bool = True  # reqAllOpenOrdersAsync on every (re)connect
 
@@ -47,6 +48,8 @@ class IbConnectionSpec:
             raise ValueError(f"client_id must be >= 0; got {self.client_id!r}")
         if self.market_data_timeout <= 0:
             raise ValueError(f"market_data_timeout must be > 0; got {self.market_data_timeout!r}")
+        if self.what_if_timeout <= 0:
+            raise ValueError(f"what_if_timeout must be > 0; got {self.what_if_timeout!r}")
         if self.depth_idle_release <= 0:
             raise ValueError(f"depth_idle_release must be > 0; got {self.depth_idle_release!r}")
         if self.reconnect_initial_delay <= 0 or self.reconnect_max_delay <= 0:

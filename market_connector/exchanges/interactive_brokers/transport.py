@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.linked_orders import IbBracket, IbOcaGroup
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
+    from market_connector.exchanges.interactive_brokers.order_options import IbOrderOptions
     from market_connector.exchanges.interactive_brokers.pnl import IbPnL, IbPositionPnL
     from market_connector.exchanges.interactive_brokers.positions import IbPosition
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
@@ -178,6 +179,35 @@ class FeeEvent:
     fee: Decimal
     fee_currency: str
     reconciled: bool = False
+
+
+def _apply_order_options(
+    order: Any, native_contract: Any, hb_order: HBOrder, options: IbOrderOptions | None
+) -> None:
+    """Apply *options* to the converted IB *order* in place; no-op when none are set.
+
+    Adaptive requires a SMART-routed STK contract and a MARKET or LIMIT order.
+
+    Raises:
+        ValueError: the options do not fit the contract or order type.
+    """
+    if options is None or options.adaptive_priority is None:
+        return
+
+    from ib_async import TagValue  # noqa: PLC0415 — lazy, ib_async is optional
+
+    from market_connector.orders import OrderType  # noqa: PLC0415
+
+    if native_contract.secType != "STK":
+        raise ValueError(f"Adaptive algo requires secType STK, got {native_contract.secType!r}")
+    if native_contract.exchange != "SMART":
+        raise ValueError(f"Adaptive algo requires exchange SMART, got {native_contract.exchange!r}")
+    if hb_order.order_type not in (OrderType.MARKET, OrderType.LIMIT):
+        raise ValueError(
+            f"Adaptive algo supports only MARKET and LIMIT orders, got {hb_order.order_type.name}"
+        )
+    order.algoStrategy = "Adaptive"
+    order.algoParams = [TagValue("adaptivePriority", options.adaptive_priority.value)]
 
 
 def _hb_to_ib_order(hb_order: HBOrder) -> Any:
@@ -842,16 +872,24 @@ class IbGatewayTransport:
         template = Contract(**fields)
         return await self._ib.reqContractDetailsAsync(template)
 
-    async def place_order(self, native_contract: Any, hb_order: HBOrder) -> OrderHandle:
+    async def place_order(
+        self,
+        native_contract: Any,
+        hb_order: HBOrder,
+        *,
+        options: IbOrderOptions | None = None,
+    ) -> OrderHandle:
         """Submit an order to IB and await the first non-PendingSubmit status update.
 
         The caller (gateway) is responsible for pre-resolving the contract; this
-        method receives the raw ib_async Contract object directly.
+        method receives the raw ib_async Contract object directly. ``options``
+        carries opt-in IB-specific settings (e.g. the Adaptive algo).
 
         Returns an OrderHandle snapshot reflecting the first meaningful status.
-        Raises ConnectionLostError if not connected, OrderRejectedError if IB
-        rejects the order before statusEvent fires, or asyncio.TimeoutError if
-        no status arrives within _first_status_timeout seconds.
+        Raises ConnectionLostError if not connected, ValueError if ``options`` do
+        not fit the contract or order type (before any IB call), OrderRejectedError
+        if IB rejects the order before statusEvent fires, or asyncio.TimeoutError
+        if no status arrives within _first_status_timeout seconds.
         """
         if not self._error_router.is_connected:
             from market_connector.exchanges.interactive_brokers.exceptions import (  # noqa: PLC0415
@@ -860,7 +898,9 @@ class IbGatewayTransport:
 
             raise ConnectionLostError(1100, "transport not connected")
 
-        trade = self._submit_leg(native_contract, _hb_to_ib_order(hb_order))
+        ib_order = _hb_to_ib_order(hb_order)
+        _apply_order_options(ib_order, native_contract, hb_order, options)
+        trade = self._submit_leg(native_contract, ib_order)
         return await self._await_leg(trade)
 
     def _submit_leg(self, native_contract: Any, ib_order: Any) -> Any:
@@ -1005,12 +1045,19 @@ class IbGatewayTransport:
             cancel_errors=cancel_errors,
         ) from rejected
 
-    async def what_if(self, native_contract: Any, hb_order: HBOrder) -> IbWhatIfResult:
+    async def what_if(
+        self,
+        native_contract: Any,
+        hb_order: HBOrder,
+        *,
+        options: IbOrderOptions | None = None,
+    ) -> IbWhatIfResult:
         """Ask IB for the margin and commission impact of an order without placing it.
 
-        Nothing is submitted or tracked. Raises ConnectionLostError if not
-        connected, ValueError/NotImplementedError for orders that cannot be
-        translated (before any IB call), WhatIfTimeoutError if IB does not
+        ``options`` (e.g. the Adaptive algo) are previewed exactly as place_order
+        would send them. Nothing is submitted or tracked. Raises ConnectionLostError
+        if not connected, ValueError/NotImplementedError for orders or ``options``
+        that cannot be translated (before any IB call), WhatIfTimeoutError if IB does not
         answer within ``what_if_timeout``; IB errors propagate unchanged.
         """
         if not self._error_router.is_connected:
@@ -1021,6 +1068,7 @@ class IbGatewayTransport:
         )
 
         ib_order = _hb_to_ib_order(hb_order)
+        _apply_order_options(ib_order, native_contract, hb_order, options)
         if self.account is not None:
             ib_order.account = self.account
         timeout = self._spec.what_if_timeout

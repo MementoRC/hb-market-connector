@@ -353,7 +353,7 @@ class TestGatewayWhatIf:
 
         assert result is sentinel
         resolver.resolve.assert_awaited_once_with(ref)
-        transport.what_if.assert_awaited_once_with(resolved.native, order)
+        transport.what_if.assert_awaited_once_with(resolved.native, order, options=None)
 
     async def test_without_resolver_raises_runtime_error(self) -> None:
         transport = MagicMock()

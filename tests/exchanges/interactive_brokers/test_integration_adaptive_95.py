@@ -24,13 +24,12 @@ if not os.environ.get("IB_GATEWAY_HOST"):
         allow_module_level=True,
     )
 
+from market_connector.contracts.instrument import InstrumentRef, InstrumentType
+from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 from market_connector.exchanges.interactive_brokers.order_options import (
     AdaptivePriority,
     IbOrderOptions,
 )
-
-from market_connector.contracts.instrument import InstrumentRef, InstrumentType
-from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 from market_connector.exchanges.interactive_brokers.what_if import IbWhatIfResult
 from market_connector.orders import HBOrder, OrderType, TradeType

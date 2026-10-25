@@ -96,6 +96,11 @@ services:
   Live paper finding: manually cancelling ONE member of an OCA group makes IB cancel
   ALL members (code 202 per leg), so the other handles also end `CANCELLED` and a
   later `cancel_all()` finds nothing.
+- `place_order(ref, order, options=IbOrderOptions(adaptive_priority=AdaptivePriority.NORMAL))`
+  opts a single order into IB's Adaptive algo (`Patient`/`Normal`/`Urgent`). Off by
+  default; only valid for SMART-routed STK MARKET/LIMIT orders (anything else raises
+  `ValueError` before any IB call). `what_if(..., options=...)` previews the same
+  order. Bracket and OCA orders do not take options yet.
 
 ## Stage roadmap
 

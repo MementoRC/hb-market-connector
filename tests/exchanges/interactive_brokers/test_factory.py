@@ -130,7 +130,9 @@ class TestGatewayDelegation:
         result = await g.place_order(ref, hb_order)
 
         g.contract_resolver.resolve.assert_awaited_once_with(ref)
-        g.unified_transport.place_order.assert_awaited_once_with(resolved.native, hb_order)
+        g.unified_transport.place_order.assert_awaited_once_with(
+            resolved.native, hb_order, options=None
+        )
         assert result is expected_handle
 
     @pytest.mark.asyncio

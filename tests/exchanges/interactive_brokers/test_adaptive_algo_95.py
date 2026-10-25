@@ -89,9 +89,11 @@ async def _place(
     """Place an order and acknowledge it once the double has recorded it."""
     import asyncio  # noqa: PLC0415
 
+    before = len(ib.placed_orders)
+
     async def _ack() -> None:
         for _ in range(500):
-            if ib.placed_orders:
+            if len(ib.placed_orders) > before:
                 ib.emit_status(ib.placed_orders[-1].orderId, "Submitted")
                 return
             await asyncio.sleep(0.002)

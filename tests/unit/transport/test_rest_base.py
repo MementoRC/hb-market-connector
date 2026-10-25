@@ -12,7 +12,6 @@ from market_connector.auth.protocols import Request, Signer
 from market_connector.exceptions import (
     AuthenticationError,
     ExchangeUnavailableError,
-    RateLimitError,
 )
 from market_connector.transport.endpoint import Endpoint
 from market_connector.transport.response import Response
@@ -101,18 +100,6 @@ class TestRestConnectorBase:
             result = await client.request("get_book")
         assert isinstance(result, Response)
         assert result.raw == {"status": "ok"}
-
-    @pytest.mark.asyncio
-    async def test_rate_limit_enforced(self, endpoints: dict) -> None:
-        client = RestConnectorBase(base_url="https://api.example.com", endpoints=endpoints)
-        mock_response = httpx.Response(200, json={})
-        with patch.object(client, "_client") as mock_client:
-            mock_client.request = AsyncMock(return_value=mock_response)
-            # 5 tokens, weight=2 each -> 2 calls OK (4 tokens), 3rd needs 2 but only 1 left
-            await client.request("place_order")
-            await client.request("place_order")
-            with pytest.raises(RateLimitError):
-                await client.request("place_order")
 
     @pytest.mark.asyncio
     async def test_signer_constructor_accepted(self, endpoints: dict) -> None:

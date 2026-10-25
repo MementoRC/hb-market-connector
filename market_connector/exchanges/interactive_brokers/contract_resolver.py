@@ -183,8 +183,9 @@ class IbContractResolver:
     def _parse_pair(pair: str) -> InstrumentRef:
         """Parse 'AAPL-USD' → InstrumentRef(symbol='AAPL', STOCK, quote_currency='USD').
 
-        Stage 2 assumes all pairs are STOCK instruments. Future stages may extend
-        this heuristic via secType hints in the pair string or a separate parse config.
+        Pair strings always resolve as STOCK. Callers needing other asset classes
+        (crypto, forex, futures) must pass an InstrumentRef to the market-data and
+        subscription APIs, which accept InstrumentRef overloads.
         """
         if "-" not in pair:
             return InstrumentRef(symbol=pair, instrument_type=InstrumentType.STOCK)

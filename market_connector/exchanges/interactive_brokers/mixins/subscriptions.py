@@ -6,17 +6,20 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from market_connector.exchanges.interactive_brokers.mixins._targets import resolve_target
 from market_connector.exchanges.interactive_brokers.transport import _native
 from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
+    from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.mixins.protocols import (
         HasContractResolver,
         HasIbTransport,
     )
     from market_connector.exchanges.interactive_brokers.transport import DepthBook
+    from market_connector.primitives import ConnectorPair
 
 _log = get_logger(__name__)
 
@@ -62,16 +65,20 @@ class SubscriptionsMixin:
     @asynccontextmanager
     async def subscribe_orderbook(
         self: HasIbTransport & HasContractResolver,  # type: ignore[valid-type]
-        trading_pair: str,
+        trading_pair: InstrumentRef | ConnectorPair,
         callback: Callable[[object], None],
     ) -> AsyncGenerator[None, None]:
-        """Stream DOM depth updates for trading_pair via IB reqMktDepth.
+        """Stream DOM depth updates via IB reqMktDepth.
 
+        Accepts an InstrumentRef for non-stock asset classes (crypto/forex/futures);
+        pair strings still resolve as STOCK. Update label is "SYMBOL-QUOTE" for an
+        InstrumentRef with a quote currency, the bare symbol otherwise, and the pair
+        string unchanged.
         Yields control to the caller; cleanup (handle.close()) runs on any exit.
         """
         global _active_subscriptions
 
-        contract = await self._contract_resolver.resolve_from_pair(trading_pair)
+        contract, label = await resolve_target(trading_pair, self._contract_resolver)
 
         def _on_dom_update(book: DepthBook) -> None:
             try:
@@ -81,12 +88,10 @@ class SubscriptionsMixin:
                 # Late import to avoid circular dep.
                 from market_connector.primitives import OrderBookUpdate  # noqa: PLC0415
 
-                callback(
-                    OrderBookUpdate(trading_pair=trading_pair, bids=bids, asks=asks, update_id=0)
-                )
+                callback(OrderBookUpdate(trading_pair=label, bids=bids, asks=asks, update_id=0))
             except Exception:
                 _log.warning(
-                    "Exception in subscribe_orderbook callback for %s", trading_pair, exc_info=True
+                    "Exception in subscribe_orderbook callback for %s", label, exc_info=True
                 )
 
         handle = self._transport.subscribe("depth", contract, _on_dom_update)
@@ -107,16 +112,20 @@ class SubscriptionsMixin:
     @asynccontextmanager
     async def subscribe_trades(
         self: HasIbTransport & HasContractResolver,  # type: ignore[valid-type]
-        trading_pair: str,
+        trading_pair: InstrumentRef | ConnectorPair,
         callback: Callable[[object], None],
     ) -> AsyncGenerator[None, None]:
-        """Stream trade tick updates for trading_pair via IB reqTickByTickData.
+        """Stream trade tick updates via IB reqTickByTickData.
 
+        Accepts an InstrumentRef for non-stock asset classes (crypto/forex/futures);
+        pair strings still resolve as STOCK. Event label is "SYMBOL-QUOTE" for an
+        InstrumentRef with a quote currency, the bare symbol otherwise, and the pair
+        string unchanged.
         Yields control to the caller; cleanup (handle.close()) runs on any exit.
         """
         global _active_subscriptions
 
-        contract = await self._contract_resolver.resolve_from_pair(trading_pair)
+        contract, label = await resolve_target(trading_pair, self._contract_resolver)
 
         def _on_tick(tick: object) -> None:
             try:
@@ -129,7 +138,7 @@ class SubscriptionsMixin:
                 # IB's AllLast ticks don't expose side; default BUY (Stage 3 limitation).
                 callback(
                     TradeEvent(
-                        trading_pair=trading_pair,
+                        trading_pair=label,
                         exchange_trade_id=trade_id,
                         price=Decimal(str(tick.price)),  # type: ignore[attr-defined]
                         amount=Decimal(str(tick.size)),  # type: ignore[attr-defined]
@@ -138,9 +147,7 @@ class SubscriptionsMixin:
                     )
                 )
             except Exception:
-                _log.warning(
-                    "Exception in subscribe_trades callback for %s", trading_pair, exc_info=True
-                )
+                _log.warning("Exception in subscribe_trades callback for %s", label, exc_info=True)
 
         handle = self._transport.subscribe("trades", contract, _on_tick)
         _active_subscriptions += 1

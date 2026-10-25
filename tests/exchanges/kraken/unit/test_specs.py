@@ -128,7 +128,7 @@ class TestKrakenRateLimitSpec:
         assert pool.capacity == 180
 
     def test_endpoint_pools_covers_public_endpoints(self) -> None:
-        expected = {"server_time", "assets", "asset_pairs", "ticker"}
+        expected = {"server_time", "depth", "asset_pairs", "ticker"}
         assert expected <= set(KRAKEN_RATE_LIMIT_SPEC.endpoint_pools.keys())
 
     def test_endpoint_pools_covers_private_endpoints(self) -> None:

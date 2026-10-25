@@ -5,8 +5,9 @@ test_integration.py). Covers STOCK, CRYPTO, FOREX, FUTURE and the not-found erro
 
 To run (paper Gateway only; live ports 4001/7496 are refused):
     IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4002 [IB_CLIENT_ID=957] [IB_PAPER_ACCOUNT=...] \\
-        pixi run test -m ib_gateway \\
+        pixi run -e default pytest -m ib_gateway --no-cov \\
         tests/exchanges/interactive_brokers/test_integration_asset_classes_57.py
+(Not ``pixi run test``: that task appends tests/ and would also run the order-placing live modules.)
 
 The crypto market-data check is skipped (not failed) when the account lacks a subscription.
 """

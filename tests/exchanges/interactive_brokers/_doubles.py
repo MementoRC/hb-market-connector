@@ -145,6 +145,34 @@ class MockIb:
         self.pnl_single_cancel_calls: list[tuple[str, str, int]] = []
         self._pnl_keys: set[tuple[str, str]] = set()
         self._pnl_single_keys: set[tuple[str, str, int]] = set()
+        # Live PnL/PnLSingle object returned by the latest request per key (ib_async mutates
+        # and re-emits the same object on every update).
+        self._pnl_live: dict[tuple[str, str], Any] = {}
+        self._pnl_single_live: dict[tuple[str, str, int], Any] = {}
+
+    def _reset_pnl_keys(self) -> None:
+        """Mirror ib_async Wrapper.reset(), which clears pnlKey2ReqId/pnlSingleKey2ReqId.
+
+        Real ib_async calls wrapper.reset() from Wrapper.connectionClosed() (socket drop)
+        and IB.disconnect(), so after a drop the same key may be requested again without
+        tripping the duplicate-key assert in IB.reqPnL / IB.reqPnLSingle.
+        """
+        self._pnl_keys.clear()
+        self._pnl_single_keys.clear()
+
+    def emit_pnl(self, account: str = "DU1111111", **values: float) -> None:
+        """Push an update for the active reqPnL key: mutate the live PnL and fire pnlEvent."""
+        pnl = self._pnl_live[(account, "")]
+        for name, value in values.items():
+            setattr(pnl, name, value)
+        self.pnlEvent(pnl)
+
+    def emit_pnl_single(self, con_id: int, account: str = "DU1111111", **values: float) -> None:
+        """Push an update for the active reqPnLSingle key (mutate live object, fire event)."""
+        pnl = self._pnl_single_live[(account, "", con_id)]
+        for name, value in values.items():
+            setattr(pnl, name, value)
+        self.pnlSingleEvent(pnl)
 
     def reqPnL(self, account: str, modelCode: str = "") -> Any:  # noqa: N802, N803
         """Like ib_async.IB.reqPnL: asserts on a duplicate key, emits pnlEvent later."""
@@ -155,6 +183,7 @@ class MockIb:
         self._pnl_keys.add(key)
         self.pnl_req_calls.append(key)
         pnl = PnL(account, modelCode)
+        self._pnl_live[key] = pnl
         if not self.pnl_hang:
 
             def _emit() -> None:
@@ -178,6 +207,7 @@ class MockIb:
         self._pnl_single_keys.add(key)
         self.pnl_single_req_calls.append(key)
         pnl = PnLSingle(account, modelCode, conId)
+        self._pnl_single_live[key] = pnl
         if not self.pnl_hang:
 
             def _emit() -> None:
@@ -291,12 +321,14 @@ class MockIb:
         self.event_log.append("disconnect")
         was_connected = self.connected
         self.connected = False
+        self._reset_pnl_keys()
         if was_connected:
             self.disconnectedEvent()
 
     def simulate_drop(self) -> None:
         """Simulate the socket dropping underneath us (not via disconnect())."""
         self.connected = False
+        self._reset_pnl_keys()
         self.disconnectedEvent()
 
     def rotate_tickers(self) -> None:

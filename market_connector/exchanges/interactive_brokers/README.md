@@ -70,7 +70,13 @@ services:
   (`reqPnL` / `reqPnLSingle`), takes the first answer and cancels; concurrent
   calls for the same account/position share one request. They raise
   `PnlTimeoutError` after `IbConnectionSpec.pnl_timeout` seconds (default 10).
-  Streaming PnL is not supported yet (tracked in #98).
+  `subscribe_pnl(callback)` and `subscribe_position_pnl(ref, callback)` stream
+  every update to the callback and return a `SubscriptionHandle`. There is one
+  IB request per account/position, shared by all subscribers and snapshots; it
+  is cancelled when the last one leaves. While a stream is active, snapshots
+  return its latest value (or wait for the first) instead of requesting again.
+  Streams survive reconnects and error 1101 (re-issued) and are released by
+  `disconnect()`; closing a handle afterwards is a no-op.
   The first IB answer can be stale (seen: daily_pnl 0.0, then -2.0872 a second
   later); for a settled daily figure take a second reading. `get_position_pnl` for a
   contract with no position still answers (position 0, `unrealized_pnl`/`value`

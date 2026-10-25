@@ -6,12 +6,15 @@ import time
 from decimal import Decimal
 from typing import TYPE_CHECKING, cast
 
+from market_connector.exchanges.interactive_brokers.mixins._targets import resolve_target
+
 if TYPE_CHECKING:
+    from market_connector.contracts.instrument import InstrumentRef
     from market_connector.exchanges.interactive_brokers.mixins.protocols import (  # noqa: F401
         HasContractResolver,
         HasIbTransport,
     )
-    from market_connector.primitives import CandleData
+    from market_connector.primitives import CandleData, ConnectorPair
 
 _INTERVAL_SECONDS: dict[str, int] = {
     "1m": 60,
@@ -50,17 +53,23 @@ class MarketDataMixin:
 
     async def get_orderbook(
         self,
-        trading_pair: str,
+        trading_pair: InstrumentRef | ConnectorPair,
     ) -> object:  # returns OrderBookSnapshot; typed loosely to avoid circular import
-        """Snapshot DOM depth for trading_pair from the transport's shared depth stream."""
-        contract = await self._contract_resolver.resolve_from_pair(trading_pair)  # type: ignore[attr-defined]
+        """Snapshot DOM depth from the transport's shared depth stream.
+
+        Accepts an InstrumentRef for non-stock asset classes (crypto/forex/futures);
+        pair strings still resolve as STOCK. The snapshot label is "SYMBOL-QUOTE" for
+        an InstrumentRef with a quote currency, the bare symbol otherwise, and the
+        pair string unchanged.
+        """
+        contract, label = await resolve_target(trading_pair, self._contract_resolver)  # type: ignore[attr-defined]
         bids, asks = await self._transport.depth_snapshot(contract)  # type: ignore[attr-defined]
 
         # Late import to avoid circular dependency with framework.
         from market_connector.primitives import OrderBookSnapshot  # noqa: PLC0415
 
         return OrderBookSnapshot(
-            trading_pair=trading_pair,
+            trading_pair=label,
             bids=bids,
             asks=asks,
             timestamp=time.time(),
@@ -68,24 +77,32 @@ class MarketDataMixin:
 
     async def get_mid_price(
         self: HasIbTransport & HasContractResolver,  # type: ignore[valid-type]
-        trading_pair: str,
+        trading_pair: InstrumentRef | ConnectorPair,
     ) -> Decimal:
         """Return (bid + ask) / 2 from the transport's persistent L1 ticker.
 
+        Accepts an InstrumentRef for non-stock asset classes (crypto/forex/futures);
+        pair strings still resolve as STOCK.
         Raises MarketDataTimeoutError if no valid bid and ask arrive in time.
         """
-        contract = await self._contract_resolver.resolve_from_pair(trading_pair)
+        contract, _ = await resolve_target(trading_pair, self._contract_resolver)
         bid, ask = await self._transport.top_of_book(contract)
         mid: Decimal = (bid + ask) / 2
         return mid
 
     async def get_candles(
         self: HasIbTransport & HasContractResolver,  # type: ignore[valid-type]
-        trading_pair: str,
+        trading_pair: InstrumentRef | ConnectorPair,
         interval: str,
         limit: int,
     ) -> list[object]:  # returns list[CandleData]; typed loosely to avoid circular import
-        """Fetch OHLCV candles via reqHistoricalDataAsync."""
+        """Fetch OHLCV candles via reqHistoricalDataAsync.
+
+        Accepts an InstrumentRef for non-stock asset classes (crypto/forex/futures);
+        pair strings still resolve as STOCK. Candle label is "SYMBOL-QUOTE" for an
+        InstrumentRef with a quote currency, the bare symbol otherwise, and the pair
+        string unchanged.
+        """
         from market_connector.exchanges.interactive_brokers.interval_map import (  # noqa: PLC0415
             to_ib_bar_size,
         )
@@ -95,7 +112,7 @@ class MarketDataMixin:
         from market_connector.primitives import CandleData  # noqa: PLC0415
 
         bar_size = to_ib_bar_size(interval)  # raises InvalidIntervalError early for bad intervals
-        contract = await self._contract_resolver.resolve_from_pair(trading_pair)
+        contract, label = await resolve_target(trading_pair, self._contract_resolver)
         duration = _duration_string(interval, limit)
 
         bars = await self._transport._ib.reqHistoricalDataAsync(
@@ -127,7 +144,7 @@ class MarketDataMixin:
             vol = bar.volume
             result.append(
                 CandleData(
-                    trading_pair=trading_pair,
+                    trading_pair=label,
                     timestamp=_bar_timestamp(bar.date),
                     interval=interval,
                     open=Decimal(str(bar.open)),

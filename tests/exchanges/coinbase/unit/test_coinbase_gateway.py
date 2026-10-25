@@ -105,7 +105,7 @@ def test_gateway_has_required_protocol_attributes(cfg: CoinbaseConfig) -> None:
     assert hasattr(gw, "_config")
     assert hasattr(gw, "_signer")
     assert hasattr(gw, "_mapper")
-    assert hasattr(gw, "_rate_limit")
+    assert gw._rest._rate_limiter.has_limit("products")  # spec-derived limiter
     assert hasattr(gw, "_ws_decoder")
     assert hasattr(gw, "_ws_auth")
     assert hasattr(gw, "_rest")

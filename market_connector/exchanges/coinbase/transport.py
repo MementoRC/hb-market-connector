@@ -18,6 +18,8 @@ from market_connector.auth.protocols import Request, Signer
 from market_connector.transport.rest_base import RestConnectorBase
 
 if TYPE_CHECKING:
+    from rate_limit import RateLimiter
+
     from market_connector.transport.endpoint import Endpoint
     from market_connector.transport.response import Response
 
@@ -33,6 +35,7 @@ class CoinbaseRestClient(RestConnectorBase):
         signer: Signer,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         if not base_url.startswith("https://"):
             raise ValueError(f"base_url must use https:// (got {base_url!r})")
@@ -42,6 +45,7 @@ class CoinbaseRestClient(RestConnectorBase):
             signer=None,  # framework signer bypassed; signing handled in request() below
             max_retries=max_retries,
             retry_delay=retry_delay,
+            rate_limiter=rate_limiter,
         )
         self._coinbase_signer = signer
 

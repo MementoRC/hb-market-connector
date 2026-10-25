@@ -20,7 +20,7 @@ from market_connector.exchanges.kraken.specs import (
     KRAKEN_WS_DECODER,
 )
 from market_connector.exchanges.kraken.transport import KrakenTransport
-from market_connector.rate_limits.tiered import TieredRateLimit
+from market_connector.rate_limits.limiter import limiter_from_tiered_spec
 from market_connector.transport.ws_base import WsConnectorBase
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,6 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         )
         self._signer = kraken_signer_factory(api_key, secret_key)
         self._mapper = KRAKEN_SYMBOL_MAPPER
-        self._rate_limit = TieredRateLimit(spec=KRAKEN_RATE_LIMIT_SPEC, active_tier=str(tier))
         self._ws_decoder = KRAKEN_WS_DECODER
         self._endpoints = ENDPOINT_REGISTRY
 
@@ -117,6 +116,7 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
             signer=self._signer,
             max_retries=3,
             retry_delay=1.0,
+            rate_limiter=limiter_from_tiered_spec(KRAKEN_RATE_LIMIT_SPEC, str(tier)),
         )
 
         # Public WebSocket (no auth); private WS auth bound after rest client is ready.

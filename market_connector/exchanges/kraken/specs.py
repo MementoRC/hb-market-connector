@@ -131,20 +131,19 @@ KRAKEN_RATE_LIMIT_SPEC: TieredRateLimitSpec = TieredRateLimitSpec(
     },
     # Endpoint → pool routing is defined in Stage 3 (endpoints.py).
     # Skeleton entries provided here for the public pool.
+    # Keys mirror ENDPOINT_REGISTRY exactly; pool values are still provisional (see #111).
     endpoint_pools={
         "server_time": [("public", 1)],
-        "assets": [("public", 1)],
         "asset_pairs": [("public", 1)],
         "ticker": [("public", 1)],
-        "ohlc": [("public", 1)],
-        "order_book": [("public", 1)],
-        "recent_trades": [("public", 1)],
+        "depth": [("public", 1)],
         "balance": [("private", 1)],
         "open_orders": [("private", 1)],
-        "closed_orders": [("private", 1)],
+        "query_orders": [("private", 1)],
+        "query_trades": [("private", 1)],
+        "get_websockets_token": [("private", 1)],
         "add_order": [("private", 1), ("matching", 1)],
         "cancel_order": [("private", 1), ("matching", 1)],
-        "get_ws_token": [("private", 1)],
     },
 )
 

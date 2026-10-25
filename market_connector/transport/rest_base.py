@@ -67,8 +67,9 @@ class RestConnectorBase:
         max_retries: Number of retries on transient (5xx) errors.
         retry_delay: Initial delay between retries in seconds (doubles each retry).
         rate_limiter: hb-rate-limit ``RateLimiter`` shared across clients; a private
-            one is created when omitted. Each endpoint is registered lazily as
-            ``"{METHOD}:{path}"``.
+            one is created when omitted. An endpoint whose name is already a registered
+            limit (e.g. from ``limiter_from_flat_spec``) is charged under that name;
+            any other endpoint is registered lazily as ``"{METHOD}:{path}"``.
 
     Rate limiting waits: when an endpoint's limit is exhausted (or paused after a
     429), ``request`` sleeps until capacity is available instead of raising
@@ -94,8 +95,14 @@ class RestConnectorBase:
         self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter()
         self._registered_limits: set[str] = set()
 
-    def _register_limit(self, endpoint: Endpoint) -> str:
-        """Lazily register the endpoint's limit once; return its limit_id."""
+    def _register_limit(self, endpoint_name: str, endpoint: Endpoint) -> str:
+        """Return the endpoint's limit_id, registering a METHOD:path limit lazily.
+
+        A limit already registered under the endpoint name (e.g. from a pool spec)
+        is used as-is; otherwise a per-endpoint ``"{METHOD}:{path}"`` limit is added.
+        """
+        if self._rate_limiter.has_limit(endpoint_name):
+            return endpoint_name
         limit_id = f"{endpoint.method}:{endpoint.path}"
         if limit_id not in self._registered_limits:
             self._rate_limiter.add_limit(RateLimit(limit_id, endpoint.limit, endpoint.window))
@@ -124,7 +131,7 @@ class RestConnectorBase:
         present) and raises ``RateLimitError``.
         """
         endpoint = self._endpoints[endpoint_name]
-        limit_id = self._register_limit(endpoint)
+        limit_id = self._register_limit(endpoint_name, endpoint)
         charge = await self._rate_limiter.reserve(limit_id, {limit_id: endpoint.weight})
 
         url = f"{self._base_url}{endpoint.path}"

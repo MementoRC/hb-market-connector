@@ -15,7 +15,7 @@ from market_connector.exchanges.coinbase.specs import (
     COINBASE_WS_SHAPE_DECODER_SPEC,
 )
 from market_connector.exchanges.coinbase.transport import CoinbaseRestClient
-from market_connector.rate_limits.flat import FlatRateLimit
+from market_connector.rate_limits.limiter import limiter_from_flat_spec
 from market_connector.symbols.mapper import IdentityMapper
 from market_connector.transport.ws_base import WsConnectorBase
 from market_connector.ws_models.auth_models import PassThroughAuth
@@ -32,7 +32,6 @@ class CoinbaseGateway(OrdersMixin, AccountsMixin, MarketDataMixin, Subscriptions
         self._config = config
         self._signer = coinbase_signer_factory(config.api_key, config.secret_key)
         self._mapper = IdentityMapper(separator="-")
-        self._rate_limit = FlatRateLimit(spec=COINBASE_RATE_LIMIT_SPEC)
         self._ws_decoder = JsonEnvelopeDecoder(**COINBASE_WS_SHAPE_DECODER_SPEC)
         # PassThroughAuth: Coinbase WS subscribe messages are not transformed via
         # WsConnectorBase.send(); the subscriptions mixin registers handlers directly.
@@ -46,6 +45,7 @@ class CoinbaseGateway(OrdersMixin, AccountsMixin, MarketDataMixin, Subscriptions
             signer=self._signer,
             max_retries=3,
             retry_delay=1.0,
+            rate_limiter=limiter_from_flat_spec(COINBASE_RATE_LIMIT_SPEC),
         )
         self._ws = WsConnectorBase(
             url=config.ws_url,

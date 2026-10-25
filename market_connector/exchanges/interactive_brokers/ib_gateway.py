@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from market_connector.contracts.protocols import ContractResolver
     from market_connector.exchanges.interactive_brokers.linked_orders import IbBracket, IbOcaGroup
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
+    from market_connector.exchanges.interactive_brokers.order_options import IbOrderOptions
     from market_connector.exchanges.interactive_brokers.pnl import IbPnL, IbPositionPnL
     from market_connector.exchanges.interactive_brokers.positions import IbPosition
     from market_connector.exchanges.interactive_brokers.transport import (
@@ -113,8 +114,17 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
 
     # --- ExecutionGateway (Stage 2) ---
 
-    async def place_order(self, ref: InstrumentRef, hb_order: HBOrder) -> OrderHandle:
+    async def place_order(
+        self,
+        ref: InstrumentRef,
+        hb_order: HBOrder,
+        *,
+        options: IbOrderOptions | None = None,
+    ) -> OrderHandle:
         """Resolve contract then delegate to transport.place_order.
+
+        ``options`` carries opt-in IB-specific settings (e.g. the Adaptive algo);
+        an invalid combination raises ValueError before any IB call.
 
         The gateway is responsible for contract resolution so that the transport
         remains free of resolver dependencies. Raises RuntimeError if no
@@ -127,7 +137,7 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
                 "Use build_ib_gateway() to construct a fully-wired gateway."
             )
         resolved = await self.contract_resolver.resolve(ref)
-        return await self._transport.place_order(resolved.native, hb_order)
+        return await self._transport.place_order(resolved.native, hb_order, options=options)
 
     async def place_bracket(
         self, ref: InstrumentRef, entry: HBOrder, take_profit: HBOrder, stop_loss: HBOrder
@@ -162,10 +172,17 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         resolved = await self.contract_resolver.resolve(ref)
         return await self._transport.place_oca(resolved.native, orders, oca_type)
 
-    async def what_if(self, ref: InstrumentRef, hb_order: HBOrder) -> IbWhatIfResult:
+    async def what_if(
+        self,
+        ref: InstrumentRef,
+        hb_order: HBOrder,
+        *,
+        options: IbOrderOptions | None = None,
+    ) -> IbWhatIfResult:
         """Resolve contract then preview the order's margin and commission impact.
 
-        Places nothing. Raises RuntimeError if no contract_resolver has been wired.
+        ``options`` are previewed as place_order would send them. Places nothing.
+        Raises RuntimeError if no contract_resolver has been wired.
         """
         if self.contract_resolver is None:
             raise RuntimeError(
@@ -173,7 +190,7 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
                 "Use build_ib_gateway() to construct a fully-wired gateway."
             )
         resolved = await self.contract_resolver.resolve(ref)
-        return await self._transport.what_if(resolved.native, hb_order)
+        return await self._transport.what_if(resolved.native, hb_order, options=options)
 
     async def get_trading_rules(self, ref: InstrumentRef) -> IbTradingRules:
         """Resolve contract (cached) and derive trading rules from its details.

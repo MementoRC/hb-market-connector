@@ -22,6 +22,11 @@ class IbConnectionSpec:
     with another client_id, and (for the master client) TWS orders become
     visible, read-only (``OrderHandle.owned`` is False). IB does not keep
     other clients' orders live-updated after that snapshot.
+
+    connect_timeout bounds the socket handshake and each startup sync request
+    (per request, not in total); None or 0 disables it. connect_attempts is the
+    total number of tries for the initial connect() when it fails with a
+    timeout; other errors are raised at once.
     """
 
     host: str = "127.0.0.1"
@@ -41,8 +46,14 @@ class IbConnectionSpec:
     pnl_timeout: float = 10.0  # seconds to wait for IB's first PnL snapshot
     depth_idle_release: float = 60.0  # seconds an unused depth stream stays open
     fetch_all_open_orders: bool = True  # reqAllOpenOrdersAsync on every (re)connect
+    connect_timeout: float | None = 15.0  # seconds per handshake/sync request; None or 0 = none
+    connect_attempts: int = 3  # total tries for the initial connect() on timeout
 
     def __post_init__(self) -> None:
+        if self.connect_timeout is not None and self.connect_timeout < 0:
+            raise ValueError(f"connect_timeout must be >= 0 or None; got {self.connect_timeout!r}")
+        if self.connect_attempts < 1:
+            raise ValueError(f"connect_attempts must be >= 1; got {self.connect_attempts!r}")
         if not isinstance(self.client_id, int) or isinstance(self.client_id, bool):
             raise TypeError(f"client_id must be an int; got {self.client_id!r}")
         if self.client_id < 0:

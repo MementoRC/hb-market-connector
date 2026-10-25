@@ -112,6 +112,7 @@ class TestConnectionLifecycle:
                 clientId=1,
                 readonly=False,
                 account="",
+                timeout=15.0,
                 raiseSyncErrors=True,
             )
 

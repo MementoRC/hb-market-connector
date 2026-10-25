@@ -50,6 +50,11 @@ services:
   connect and reconnect, so orders from other clients (and, for client 0, TWS)
   appear in `open_orders()` read-only with `owned=False`. IB does not keep
   other clients' orders live-updated after that snapshot.
+- `connect_timeout` (default 15 s; `None` or 0 = none) bounds the handshake and
+  each startup sync request. `connect()` retries a timeout up to
+  `connect_attempts` (default 3) times with backoff, then raises; other errors
+  raise at once. A client-id clash (IB 326) surfaces as a timeout, so it is
+  retried too.
 - `cancel_order` refuses handles with `owned=False` (`ValueError`), and
   `cancel_all` cancels only orders owned by this client; it never issues a
   global cancel.

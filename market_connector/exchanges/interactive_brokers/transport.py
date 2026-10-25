@@ -77,6 +77,13 @@ def _stream_key(contract: Any) -> Hashable:
     return contract_id if contract_id else contract
 
 
+def _is_retryable_connect_error(exc: BaseException) -> bool:
+    """True for a connect timeout: builtin TimeoutError or ib_async's sync-request failure."""
+    if isinstance(exc, TimeoutError):
+        return True
+    return type(exc) is ConnectionError and bool(exc.args) and isinstance(exc.args[0], list)
+
+
 def _native(contract: Any) -> Any:
     """Unwrap a ResolvedContract to the ib_async Contract IB calls expect."""
     return contract.native if isinstance(contract, ResolvedContract) else contract
@@ -424,6 +431,7 @@ class IbGatewayTransport:
         # Reconnect supervisor state.
         self._handlers_attached: bool = False
         self._closing: bool = False
+        self._connecting: bool = False
         self._supervisor: asyncio.Task[None] | None = None
         self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep  # patchable in tests
         self._error_router._connection_listeners.append(self._on_router_connection)
@@ -442,14 +450,51 @@ class IbGatewayTransport:
         return self._account
 
     async def connect(self) -> None:
-        """Connect to IB Gateway. Auth is handled by Gateway externally
-        (interactive 2FA login at Gateway startup); this just opens the socket.
+        """Connect to IB Gateway, retrying timeouts a bounded number of times.
 
-        Raises whatever ``connectAsync`` raises; on failure no handlers stay
-        attached and no state is published.
+        Auth is handled by Gateway externally (interactive 2FA login at Gateway
+        startup); this just opens the socket. ``spec.connect_timeout`` is passed
+        to ib_async and bounds the handshake and each startup sync request.
+
+        Retried: builtin ``TimeoutError`` and ib_async's sync-request failure
+        (``ConnectionError`` whose first arg is a list, e.g.
+        ``ConnectionError(["executions request timed out"])``). Anything else
+        (refused connection, ``IbAccountConfigError``, ...) is raised at once.
+        Up to ``spec.connect_attempts`` tries are made with exponential backoff
+        from ``reconnect_initial_delay``, capped at ``reconnect_max_delay``; the
+        last error is raised when all fail. On failure no handlers stay attached
+        and no state is published.
+
+        The reconnect supervisor only covers drops of an established session; a
+        failed initial attempt never starts it. Known limit: ib_async surfaces a
+        client-id clash (IB error 326) as a ``TimeoutError``, so it is retried up
+        to ``connect_attempts`` times before being raised.
         """
         self._closing = False
-        await self._connect_once()
+        self._connecting = True
+        try:
+            delay = self._spec.reconnect_initial_delay
+            for attempt in range(1, self._spec.connect_attempts + 1):
+                try:
+                    await self._connect_once()
+                except Exception as exc:
+                    if not _is_retryable_connect_error(exc) or (
+                        attempt >= self._spec.connect_attempts
+                    ):
+                        raise
+                    logger.warning(
+                        "IB connect attempt %d/%d failed (retry in %.1fs): %s",
+                        attempt,
+                        self._spec.connect_attempts,
+                        delay,
+                        exc,
+                    )
+                    await self._sleep(delay)
+                    delay = min(delay * 2, self._spec.reconnect_max_delay)
+                else:
+                    break
+        finally:
+            self._connecting = False
         self._publish_state("connected")
 
     async def _connect_once(self) -> None:
@@ -466,6 +511,7 @@ class IbGatewayTransport:
             clientId=self._spec.client_id,
             readonly=self._spec.readonly,
             account=self._spec.account_id or "",
+            timeout=self._spec.connect_timeout,
             raiseSyncErrors=True,
         )
         self._resolve_account()
@@ -649,8 +695,8 @@ class IbGatewayTransport:
 
     def _on_disconnected(self, *_args: Any) -> None:
         """disconnectedEvent handler: start the reconnect supervisor unless we caused it."""
-        if self._closing:
-            return
+        if self._closing or self._connecting:
+            return  # a failed initial attempt fires this; connect() owns its retries
         if self._supervisor is not None and not self._supervisor.done():
             return  # failed attempts also fire this; never run two supervisors
         self._error_router.set_connected(False)

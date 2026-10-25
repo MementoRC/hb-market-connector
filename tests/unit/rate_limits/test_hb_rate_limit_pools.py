@@ -6,11 +6,6 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from market_connector.rate_limits.limiter import (
-    limiter_from_flat_spec,
-    limiter_from_tiered_spec,
-    pool_to_rate_limit,
-)
 from rate_limit import RateLimit, RateLimiter
 from rate_limit.testing import ManualClock
 
@@ -22,6 +17,11 @@ from market_connector.exchanges.kraken.endpoints import ENDPOINT_REGISTRY as KRA
 from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
 from market_connector.exchanges.kraken.schemas.enums import KrakenAPITier
 from market_connector.exchanges.kraken.specs import KRAKEN_RATE_LIMIT_SPEC
+from market_connector.rate_limits.limiter import (
+    limiter_from_flat_spec,
+    limiter_from_tiered_spec,
+    pool_to_rate_limit,
+)
 from market_connector.rate_limits.pool import PoolSpec
 from market_connector.transport.endpoint import Endpoint
 from market_connector.transport.rest_base import RestConnectorBase

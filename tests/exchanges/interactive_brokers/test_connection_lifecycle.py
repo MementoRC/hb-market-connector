@@ -89,6 +89,7 @@ class TestStrictConnect:
                 "clientId": 7,
                 "readonly": True,
                 "account": "DU123",
+                "timeout": 15.0,
                 "raiseSyncErrors": True,
             }
         ]

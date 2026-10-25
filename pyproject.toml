@@ -12,6 +12,7 @@ dependencies = [
     "hb-logger @ git+https://github.com/MementoRC/hb-logger.git@06534b7708a13b4425a06dd154976db96c2c45be",
     "hb-data-type-primitives @ git+https://github.com/MementoRC/hb-data-type-primitives.git@4eaf3d555aa99a1f96f113cf5a914491584ff8fc",
     "hb-event-bus @ git+https://github.com/MementoRC/hb-event-bus.git@7e2538f21af739c119dd44f3934a8dc48586254c",
+    "hb-rate-limit @ git+https://github.com/MementoRC/hb-rate-limit.git@12d56aedd5a6e6260a991e44ef86635dcf742aaf",  # v0.3.0
     "pydantic>=2",
     "httpx>=0.27",
     "websockets>=12.0",

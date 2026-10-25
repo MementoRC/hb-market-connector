@@ -110,7 +110,7 @@ services:
 pixi run test market_connector/exchanges/interactive_brokers/
 
 # Integration tests (requires running IB Gateway)
-pixi run test -m ib_gateway
+pixi run -e default pytest -m ib_gateway --no-cov tests/
 ```
 
 Live tests are gated on `IB_GATEWAY_HOST` and skip when it is unset:
@@ -119,7 +119,7 @@ Live tests are gated on `IB_GATEWAY_HOST` and skip when it is unset:
 - `IB_GATEWAY_PORT` — Gateway API port (default `4002`, the paper port).
 
 ```bash
-IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 pixi run test -m ib_gateway
+IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 pixi run -e default pytest -m ib_gateway --no-cov tests/
 ```
 
 The `test` task appends `tests/`, so a path argument does not restrict the run. For a single live module, use `pixi run -e default pytest -m ib_gateway --no-cov <file>` instead.

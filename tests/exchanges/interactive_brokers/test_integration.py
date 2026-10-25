@@ -11,7 +11,8 @@ To run:
        (IB_GATEWAY_PORT defaults to 4002; use e.g. 4012 if 4002 is taken locally.
        Live ports 4001/7496 are refused; a live Gateway on a non-default port
        cannot be detected, so always point at a paper Gateway.)
-    3. Run: IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 pixi run test -m ib_gateway \\
+    3. Run: IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 \\
+           pixi run -e default pytest -m ib_gateway --no-cov \\
            tests/exchanges/interactive_brokers/test_integration.py
 
 Requires:

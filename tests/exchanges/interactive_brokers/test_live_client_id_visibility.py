@@ -18,7 +18,8 @@ Prerequisites:
 The tests skip cleanly when no Gateway is reachable.
 
 Run:
-    IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 pixi run test -m ib_gateway \\
+    IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=4012 \\
+        pixi run -e default pytest -m ib_gateway --no-cov \\
         tests/exchanges/interactive_brokers/test_live_client_id_visibility.py
 """
 

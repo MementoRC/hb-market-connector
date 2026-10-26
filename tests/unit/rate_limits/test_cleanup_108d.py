@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import pathlib
+import re
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -143,9 +144,12 @@ def test_old_acquire_based_conformance_signature_is_gone() -> None:
 # ---- G4: release hygiene ------------------------------------------------------------
 
 
-def test_about_version_is_0_2_0() -> None:
+def test_about_version_matches_latest_changelog_release() -> None:
     about = importlib.import_module("market_connector.__about__")
-    assert about.__version__ == "0.2.0"
+    text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    match = re.search(r"^## \[(\d+\.\d+\.\d+)\]", text, flags=re.MULTILINE)
+    assert match is not None, "CHANGELOG.md must have a '## [X.Y.Z]' release heading"
+    assert about.__version__ == match.group(1)
 
 
 def test_changelog_exists_and_documents_removals() -> None:

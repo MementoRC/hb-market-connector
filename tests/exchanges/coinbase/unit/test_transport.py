@@ -40,7 +40,9 @@ class TestCoinbaseRestClient:
 
         captured_headers: list[dict] = []
 
-        async def fake_parent_request(self, endpoint_name, params=None, data=None, headers=None):  # noqa: ANN001
+        async def fake_parent_request(  # noqa: ANN001
+            self, endpoint_name, params=None, data=None, headers=None, *, path_params=None
+        ):
             captured_headers.append(headers or {})
             return {"headers_received": headers}
 
@@ -87,7 +89,12 @@ class TestCoinbaseRestClient:
             signer=signer,
         )
 
-        async def fake_parent(self, endpoint_name, params=None, data=None, headers=None):  # noqa: ANN001
+        captured_path_params: list = []
+
+        async def fake_parent(  # noqa: ANN001
+            self, endpoint_name, params=None, data=None, headers=None, *, path_params=None
+        ):
+            captured_path_params.append(path_params)
             return {}
 
         monkeypatch.setattr(RestConnectorBase, "request", fake_parent)
@@ -96,3 +103,4 @@ class TestCoinbaseRestClient:
 
         assert len(signer.calls) == 1
         assert signer.calls[0].path == "/brokerage/orders/historical/abc123"
+        assert captured_path_params == [{"order_id": "abc123"}]

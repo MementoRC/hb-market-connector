@@ -40,6 +40,7 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     IbAccountConfigError,
     LinkedOrderRejectedError,
+    MarketDataLinesExhaustedError,
     MarketDataPermissionError,
     MarketDataTimeoutError,
     OrderRejectedError,
@@ -137,6 +138,9 @@ _DEPTH_ROWS = 10
 # only a waiter that times out fails (with the remembered code and text).
 _HARD_PERMISSION_CODES = frozenset({354})
 _SOFT_PERMISSION_CODES = frozenset({2152, 10089, 10090})
+
+# IB error 101: the account's market-data line allowance is used up (issue #104).
+_MAX_TICKERS_CODE = 101
 
 
 @dataclass(frozen=True)
@@ -371,6 +375,7 @@ class _ActiveSubscription:
     contract: Any
     dispatch: Callable[[Any], None]
     ticker: Any = None
+    line_held: bool = False  # trades only: the subscription owns one market-data line
 
 
 @dataclass
@@ -460,6 +465,8 @@ class IbGatewayTransport:
         self._depth_streams: dict[Hashable, _Stream] = {}
         # IB reqId -> (stream, is_depth) for the streams' current requests; errors route by it.
         self._stream_by_req_id: dict[int, tuple[_Stream, bool]] = {}
+        # IB-side market-data streams held (L1, depth, trades), capped by spec.market_data_lines.
+        self._md_lines: int = 0
         # Fill de-duplication: execId base (final ".NN" removed) -> last full execId.
         self._seen_fills: OrderedDict[str, str] = OrderedDict()
         self._seen_fees: OrderedDict[str, None] = OrderedDict()
@@ -478,6 +485,30 @@ class IbGatewayTransport:
     @property
     def is_connected(self) -> bool:
         return bool(self._ib.isConnected())
+
+    @property
+    def market_data_lines_in_use(self) -> int:
+        """Market-data lines (L1, depth and trades streams) this transport currently holds."""
+        return self._md_lines
+
+    def _require_free_line(self) -> None:
+        """Fail fast, before any IB request, when every market-data line is taken."""
+        cap = self._spec.market_data_lines
+        if self._md_lines >= cap:
+            raise MarketDataLinesExhaustedError(
+                _MAX_TICKERS_CODE,
+                f"all {cap} market-data lines (IbConnectionSpec.market_data_lines) are in use",
+            )
+
+    def _take_line(self) -> None:
+        """Count one more held line; warn when usage crosses 80% of the cap."""
+        cap = self._spec.market_data_lines
+        self._md_lines += 1
+        if self._md_lines * 5 >= cap * 4 > (self._md_lines - 1) * 5:
+            logger.warning("IB market-data lines at %d of %d (80%% reached)", self._md_lines, cap)
+
+    def _release_line(self) -> None:
+        self._md_lines -= 1
 
     @property
     def account(self) -> str | None:
@@ -1455,11 +1486,18 @@ class IbGatewayTransport:
             dispatch=_dispatch_depth if channel == "depth" else _dispatch_trades,
         )
         depth_stream: _Stream | None = None
-        if channel == "depth":
-            # Depth subscribers share the contract's stream; it feeds them DepthBooks.
-            depth_stream = self._acquire_depth(contract)
-        else:
-            self._issue_stream(active)
+        try:
+            if channel == "depth":
+                # Depth subscribers share the contract's stream; it feeds them DepthBooks.
+                depth_stream = self._acquire_depth(contract)
+            else:
+                self._require_free_line()
+                self._issue_stream(active)
+                self._take_line()
+                active.line_held = True
+        except Exception:
+            self._event_bus.unsubscribe(bus_subscription)
+            raise
         self._subscriptions[event_key] = active
 
         def _cleanup() -> None:
@@ -1468,8 +1506,7 @@ class IbGatewayTransport:
             if depth_stream is not None:
                 self._release_depth(depth_stream)
             else:
-                self._unhook_stream(active)
-                self._cancel_stream(active)
+                self._drop_trades(active)
 
         return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup)
 
@@ -1488,6 +1525,19 @@ class IbGatewayTransport:
     def _cancel_stream(self, sub: _ActiveSubscription) -> None:
         """Cancel the IB-side tick-by-tick stream for a trades *sub*."""
         self._ib.cancelTickByTickData(_native(sub.contract), "AllLast")
+
+    def _drop_trades(self, sub: _ActiveSubscription) -> None:
+        """Unhook, cancel and free the line of a trades *sub*; a no-op once already dropped."""
+        if not sub.line_held:
+            return
+        sub.line_held = False
+        self._subscriptions.pop(sub.event_key, None)
+        self._unhook_stream(sub)
+        self._release_line()
+        try:
+            self._cancel_stream(sub)
+        except Exception as exc:
+            logger.warning("IB cancel of %s failed: %s", sub.event_key, exc)
 
     def resubscribe_all(self, *, cancel_old: bool = True) -> None:
         """Re-issue every open IB request on a fresh ticker.
@@ -1571,10 +1621,12 @@ class IbGatewayTransport:
     # -- persistent streams -------------------------------------------------
 
     def _release_all_streams(self) -> None:
-        """Cancel every L1 ticker and depth stream exactly once and stop idle timers."""
+        """Cancel every L1, depth and trades stream exactly once and stop idle timers."""
         for streams, depth in ((self._l1_streams, False), (self._depth_streams, True)):
             for stream in list(streams.values()):
                 self._drop_stream(streams, stream, depth=depth)
+        for sub in list(self._subscriptions.values()):
+            self._drop_trades(sub)
         for feed in list(self._pnl_feeds.values()):
             self._drop_pnl_feed(feed, exc=ConnectionLostError(1100, "transport disconnected"))
 
@@ -1582,7 +1634,10 @@ class IbGatewayTransport:
         self, streams: dict[Hashable, _Stream], stream: _Stream, *, depth: bool
     ) -> None:
         """Forget *stream*, stop its timer, detach its hook and cancel it at IB."""
-        streams.pop(_stream_key(stream.contract), None)
+        key = _stream_key(stream.contract)
+        if streams.get(key) is stream:
+            del streams[key]
+            self._release_line()
         if stream.idle is not None:
             stream.idle.cancel()
             stream.idle = None
@@ -1594,9 +1649,13 @@ class IbGatewayTransport:
             logger.warning("IB cancel of stream %r failed: %s", stream.contract, exc)
 
     def _fail_stream(
-        self, stream: _Stream, *, depth: bool, exc: MarketDataPermissionError | None = None
+        self,
+        stream: _Stream,
+        *,
+        depth: bool,
+        exc: MarketDataPermissionError | MarketDataLinesExhaustedError | None = None,
     ) -> None:
-        """Release *stream* after a permission problem: fail waiters with *exc*, cancel, forget."""
+        """Release *stream* after a permission or line problem: fail waiters, cancel, forget."""
         if exc is not None:
             for fut in stream.waiters:
                 if not fut.done():
@@ -1606,7 +1665,7 @@ class IbGatewayTransport:
             self._drop_stream(streams, stream, depth=depth)
 
     def _on_stream_error(self, req_id: int, code: int, msg: str) -> None:
-        """Route a permission code IB reported against a persistent stream's reqId.
+        """Route a permission or line-cap code IB reported against a persistent stream's reqId.
 
         Matches by reqId and code only; unknown reqIds (including -1) and other codes are ignored.
         """
@@ -1616,6 +1675,8 @@ class IbGatewayTransport:
         stream, depth = entry
         if code in _HARD_PERMISSION_CODES:
             self._fail_stream(stream, depth=depth, exc=MarketDataPermissionError(code, msg))
+        elif code == _MAX_TICKERS_CODE:
+            self._fail_stream(stream, depth=depth, exc=MarketDataLinesExhaustedError(code, msg))
         elif code in _SOFT_PERMISSION_CODES:
             stream.permission_warning = (code, msg)
 
@@ -1628,9 +1689,11 @@ class IbGatewayTransport:
             def hook(ticker: Any, _key: Hashable = key) -> None:
                 self._on_depth_update(self._depth_streams.get(_key), ticker)
 
+            self._require_free_line()
             stream = _Stream(contract=contract, hook=hook)
             self._request_persistent(stream, depth=True)
             self._depth_streams[key] = stream
+            self._take_line()
         if stream.idle is not None:
             stream.idle.cancel()
             stream.idle = None
@@ -1735,9 +1798,11 @@ class IbGatewayTransport:
         key = _stream_key(contract)
         stream = self._l1_streams.get(key)
         if stream is None:
+            self._require_free_line()
             stream = _Stream(contract=contract, hook=lambda _ticker: self._wake_l1(key))
             self._request_persistent(stream, depth=False)
             self._l1_streams[key] = stream
+            self._take_line()
 
         def ready() -> tuple[Decimal, Decimal] | None:
             ticker = stream.ticker

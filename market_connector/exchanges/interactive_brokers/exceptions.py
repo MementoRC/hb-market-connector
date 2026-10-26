@@ -84,7 +84,7 @@ class SubscriptionLimitError(IbError):
 
 
 class MarketDataLinesExhaustedError(SubscriptionLimitError):
-    """IB error 101 or the local ``market_data_lines`` cap — no free market-data line."""
+    """IB error 101 or the local ``market_data_lines`` cap (reported as 101) — no free line."""
 
 
 class ConnectionLostError(IbError):

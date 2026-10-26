@@ -27,6 +27,12 @@ class IbConnectionSpec:
     (per request, not in total); None or 0 disables it. connect_attempts is the
     total number of tries for the initial connect() when it fails with a
     timeout; other errors are raised at once.
+
+    market_data_lines caps the concurrent IB-side market-data streams one
+    transport holds (IB's default allowance is 100 lines). Each distinct L1
+    ticker, shared depth stream and tick-by-tick trades subscription counts one
+    line; opening one beyond the cap raises MarketDataLinesExhaustedError before
+    any request reaches IB.
     """
 
     host: str = "127.0.0.1"
@@ -48,8 +54,11 @@ class IbConnectionSpec:
     fetch_all_open_orders: bool = True  # reqAllOpenOrdersAsync on every (re)connect
     connect_timeout: float | None = 15.0  # seconds per handshake/sync request; None or 0 = none
     connect_attempts: int = 3  # total tries for the initial connect() on timeout
+    market_data_lines: int = 100  # concurrent L1 / depth / trades streams per transport
 
     def __post_init__(self) -> None:
+        if self.market_data_lines < 1:
+            raise ValueError(f"market_data_lines must be >= 1; got {self.market_data_lines!r}")
         if self.connect_timeout is not None and self.connect_timeout < 0:
             raise ValueError(f"connect_timeout must be >= 0 or None; got {self.connect_timeout!r}")
         if self.connect_attempts < 1:

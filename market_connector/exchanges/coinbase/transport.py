@@ -61,6 +61,7 @@ class CoinbaseRestClient(RestConnectorBase):
         *,
         path_params: Mapping[str, Any] | None = None,
         limit_id: str | None = None,
+        weights: Mapping[str, int] | None = None,
         signer: Signer | None = None,
     ) -> Response:
         """Sign and execute a rate-limited, retried request.
@@ -83,6 +84,7 @@ class CoinbaseRestClient(RestConnectorBase):
             data=data,
             headers=headers,
             path_params=path_params,
+            weights=weights,
             signer=signer if signer is not None else self._coinbase_signer,
             **extra,
         )

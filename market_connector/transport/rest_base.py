@@ -145,6 +145,7 @@ class RestConnectorBase:
         *,
         path_params: Mapping[str, Any] | None = None,
         limit_id: str | None = None,
+        weights: Mapping[str, int] | None = None,
         signer: Signer | None = None,
     ) -> Response:
         """Execute a rate-limited, retried request.
@@ -169,6 +170,11 @@ class RestConnectorBase:
         per-key limit from ``ensure_keyed_limit``; it must already be registered,
         otherwise ``ValueError`` is raised before anything is charged or sent.
 
+        ``weights`` replaces the default ``{limit_id: endpoint.weight}`` charge, e.g. to
+        bill a linked pool a per-call amount (Kraken age penalties). Its keys must be
+        the limit or its linked limits; hb-rate-limit raises ``ValueError`` otherwise,
+        before anything is sent.
+
         ``signer`` overrides the configured signer for this call. Only then is
         ``data`` serialized once to a JSON string that is both signed (as
         ``Request.body``) and sent verbatim, so the signed and sent bodies match.
@@ -179,7 +185,9 @@ class RestConnectorBase:
             limit_id = self._register_limit(endpoint_name, endpoint)
         elif not self._rate_limiter.has_limit(limit_id):
             raise ValueError(f"limit_id {limit_id!r} is not registered (missing)")
-        charge = await self._rate_limiter.reserve(limit_id, {limit_id: endpoint.weight})
+        charge = await self._rate_limiter.reserve(
+            limit_id, weights if weights is not None else {limit_id: endpoint.weight}
+        )
 
         url = f"{self._base_url}{resolved_path}"
         body_str = json.dumps(data) if signer is not None and data else None

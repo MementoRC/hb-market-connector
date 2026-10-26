@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from market_connector.exceptions import GatewayNotStartedError
+from market_connector.exchanges.kraken.age_penalties import cancel_penalty
 from market_connector.exchanges.kraken.errors import raise_on_kraken_error
 from market_connector.exchanges.kraken.schemas.rest import (
     AddOrderResult,
@@ -18,6 +20,7 @@ from market_connector.primitives import OrderType, TradeType
 from market_connector.rate_limits.limiter import ensure_keyed_limit
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from decimal import Decimal
 
     from market_connector.exchanges.kraken.mixins.protocols import HasReady, HasRest
@@ -64,19 +67,32 @@ def _to_kraken_side(side: TradeType | str) -> str:
 
 
 async def _request_keyed(
-    rest: RestConnectorBase, endpoint_name: str, pair: str, body: dict[str, object]
+    rest: RestConnectorBase,
+    endpoint_name: str,
+    pair: str,
+    body: dict[str, object],
+    matching_units: int | None = None,
 ) -> Response:
     """Send ``endpoint_name`` charged to the per-pair matching limit when supported.
 
+    ``matching_units`` overrides the units charged to the pair's matching counter;
+    0 sends the request without charging it (hb-rate-limit rejects zero weights, so
+    the unkeyed endpoint is used, which never touches ``matching:{pair}``).
     REST clients without a ``rate_limiter`` (e.g. test doubles) are called unkeyed.
     """
     limiter = getattr(rest, "rate_limiter", None)
-    if limiter is None:
+    if limiter is None or matching_units == 0:
         return await rest.request(endpoint_name, data=body)
     limit_id = ensure_keyed_limit(
         limiter, endpoint_name, pair, KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools[endpoint_name]
     )
-    return await rest.request(endpoint_name, data=body, limit_id=limit_id)
+    weights = None if matching_units is None else {f"matching:{pair}": matching_units}
+    return await rest.request(endpoint_name, data=body, limit_id=limit_id, weights=weights)
+
+
+def _placed_at(owner: object) -> dict[str, float]:
+    """The owner's txid -> placement-time map, created on first use (mixins are stateless)."""
+    return vars(owner).setdefault("_order_placed_at", {})  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +101,9 @@ async def _request_keyed(
 
 
 class OrdersMixin:
+    # Monotonic seconds source for order ageing; tests inject a manual clock.
+    _order_clock: Callable[[], float] = staticmethod(time.monotonic)
+
     async def place_order(
         self: HasRest & HasReady,  # type: ignore[valid-type]
         trading_pair: str,
@@ -128,6 +147,9 @@ class OrdersMixin:
         response = await _request_keyed(self._rest, "add_order", trading_pair, body)
         envelope = KrakenResponse[AddOrderResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)
+        placed = self._order_clock()
+        for txid in envelope.result.txid:  # type: ignore[union-attr]
+            _placed_at(self)[txid] = placed
         return envelope.result.txid[0]  # type: ignore[union-attr]
 
     async def cancel_order(
@@ -147,13 +169,21 @@ class OrdersMixin:
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.
+
+        The matching counter is charged the order-age penalty. The age comes from
+        this process's ``place_order``; an unknown txid is charged the worst case.
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        response = await _request_keyed(self._rest, "cancel_order", trading_pair, {"txid": txid})
+        placed = _placed_at(self).get(txid)
+        units = cancel_penalty(0.0 if placed is None else self._order_clock() - placed)
+        response = await _request_keyed(
+            self._rest, "cancel_order", trading_pair, {"txid": txid}, units
+        )
         envelope = KrakenResponse[CancelOrderResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)
+        _placed_at(self).pop(txid, None)
         return envelope.result.count >= 1  # type: ignore[union-attr]
 
     async def get_open_orders(

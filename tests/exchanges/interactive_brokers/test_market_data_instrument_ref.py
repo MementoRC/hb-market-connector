@@ -105,15 +105,6 @@ def _assert_ref_resolved(resolver: RecordingResolver, ref: InstrumentRef) -> Mag
     return resolver.returned[0]
 
 
-@pytest.fixture(autouse=True)
-def _reset_subscription_counter() -> None:
-    import sys
-
-    sys.modules[
-        "market_connector.exchanges.interactive_brokers.mixins.subscriptions"
-    ]._active_subscriptions = 0
-
-
 class TestRefOnMarketData:
     @pytest.mark.parametrize(("ref", "label"), _REFS)
     async def test_get_mid_price_uses_resolve(self, ref: InstrumentRef, label: str) -> None:

@@ -16,6 +16,9 @@ Reference: hummingbot/connector/exchange/kraken/kraken_auth.py — _generate_aut
 
 from __future__ import annotations
 
+from types import MappingProxyType
+from typing import TYPE_CHECKING
+
 from market_connector.auth.spec import (
     AuthOutputSpec,
     BodyFormat,
@@ -35,6 +38,7 @@ from market_connector.auth.spec import (
     TimestampUnit,
 )
 from market_connector.exchanges.kraken._aliases_generated import KRAKEN_ASSET_ALIASES
+from market_connector.exchanges.kraken.schemas.enums import KrakenAPITier
 from market_connector.rate_limits.specs import PoolSpec, TieredRateLimitSpec, TierProfile
 from market_connector.symbols.mapper import RuleBasedMapper
 from market_connector.ws_models.auth_models import (
@@ -47,6 +51,9 @@ from market_connector.ws_models.decoder import (
     PositionalArrayDecoder,
     WsMessageKind,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # ---------------------------------------------------------------------------
 # HMAC signing spec (Kraken two-stage HMAC-SHA512)
@@ -157,6 +164,16 @@ KRAKEN_RATE_LIMIT_SPEC: TieredRateLimitSpec = TieredRateLimitSpec(
         "add_order_batch": [("matching", 1)],
         "cancel_order_batch": [("matching", 1)],
     },
+)
+
+# Maximum open orders per currency pair, by account tier (Kraken spot-ratelimits,
+# "Maximum number of open orders"); exceeding it fails with EOrder:Orders limit exceeded.
+KRAKEN_MAX_OPEN_ORDERS_PER_PAIR: Mapping[KrakenAPITier, int] = MappingProxyType(
+    {
+        KrakenAPITier.STARTER: 60,
+        KrakenAPITier.INTERMEDIATE: 80,
+        KrakenAPITier.PRO: 225,
+    }
 )
 
 # ---------------------------------------------------------------------------

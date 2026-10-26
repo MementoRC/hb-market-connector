@@ -36,7 +36,11 @@ class KrakenAPIError(Exception):
 
 
 class OpenOrdersLimitError(OrderRejectedError):
-    """The pair already has the maximum number of open orders for the account tier."""
+    """The pair already has the maximum number of open orders for the account tier.
+
+    Raised client-side before sending (see ``OrdersMixin``) and mapped from Kraken's
+    ``EOrder:Orders limit exceeded``. The caps are in ``KRAKEN_MAX_OPEN_ORDERS_PER_PAIR``.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +52,7 @@ ERROR_CODE_MAPPING: dict[str, type[Exception]] = {
     "EOrder:Unknown order": OrderNotFoundError,
     "EOrder:Rate limit exceeded": RateLimitError,
     "EOrder:Insufficient funds": OrderNotFoundError,
+    "EOrder:Orders limit exceeded": OpenOrdersLimitError,
     # API / authentication errors
     "EAPI:Invalid key": AuthenticationError,
     "EAPI:Invalid signature": AuthenticationError,

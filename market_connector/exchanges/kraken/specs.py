@@ -96,7 +96,8 @@ KRAKEN_HMAC_SPEC: HmacSigningSpec = HmacSigningSpec(
 # keyed_endpoint_pools and get a per-pair pool via ensure_keyed_limit. AddOrder and
 # CancelOrder do not count on the REST (private) counter. The weights here are the base
 # cost; OrdersMixin.cancel_order overrides the matching charge per call with the age
-# penalty from age_penalties.py (amend/edit penalties are defined but not yet wired).
+# penalty from age_penalties.py; amend/edit do the same, and the batch endpoints charge
+# ceil(n/2) (add) or the per-pair penalty sums (cancel).
 
 _PUBLIC_POOL = PoolSpec(name="public", capacity=1, refill_rate=1.0)
 
@@ -151,6 +152,10 @@ KRAKEN_RATE_LIMIT_SPEC: TieredRateLimitSpec = TieredRateLimitSpec(
     keyed_endpoint_pools={
         "add_order": [("matching", 1)],
         "cancel_order": [("matching", 1)],
+        "amend_order": [("matching", 1)],
+        "edit_order": [("matching", 1)],
+        "add_order_batch": [("matching", 1)],
+        "cancel_order_batch": [("matching", 1)],
     },
 )
 

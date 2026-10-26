@@ -99,6 +99,11 @@ class RestConnectorBase:
         self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter()
         self._registered_limits: set[str] = set()
 
+    @property
+    def rate_limiter(self) -> RateLimiter:
+        """The hb-rate-limit ``RateLimiter`` charged by this client."""
+        return self._rate_limiter
+
     def _register_limit(self, endpoint_name: str, endpoint: Endpoint) -> str:
         """Return the endpoint's limit_id, registering a METHOD:path limit lazily.
 
@@ -138,6 +143,7 @@ class RestConnectorBase:
         headers: dict[str, str] | None = None,
         *,
         path_params: Mapping[str, Any] | None = None,
+        limit_id: str | None = None,
     ) -> Response:
         """Execute a rate-limited, retried request.
 
@@ -156,10 +162,17 @@ class RestConnectorBase:
         Templated paths: ``path_params`` fills ``{name}`` placeholders (values are
         URL-quoted) before anything is charged; a mismatch raises ``ValueError``
         and nothing is sent. The limit id stays keyed on the template path.
+
+        ``limit_id`` overrides the limit charged (and throttled on a 429), e.g. a
+        per-key limit from ``ensure_keyed_limit``; it must already be registered,
+        otherwise ``ValueError`` is raised before anything is charged or sent.
         """
         endpoint = self._endpoints[endpoint_name]
         resolved_path = self._resolve_path(endpoint, path_params)
-        limit_id = self._register_limit(endpoint_name, endpoint)
+        if limit_id is None:
+            limit_id = self._register_limit(endpoint_name, endpoint)
+        elif not self._rate_limiter.has_limit(limit_id):
+            raise ValueError(f"limit_id {limit_id!r} is not registered (missing)")
         charge = await self._rate_limiter.reserve(limit_id, {limit_id: endpoint.weight})
 
         url = f"{self._base_url}{resolved_path}"

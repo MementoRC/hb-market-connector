@@ -13,12 +13,16 @@ from market_connector.exchanges.kraken.schemas.rest import (
     OrderInfo,
     TradeInfo,
 )
+from market_connector.exchanges.kraken.specs import KRAKEN_RATE_LIMIT_SPEC
 from market_connector.primitives import OrderType, TradeType
+from market_connector.rate_limits.limiter import ensure_keyed_limit
 
 if TYPE_CHECKING:
     from decimal import Decimal
 
     from market_connector.exchanges.kraken.mixins.protocols import HasReady, HasRest
+    from market_connector.transport.response import Response
+    from market_connector.transport.rest_base import RestConnectorBase
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -57,6 +61,22 @@ def _to_kraken_side(side: TradeType | str) -> str:
     Kraken expects ``"buy"`` or ``"sell"`` (lowercase).
     """
     return side.name.lower() if isinstance(side, TradeType) else str(side).lower()
+
+
+async def _request_keyed(
+    rest: RestConnectorBase, endpoint_name: str, pair: str, body: dict[str, object]
+) -> Response:
+    """Send ``endpoint_name`` charged to the per-pair matching limit when supported.
+
+    REST clients without a ``rate_limiter`` (e.g. test doubles) are called unkeyed.
+    """
+    limiter = getattr(rest, "rate_limiter", None)
+    if limiter is None:
+        return await rest.request(endpoint_name, data=body)
+    limit_id = ensure_keyed_limit(
+        limiter, endpoint_name, pair, KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools[endpoint_name]
+    )
+    return await rest.request(endpoint_name, data=body, limit_id=limit_id)
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +125,7 @@ class OrdersMixin:
         if price is not None:
             body["price"] = str(price)
 
-        response = await self._rest.request("add_order", data=body)
+        response = await _request_keyed(self._rest, "add_order", trading_pair, body)
         envelope = KrakenResponse[AddOrderResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)
         return envelope.result.txid[0]  # type: ignore[union-attr]
@@ -118,8 +138,8 @@ class OrdersMixin:
         """Cancel an order by txid.
 
         Args:
-            trading_pair: Not used by Kraken's cancel endpoint; present for
-                interface parity with other connectors.
+            trading_pair: Not sent to Kraken's cancel endpoint; keys the per-pair
+                matching rate limit.
             txid: The Kraken transaction ID to cancel.
 
         Returns:
@@ -131,7 +151,7 @@ class OrdersMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        response = await self._rest.request("cancel_order", data={"txid": txid})
+        response = await _request_keyed(self._rest, "cancel_order", trading_pair, {"txid": txid})
         envelope = KrakenResponse[CancelOrderResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)
         return envelope.result.count >= 1  # type: ignore[union-attr]

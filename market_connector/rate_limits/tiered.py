@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from market_connector.rate_limits.flat import _RateBucket
 from market_connector.rate_limits.pool import PoolSpec  # noqa: TCH001
@@ -30,11 +30,15 @@ class TieredRateLimitSpec:
         public_pools: Shared pools applied regardless of tier.
         tiers: Tier name → :class:`TierProfile`.
         endpoint_pools: Endpoint name → list of (pool_name, weight) charges.
+        keyed_endpoint_pools: Endpoint name → (template_pool, weight) charges for
+            endpoints limited per key (e.g. per currency pair). Each key gets its
+            own copy of the template pool, registered lazily at runtime.
     """
 
     public_pools: dict[str, PoolSpec]
     tiers: dict[str, TierProfile]
     endpoint_pools: dict[str, list[tuple[str, int]]]
+    keyed_endpoint_pools: dict[str, list[tuple[str, int]]] = field(default_factory=dict)
 
 
 class TieredRateLimit:

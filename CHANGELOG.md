@@ -8,13 +8,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Interactive Brokers: `IbGatewayTransport.subscribe(..., on_error=)` and `SubscriptionHandle.error` / `SubscriptionHandle.closed`. Error 101 or a hard permission code on a trades (tick-by-tick) stream frees its line once, closes the handle, sets `error` and calls `on_error`. Other channels accept `on_error` but don't fire it yet (#129).
+- `RestConnectorBase.request(..., pools=)`: hb-rate-limit's per-call pool override (0 skips a linked pool; other registered pools are charged ad hoc) (#130, #131).
 
+### Changed
+
+- Kraken: cancels of orders aged 300s or more reserve the declared per-pair endpoint limit with a zero matching-pool charge, instead of going unkeyed through a lazily created default limit (#131).
+- Kraken: `cancel_orders_batch` charges every pair's matching pool through one ad-hoc multi-pool reserve; no limit is registered per pair combination (#130).
+- Requires hb-rate-limit v0.5.0.
+
+### Removed
+
+- **BREAKING:** `rate_limits.limiter.ensure_multi_keyed_limit` (added in 0.3.0). Use `RestConnectorBase.request(..., pools=)` instead (#130).
+>
 ## [0.3.0] - 2026-10-26
 
 ### Added
 
 - `RestConnectorBase.request(..., weights=)`: optional per-call override of the rate-limit weights reserved for that request, including linked pools (#116).
-- `RestConnectorBase.request(..., pools=)`: hb-rate-limit's per-call pool override (0 skips a linked pool; unlinked pools are charged ad hoc) (#130, #131).
+- `rate_limits.limiter.ensure_multi_keyed_limit`: one limit linked to several keyed pools, for requests that charge more than one pair (#117).
 - Interactive Brokers: `IbConnectionSpec.market_data_lines` (default 100) caps concurrent market-data lines per connection; a new stream over the cap raises `MarketDataLinesExhaustedError` (a `SubscriptionLimitError`) before the request is sent, and IB error 101 maps to it. `IbGatewayTransport.market_data_lines_in_use` reports usage (#104).
 - Kraken: cancel, amend and edit charge Kraken's order-age penalties on the per-pair matching counter (`exchanges.kraken.age_penalties`) (#116).
 - Kraken: `amend_order`, `edit_order`, `place_orders_batch` and `cancel_orders_batch` on the orders mixin, with matching-counter charges (#117).

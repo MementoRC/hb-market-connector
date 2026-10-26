@@ -3,10 +3,11 @@
 RestConnectorBase's base signer receives a Request and returns a signed Request.
 CoinbaseRestClient overrides ``request()`` to:
 
-1. Resolve path parameters (e.g. ``{order_id}``) from ``params``.
-2. Build a Request envelope and invoke the Coinbase framework Signer.
+1. Split path parameters (e.g. ``{order_id}``) from query params in ``params``.
+2. Resolve the path via the base and sign a Request envelope with the Coinbase Signer.
 3. Merge the returned auth headers and delegate to the parent with ``signer=None``
-   (bypassing the parent's default signing hook).
+   (bypassing the parent's default signing hook), passing ``path_params`` so the
+   base resolves the same path: the signed path equals the sent path.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from market_connector.auth.protocols import Request, Signer
 from market_connector.transport.rest_base import RestConnectorBase
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from rate_limit import RateLimiter
 
     from market_connector.transport.endpoint import Endpoint
@@ -56,6 +59,8 @@ class CoinbaseRestClient(RestConnectorBase):
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        *,
+        path_params: Mapping[str, Any] | None = None,
     ) -> Response:
         """Sign and execute a rate-limited, retried request.
 
@@ -65,10 +70,11 @@ class CoinbaseRestClient(RestConnectorBase):
         """
         endpoint = self._endpoints[endpoint_name]
 
-        # Resolve path params (e.g. /orders/{order_id} → /orders/abc123)
-        path_params = {k: v for k, v in (params or {}).items() if "{" + k + "}" in endpoint.path}
-        resolved_path = endpoint.path.format(**path_params) if path_params else endpoint.path
-        query_params = {k: v for k, v in (params or {}).items() if k not in path_params}
+        # Split path params (e.g. /orders/{order_id}) from query params
+        split = {k: v for k, v in (params or {}).items() if "{" + k + "}" in endpoint.path}
+        query_params = {k: v for k, v in (params or {}).items() if k not in split}
+        path_params = {**split, **(path_params or {})}
+        resolved_path = self._resolve_path(endpoint, path_params)
 
         body_str = json.dumps(data) if data else ""
         url = f"{self._base_url}{resolved_path}"
@@ -87,4 +93,5 @@ class CoinbaseRestClient(RestConnectorBase):
             params=query_params or None,
             data=data,
             headers=dict(signed_req.headers),
+            path_params=path_params,
         )

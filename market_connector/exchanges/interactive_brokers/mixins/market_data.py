@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+import logging
 import time
 from decimal import Decimal
 from typing import TYPE_CHECKING, cast
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
     )
     from market_connector.primitives import CandleData, ConnectorPair
 
+logger = logging.getLogger(__name__)
+
 _INTERVAL_SECONDS: dict[str, int] = {
     "1m": 60,
     "5m": 300,
@@ -25,6 +29,31 @@ _INTERVAL_SECONDS: dict[str, int] = {
     "4h": 14400,
     "1d": 86400,
 }
+
+
+def _bar_epoch(value: object) -> float | None:
+    """Convert an IB bar date to a UTC epoch, or None if unparseable.
+
+    ib_async yields a tz-aware datetime (intraday) or date (daily); the legacy
+    wire format is "YYYYMMDD HH:MM:SS" / "YYYYMMDD". Naive values are UTC.
+    """
+    # datetime is a subclass of date, so it must be checked first.
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=datetime.UTC)
+        return value.timestamp()
+    if isinstance(value, datetime.date):
+        return datetime.datetime(
+            value.year, value.month, value.day, tzinfo=datetime.UTC
+        ).timestamp()
+    if isinstance(value, str):
+        fmt = "%Y%m%d %H:%M:%S" if " " in value else "%Y%m%d"
+        try:
+            parsed = datetime.datetime.strptime(value, fmt).replace(tzinfo=datetime.UTC)
+        except ValueError:
+            return None
+        return parsed.timestamp()
+    return None
 
 
 def _duration_string(interval: str, limit: int) -> str:
@@ -142,28 +171,17 @@ class MarketDataMixin:
                 useRTH=use_rth,
             )
 
-        import calendar  # noqa: PLC0415
-        import datetime  # noqa: PLC0415
-
-        def _bar_timestamp(date_str: str) -> float:
-            """Parse IB bar date string to epoch float."""
-            try:
-                # IB returns "YYYYMMDD HH:MM:SS" for intraday or "YYYYMMDD" for daily.
-                if " " in date_str:
-                    dt = datetime.datetime.strptime(date_str, "%Y%m%d %H:%M:%S")
-                else:
-                    dt = datetime.datetime.strptime(date_str, "%Y%m%d")
-                return calendar.timegm(dt.timetuple())
-            except ValueError:
-                return 0.0
-
         result: list[CandleData] = []
         for bar in bars:
+            ts = _bar_epoch(bar.date)
+            if ts is None:
+                logger.warning("Skipping IB bar with unparseable date: %r", bar.date)
+                continue
             vol = bar.volume
             result.append(
                 CandleData(
                     trading_pair=label,
-                    timestamp=_bar_timestamp(bar.date),
+                    timestamp=ts,
                     interval=interval,
                     open=Decimal(str(bar.open)),
                     high=Decimal(str(bar.high)),

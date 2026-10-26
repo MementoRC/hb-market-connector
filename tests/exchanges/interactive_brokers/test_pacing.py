@@ -176,7 +176,7 @@ class TestHistoricalIdenticalRequest:
         pacer = _pacer(clock)
         await _hist(pacer, request_key="same")
 
-        clock.advance(15.0)
+        clock.advance(15.0 + 0.001)  # hb-rate-limit's window boundary is inclusive
         await _hist(pacer, request_key="same")
         assert clock.sleeps == []
 
@@ -259,6 +259,6 @@ class TestMatchingSymbols:
     async def test_call_after_one_second_passes(self, clock: FakeClock) -> None:
         pacer = _pacer(clock)
         await pacer.matching_symbols()
-        clock.advance(1.0)
+        clock.advance(1.0 + 0.001)  # hb-rate-limit's window boundary is inclusive
         await pacer.matching_symbols()
         assert clock.sleeps == []

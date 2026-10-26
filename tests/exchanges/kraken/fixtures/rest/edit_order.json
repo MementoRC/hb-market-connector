@@ -1,0 +1,11 @@
+{
+  "error": [],
+  "result": {
+    "status": "ok",
+    "txid": "ONEWED-NEWED-NEWEDI",
+    "originaltxid": "OORIGI-ORIGI-ORIGINA",
+    "volume": "1.00000000",
+    "price": "30000.0",
+    "orders_cancelled": 1
+  }
+}

@@ -169,6 +169,10 @@ class TestKrakenRateLimitSpec:
         assert KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools == {
             "add_order": [("matching", 1)],
             "cancel_order": [("matching", 1)],
+            "amend_order": [("matching", 1)],
+            "edit_order": [("matching", 1)],
+            "add_order_batch": [("matching", 1)],
+            "cancel_order_batch": [("matching", 1)],
         }
 
     def test_keyed_endpoint_pools_default_empty(self) -> None:

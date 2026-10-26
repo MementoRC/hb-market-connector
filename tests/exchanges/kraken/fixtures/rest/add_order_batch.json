@@ -1,0 +1,9 @@
+{
+  "error": [],
+  "result": {
+    "orders": [
+      {"txid": "OBATCH-AAAAA-AAAAAA"},
+      {"txid": "OBATCH-BBBBB-BBBBBB"}
+    ]
+  }
+}

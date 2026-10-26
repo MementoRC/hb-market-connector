@@ -7,6 +7,7 @@ and limiter_from_flat_spec (rate_limits/limiter.py).
 
 from __future__ import annotations
 
+from market_connector.__about__ import __version__
 from market_connector.auth.spec import (
     AuthOutputSpec,
     BodyFormat,
@@ -56,7 +57,7 @@ COINBASE_HMAC_SPEC: HmacSigningSpec = HmacSigningSpec(
             "CB-ACCESS-SIGN": "{sig}",
             "CB-ACCESS-TIMESTAMP": "{ts}",
             "Content-Type": "application/json",
-            "User-Agent": "hb-market-connector/0.2.0",
+            "User-Agent": f"hb-market-connector/{__version__}",
         },
         body_inject=None,
         qs_inject=None,

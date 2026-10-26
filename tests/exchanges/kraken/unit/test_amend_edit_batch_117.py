@@ -14,6 +14,7 @@ charged the worst case.
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 from decimal import Decimal
@@ -56,6 +57,9 @@ _PATHS = {
 }
 
 
+_ADD_SEQ = itertools.count()
+
+
 def _load(name: str) -> dict:
     with (_FIXTURES / name).open() as fh:
         return json.load(fh)
@@ -81,7 +85,11 @@ def _respond(*, url: str, **kwargs: Any) -> httpx.Response:
     if name == "CancelOrderBatch":
         body = kwargs.get("json") or json.loads(kwargs["content"])
         return httpx.Response(200, json={"error": [], "result": {"count": len(body["orders"])}})
-    return httpx.Response(200, json=_load(_PATHS.get(name, "add_order.json")))
+    payload = _load(_PATHS.get(name, "add_order.json"))
+    if name == "AddOrder":
+        # Distinct txid per placement, as the real exchange returns.
+        payload["result"]["txid"] = [f"OADD{next(_ADD_SEQ):03d}-AAAAA-AAAAAA"]
+    return httpx.Response(200, json=payload)
 
 
 class _Orders(OrdersMixin):
@@ -234,9 +242,10 @@ class TestAmend:
         assert amend_penalty(0) == 4
 
     async def test_other_pair_unaffected(self, orders: _Orders, limiter: RateLimiter) -> None:
+        await _place(orders, OTHER_PAIR)  # creates the lazily-built pool: 1
         await orders.amend_order(PAIR, UNKNOWN_TXID, price=Decimal("1"))
 
-        assert _remaining(limiter, OTHER_PAIR) == CAPACITY
+        assert _remaining(limiter, OTHER_PAIR) == CAPACITY - 1
 
 
 class TestEdit:
@@ -314,9 +323,10 @@ class TestPlaceOrdersBatch:
         assert _remaining(limiter, PAIR) == CAPACITY - math.ceil(n / 2)
 
     async def test_other_pair_unaffected(self, orders: _Orders, limiter: RateLimiter) -> None:
+        await _place(orders, OTHER_PAIR)  # creates the lazily-built pool: 1
         await orders.place_orders_batch(PAIR, _batch(4))
 
-        assert _remaining(limiter, OTHER_PAIR) == CAPACITY
+        assert _remaining(limiter, OTHER_PAIR) == CAPACITY - 1
 
     @pytest.mark.parametrize("n", [0, 1, 16, 30])
     async def test_size_out_of_range_rejected_before_send(

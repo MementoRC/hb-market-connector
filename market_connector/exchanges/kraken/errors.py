@@ -17,6 +17,7 @@ from market_connector.exceptions import (
     AuthenticationError,
     ExchangePermissionError,
     OrderNotFoundError,
+    OrderRejectedError,
     RateLimitError,
     ServiceUnavailableError,
 )
@@ -32,6 +33,10 @@ class KrakenAPIError(Exception):
     def __init__(self, error_codes: list[str]) -> None:
         self.error_codes = error_codes
         super().__init__(f"Kraken API error: {error_codes!r}")
+
+
+class OpenOrdersLimitError(OrderRejectedError):
+    """The pair already has the maximum number of open orders for the account tier."""
 
 
 # ---------------------------------------------------------------------------

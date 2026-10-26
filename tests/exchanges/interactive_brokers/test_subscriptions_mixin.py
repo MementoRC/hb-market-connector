@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from decimal import Decimal
 from unittest.mock import MagicMock
 
@@ -158,39 +157,6 @@ class TestSubscribeOrderbook:
 
         assert host._transport._handle.closed
 
-    @pytest.mark.asyncio
-    async def test_warning_logged_when_active_subscriptions_exceed_80(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        # Reset the module-level counter before the test
-        import sys
-
-        subscriptions_module = sys.modules[
-            "market_connector.exchanges.interactive_brokers.mixins.subscriptions"
-        ]
-        subscriptions_module._active_subscriptions = 0
-
-        hosts = [ConcreteSubscriptionsHost() for _ in range(82)]
-        cms = [
-            host.subscribe_orderbook(f"PAIR{i}-USD", lambda u: None) for i, host in enumerate(hosts)
-        ]
-
-        logger_name = "market_connector.exchanges.interactive_brokers.mixins.subscriptions"
-        with caplog.at_level(logging.WARNING, logger=logger_name):
-            entered = []
-            for cm in cms:
-                ctx = await cm.__aenter__()
-                entered.append((cm, ctx))
-
-        # Clean up
-        for cm, _ in entered:
-            await cm.__aexit__(None, None, None)
-
-        # Reset for next test
-        subscriptions_module._active_subscriptions = 0
-
-        assert any("80" in r.message or "subscription" in r.message.lower() for r in caplog.records)
-
 
 class TestSubscribeTrades:
     @pytest.fixture(autouse=True)
@@ -201,7 +167,6 @@ class TestSubscribeTrades:
         subscriptions_module = sys.modules[
             "market_connector.exchanges.interactive_brokers.mixins.subscriptions"
         ]
-        subscriptions_module._active_subscriptions = 0
         subscriptions_module._TRADE_ID_COUNTERS.clear()
 
     @pytest.mark.asyncio

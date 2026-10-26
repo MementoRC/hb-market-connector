@@ -23,12 +23,6 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-# IB hard-limits concurrent subscriptions; warn early at 80% of the 100-line limit.
-_SUBSCRIPTION_WARN_THRESHOLD: int = 80
-
-# Module-level counter across all instances (simple; no lock needed for CPython GIL).
-_active_subscriptions: int = 0
-
 # Module-level state for synthetic trade ID generation.
 # Maps (conId, second_epoch) -> counter for unique trade IDs.
 _TRADE_ID_COUNTERS: dict[tuple[int, int], int] = {}
@@ -76,8 +70,6 @@ class SubscriptionsMixin:
         string unchanged.
         Yields control to the caller; cleanup (handle.close()) runs on any exit.
         """
-        global _active_subscriptions
-
         contract, label = await resolve_target(trading_pair, self._contract_resolver)
 
         def _on_dom_update(book: DepthBook) -> None:
@@ -95,18 +87,9 @@ class SubscriptionsMixin:
                 )
 
         handle = self._transport.subscribe("depth", contract, _on_dom_update)
-        _active_subscriptions += 1
-        if _active_subscriptions > _SUBSCRIPTION_WARN_THRESHOLD:
-            _log.warning(
-                "Active IB subscriptions (%d) exceeds threshold %d. "
-                "IB enforces a ~100-line limit; consider reducing concurrent subscriptions.",
-                _active_subscriptions,
-                _SUBSCRIPTION_WARN_THRESHOLD,
-            )
         try:
             yield
         finally:
-            _active_subscriptions -= 1
             handle.close()
 
     @asynccontextmanager
@@ -123,8 +106,6 @@ class SubscriptionsMixin:
         string unchanged.
         Yields control to the caller; cleanup (handle.close()) runs on any exit.
         """
-        global _active_subscriptions
-
         contract, label = await resolve_target(trading_pair, self._contract_resolver)
 
         def _on_tick(tick: object) -> None:
@@ -150,16 +131,7 @@ class SubscriptionsMixin:
                 _log.warning("Exception in subscribe_trades callback for %s", label, exc_info=True)
 
         handle = self._transport.subscribe("trades", contract, _on_tick)
-        _active_subscriptions += 1
-        if _active_subscriptions > _SUBSCRIPTION_WARN_THRESHOLD:
-            _log.warning(
-                "Active IB subscriptions (%d) exceeds threshold %d. "
-                "IB enforces a ~100-line limit; consider reducing concurrent subscriptions.",
-                _active_subscriptions,
-                _SUBSCRIPTION_WARN_THRESHOLD,
-            )
         try:
             yield
         finally:
-            _active_subscriptions -= 1
             handle.close()

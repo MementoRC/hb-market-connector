@@ -4,18 +4,16 @@ RestConnectorBase's base signer receives a Request and returns a signed Request.
 CoinbaseRestClient overrides ``request()`` to:
 
 1. Split path parameters (e.g. ``{order_id}``) from query params in ``params``.
-2. Resolve the path via the base and sign a Request envelope with the Coinbase Signer.
-3. Merge the returned auth headers and delegate to the parent with ``signer=None``
-   (bypassing the parent's default signing hook), passing ``path_params`` so the
-   base resolves the same path: the signed path equals the sent path.
+2. Delegate to the parent with the Coinbase Signer as the per-call ``signer`` and
+   ``path_params``: the base signs after the rate-limit reserve (so the short-lived
+   JWT cannot expire while waiting), signing the resolved path and the exact body
+   string it sends.
 """
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any, override
 
-from market_connector.auth.protocols import Request, Signer
 from market_connector.transport.rest_base import RestConnectorBase
 
 if TYPE_CHECKING:
@@ -23,6 +21,7 @@ if TYPE_CHECKING:
 
     from rate_limit import RateLimiter
 
+    from market_connector.auth.protocols import Signer
     from market_connector.transport.endpoint import Endpoint
     from market_connector.transport.response import Response
 
@@ -62,6 +61,7 @@ class CoinbaseRestClient(RestConnectorBase):
         *,
         path_params: Mapping[str, Any] | None = None,
         limit_id: str | None = None,
+        signer: Signer | None = None,
     ) -> Response:
         """Sign and execute a rate-limited, retried request.
 
@@ -75,26 +75,14 @@ class CoinbaseRestClient(RestConnectorBase):
         split = {k: v for k, v in (params or {}).items() if "{" + k + "}" in endpoint.path}
         query_params = {k: v for k, v in (params or {}).items() if k not in split}
         path_params = {**split, **(path_params or {})}
-        resolved_path = self._resolve_path(endpoint, path_params)
-
-        body_str = json.dumps(data) if data else ""
-        url = f"{self._base_url}{resolved_path}"
-        req = Request(
-            method=endpoint.method,
-            url=url,
-            path=resolved_path,
-            headers=dict(headers or {}),
-            body=body_str or None,
-            qs_params=dict(query_params),
-        )
-        signed_req = await self._coinbase_signer.sign(req)
 
         extra: dict[str, Any] = {} if limit_id is None else {"limit_id": limit_id}
         return await super().request(
             endpoint_name,
             params=query_params or None,
             data=data,
-            headers=dict(signed_req.headers),
+            headers=headers,
             path_params=path_params,
+            signer=signer if signer is not None else self._coinbase_signer,
             **extra,
         )

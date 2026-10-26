@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from string import Formatter
 from typing import TYPE_CHECKING, Any
@@ -144,6 +145,7 @@ class RestConnectorBase:
         *,
         path_params: Mapping[str, Any] | None = None,
         limit_id: str | None = None,
+        signer: Signer | None = None,
     ) -> Response:
         """Execute a rate-limited, retried request.
 
@@ -166,6 +168,10 @@ class RestConnectorBase:
         ``limit_id`` overrides the limit charged (and throttled on a 429), e.g. a
         per-key limit from ``ensure_keyed_limit``; it must already be registered,
         otherwise ``ValueError`` is raised before anything is charged or sent.
+
+        ``signer`` overrides the configured signer for this call. Only then is
+        ``data`` serialized once to a JSON string that is both signed (as
+        ``Request.body``) and sent verbatim, so the signed and sent bodies match.
         """
         endpoint = self._endpoints[endpoint_name]
         resolved_path = self._resolve_path(endpoint, path_params)
@@ -176,20 +182,25 @@ class RestConnectorBase:
         charge = await self._rate_limiter.reserve(limit_id, {limit_id: endpoint.weight})
 
         url = f"{self._base_url}{resolved_path}"
+        body_str = json.dumps(data) if signer is not None and data else None
         req = Request(
             method=endpoint.method,
             url=url,
             path=resolved_path,
             headers=dict(headers or {}),
-            body=None,
+            body=body_str,
             qs_params=dict(params or {}),
         )
-        if self._signer is not None:
+        active_signer = signer if signer is not None else self._signer
+        if active_signer is not None:
             try:
-                req = await self._signer.sign(req)
+                req = await active_signer.sign(req)
             except Exception:
                 charge.refund()
                 raise
+        send_headers = req.headers
+        if body_str is not None:
+            send_headers = {"Content-Type": "application/json", **send_headers}
 
         last_error: Exception | None = None
 
@@ -198,8 +209,9 @@ class RestConnectorBase:
                 method=req.method,
                 url=url,
                 params=req.qs_params or None,
-                json=data,
-                headers=req.headers,
+                json=data if body_str is None else None,
+                content=body_str,
+                headers=send_headers,
             )
 
             if response.status_code == 401:

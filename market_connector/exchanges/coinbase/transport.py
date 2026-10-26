@@ -61,6 +61,7 @@ class CoinbaseRestClient(RestConnectorBase):
         headers: dict[str, str] | None = None,
         *,
         path_params: Mapping[str, Any] | None = None,
+        limit_id: str | None = None,
     ) -> Response:
         """Sign and execute a rate-limited, retried request.
 
@@ -88,10 +89,12 @@ class CoinbaseRestClient(RestConnectorBase):
         )
         signed_req = await self._coinbase_signer.sign(req)
 
+        extra: dict[str, Any] = {} if limit_id is None else {"limit_id": limit_id}
         return await super().request(
             endpoint_name,
             params=query_params or None,
             data=data,
             headers=dict(signed_req.headers),
             path_params=path_params,
+            **extra,
         )

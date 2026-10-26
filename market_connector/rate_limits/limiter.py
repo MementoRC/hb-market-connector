@@ -8,6 +8,10 @@ Mapping:
   ``linked_limits`` carry its ``(pool, weight)`` charges. Its own bucket is sized to
   the largest linked pool so it never binds before the pools do.
 
+* Endpoints limited per key (e.g. Kraken matching per currency pair) are not built
+  up front; :func:`ensure_keyed_limit` lazily registers a per-key copy of a template
+  pool plus a per-key endpoint limit, reserved via ``request(limit_id=...)``.
+
 ``RestConnectorBase`` reserves by endpoint name, so one request atomically charges
 every pool the endpoint draws from, and pools are shared across endpoints.
 """
@@ -58,6 +62,47 @@ def _build_limiter(
         for name, charges in endpoint_pools.items()
     )
     return limiter
+
+
+def ensure_keyed_limit(
+    limiter: RateLimiter,
+    endpoint_name: str,
+    key: str,
+    charges: list[tuple[str, int]],
+) -> str:
+    """Register (idempotently) a per-key endpoint limit and return its limit id.
+
+    Each ``(pool, weight)`` charge gets a pool ``"{pool}:{key}"`` copied from the
+    template pool ``pool``; the endpoint limit ``"{endpoint_name}:{key}"`` links them.
+    Endpoints sharing a key therefore share that key's pools.
+
+    Raises:
+        KeyError: a template pool is not registered on ``limiter``.
+    """
+    limit_id = f"{endpoint_name}:{key}"
+    if limiter.has_limit(limit_id):
+        return limit_id
+    capacity = 1
+    for pool, _ in charges:
+        template = limiter.get_raw_limit(pool)
+        if template is None:
+            raise KeyError(f"No template pool {pool!r} registered for keyed limit {limit_id!r}")
+        capacity = max(capacity, template.limit)
+        keyed_pool = f"{pool}:{key}"
+        if not limiter.has_limit(keyed_pool):
+            limiter.add_limit(
+                RateLimit(keyed_pool, template.limit, template.time_interval, kind=template.kind)
+            )
+    limiter.add_limit(
+        RateLimit(
+            limit_id,
+            capacity,
+            1.0,
+            linked_limits=[LinkedLimitWeightPair(f"{pool}:{key}", w) for pool, w in charges],
+            kind="token_bucket",
+        )
+    )
+    return limit_id
 
 
 def limiter_from_flat_spec(

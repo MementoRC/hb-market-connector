@@ -131,9 +131,51 @@ class TestKrakenRateLimitSpec:
         expected = {"server_time", "depth", "asset_pairs", "ticker"}
         assert expected <= set(KRAKEN_RATE_LIMIT_SPEC.endpoint_pools.keys())
 
+    @pytest.mark.parametrize(
+        ("tier", "private", "matching"),
+        [
+            ("STARTER", (15, 0.33), (60, 1.0)),
+            ("INTERMEDIATE", (20, 0.5), (125, 2.34)),
+            ("PRO", (20, 1.0), (180, 3.75)),
+        ],
+    )
+    def test_tier_pools_capacity_and_decay(
+        self, tier: str, private: tuple[int, float], matching: tuple[int, float]
+    ) -> None:
+        pools = KRAKEN_RATE_LIMIT_SPEC.tiers[tier].pools
+        assert (pools["private"].capacity, pools["private"].refill_rate) == private
+        assert (pools["matching"].capacity, pools["matching"].refill_rate) == matching
+
+    def test_public_pool_refill_unchanged(self) -> None:
+        pool = KRAKEN_RATE_LIMIT_SPEC.public_pools["public"]
+        assert (pool.capacity, pool.refill_rate) == (1, 1.0)
+
     def test_endpoint_pools_covers_private_endpoints(self) -> None:
-        expected = {"balance", "open_orders", "add_order", "cancel_order"}
+        expected = {"balance", "open_orders", "query_orders", "query_trades"}
         assert expected <= set(KRAKEN_RATE_LIMIT_SPEC.endpoint_pools.keys())
+
+    def test_query_trades_costs_two(self) -> None:
+        assert KRAKEN_RATE_LIMIT_SPEC.endpoint_pools["query_trades"] == [("private", 2)]
+
+    @pytest.mark.parametrize("name", ["balance", "open_orders", "query_orders"])
+    def test_other_private_endpoints_cost_one(self, name: str) -> None:
+        assert KRAKEN_RATE_LIMIT_SPEC.endpoint_pools[name] == [("private", 1)]
+
+    @pytest.mark.parametrize("name", ["add_order", "cancel_order"])
+    def test_trading_endpoints_not_static_and_do_not_charge_private(self, name: str) -> None:
+        assert name not in KRAKEN_RATE_LIMIT_SPEC.endpoint_pools
+
+    def test_keyed_endpoint_pools_charge_matching_per_pair(self) -> None:
+        assert KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools == {
+            "add_order": [("matching", 1)],
+            "cancel_order": [("matching", 1)],
+        }
+
+    def test_keyed_endpoint_pools_default_empty(self) -> None:
+        from market_connector.rate_limits.tiered import TieredRateLimitSpec
+
+        spec = TieredRateLimitSpec(public_pools={}, tiers={}, endpoint_pools={})
+        assert spec.keyed_endpoint_pools == {}
 
     def test_public_endpoint_routes_to_public_pool(self) -> None:
         charges = KRAKEN_RATE_LIMIT_SPEC.endpoint_pools["server_time"]
@@ -143,12 +185,6 @@ class TestKrakenRateLimitSpec:
         charges = KRAKEN_RATE_LIMIT_SPEC.endpoint_pools["balance"]
         pool_names = [name for name, _ in charges]
         assert "private" in pool_names
-
-    def test_matching_endpoint_routes_to_both_pools(self) -> None:
-        charges = KRAKEN_RATE_LIMIT_SPEC.endpoint_pools["add_order"]
-        pool_names = [name for name, _ in charges]
-        assert "private" in pool_names
-        assert "matching" in pool_names
 
 
 class TestKrakenSymbolMapper:

@@ -87,22 +87,27 @@ KRAKEN_HMAC_SPEC: HmacSigningSpec = HmacSigningSpec(
 # Rate-limit spec (three tiers: STARTER / INTERMEDIATE / PRO)
 # ---------------------------------------------------------------------------
 #
-# Kraken rate-limit tiers (per https://support.kraken.com/hc/en-us/articles/360045239571):
+# Kraken uses decaying counters (max, decay per second), verified against
+# docs.kraken.com spot-rest-ratelimits and spot-ratelimits on 2026-10-25:
 #   Public pool: 1 rps shared
-#   STARTER  private: 15 counter / 20 burst;  matching: 60/60
-#   INTERMEDIATE private: 20/30;  matching: 125/140
-#   PRO      private: 20/60;  matching: 180/225
+#   STARTER      private: max 15, decay 0.33/s;  matching: max 60,  decay 1.0/s
+#   INTERMEDIATE private: max 20, decay 0.5/s;   matching: max 125, decay 2.34/s
+#   PRO          private: max 20, decay 1.0/s;   matching: max 180, decay 3.75/s
+# The matching counter is per currency pair, so add_order/cancel_order are declared in
+# keyed_endpoint_pools and get a per-pair pool via ensure_keyed_limit. AddOrder and
+# CancelOrder do not count on the REST (private) counter. Cancel/amend age penalties
+# are not modelled yet.
 
 _PUBLIC_POOL = PoolSpec(name="public", capacity=1, refill_rate=1.0)
 
-_STARTER_PRIVATE_POOL = PoolSpec(name="private", capacity=15, refill_rate=15.0)
-_STARTER_MATCHING_POOL = PoolSpec(name="matching", capacity=60, refill_rate=60.0)
+_STARTER_PRIVATE_POOL = PoolSpec(name="private", capacity=15, refill_rate=0.33)
+_STARTER_MATCHING_POOL = PoolSpec(name="matching", capacity=60, refill_rate=1.0)
 
-_INTERMEDIATE_PRIVATE_POOL = PoolSpec(name="private", capacity=20, refill_rate=20.0)
-_INTERMEDIATE_MATCHING_POOL = PoolSpec(name="matching", capacity=125, refill_rate=125.0)
+_INTERMEDIATE_PRIVATE_POOL = PoolSpec(name="private", capacity=20, refill_rate=0.5)
+_INTERMEDIATE_MATCHING_POOL = PoolSpec(name="matching", capacity=125, refill_rate=2.34)
 
-_PRO_PRIVATE_POOL = PoolSpec(name="private", capacity=20, refill_rate=20.0)
-_PRO_MATCHING_POOL = PoolSpec(name="matching", capacity=180, refill_rate=180.0)
+_PRO_PRIVATE_POOL = PoolSpec(name="private", capacity=20, refill_rate=1.0)
+_PRO_MATCHING_POOL = PoolSpec(name="matching", capacity=180, refill_rate=3.75)
 
 KRAKEN_RATE_LIMIT_SPEC: TieredRateLimitSpec = TieredRateLimitSpec(
     public_pools={"public": _PUBLIC_POOL},
@@ -131,7 +136,7 @@ KRAKEN_RATE_LIMIT_SPEC: TieredRateLimitSpec = TieredRateLimitSpec(
     },
     # Endpoint → pool routing is defined in Stage 3 (endpoints.py).
     # Skeleton entries provided here for the public pool.
-    # Keys mirror ENDPOINT_REGISTRY exactly; pool values are still provisional (see #111).
+    # Keys mirror ENDPOINT_REGISTRY together with keyed_endpoint_pools.
     endpoint_pools={
         "server_time": [("public", 1)],
         "asset_pairs": [("public", 1)],
@@ -140,10 +145,12 @@ KRAKEN_RATE_LIMIT_SPEC: TieredRateLimitSpec = TieredRateLimitSpec(
         "balance": [("private", 1)],
         "open_orders": [("private", 1)],
         "query_orders": [("private", 1)],
-        "query_trades": [("private", 1)],
+        "query_trades": [("private", 2)],
         "get_websockets_token": [("private", 1)],
-        "add_order": [("private", 1), ("matching", 1)],
-        "cancel_order": [("private", 1), ("matching", 1)],
+    },
+    keyed_endpoint_pools={
+        "add_order": [("matching", 1)],
+        "cancel_order": [("matching", 1)],
     },
 )
 

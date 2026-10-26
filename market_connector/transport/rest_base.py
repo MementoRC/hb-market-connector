@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import math
+from string import Formatter
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import httpx
 from rate_limit import RateLimit, RateLimiter
@@ -18,6 +20,8 @@ from market_connector.exceptions import (
 from market_connector.transport.response import Response
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from market_connector.transport.endpoint import Endpoint
 
 
@@ -109,12 +113,31 @@ class RestConnectorBase:
             self._registered_limits.add(limit_id)
         return limit_id
 
+    def _resolve_path(self, endpoint: Endpoint, path_params: Mapping[str, Any] | None) -> str:
+        """Substitute ``{name}`` placeholders in the endpoint path with URL-quoted values.
+
+        Raises ValueError if a placeholder has no value or a key is not a placeholder.
+        """
+        values = path_params or {}
+        names = {name for _, name, _, _ in Formatter().parse(endpoint.path) if name}
+        missing = sorted(names - values.keys())
+        unexpected = sorted(values.keys() - names)
+        if missing or unexpected:
+            raise ValueError(
+                f"path params for {endpoint.path!r}: missing {missing}, unexpected {unexpected}"
+            )
+        if not names:
+            return endpoint.path
+        return endpoint.path.format_map({k: quote(str(v), safe="") for k, v in values.items()})
+
     async def request(
         self,
         endpoint_name: str,
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        *,
+        path_params: Mapping[str, Any] | None = None,
     ) -> Response:
         """Execute a rate-limited, retried request.
 
@@ -129,16 +152,21 @@ class RestConnectorBase:
         is refunded once the request is sent, and 5xx retries do not re-charge.
         A 429 reports ``limiter.report_throttled`` (with Retry-After seconds when
         present) and raises ``RateLimitError``.
+
+        Templated paths: ``path_params`` fills ``{name}`` placeholders (values are
+        URL-quoted) before anything is charged; a mismatch raises ``ValueError``
+        and nothing is sent. The limit id stays keyed on the template path.
         """
         endpoint = self._endpoints[endpoint_name]
+        resolved_path = self._resolve_path(endpoint, path_params)
         limit_id = self._register_limit(endpoint_name, endpoint)
         charge = await self._rate_limiter.reserve(limit_id, {limit_id: endpoint.weight})
 
-        url = f"{self._base_url}{endpoint.path}"
+        url = f"{self._base_url}{resolved_path}"
         req = Request(
             method=endpoint.method,
             url=url,
-            path=endpoint.path,
+            path=resolved_path,
             headers=dict(headers or {}),
             body=None,
             qs_params=dict(params or {}),

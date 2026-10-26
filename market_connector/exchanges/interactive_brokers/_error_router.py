@@ -76,8 +76,15 @@ _DELAYED_DATA_HINT = (
 class _ErrorRouter:
     """Routes IB error events to in-flight call Futures and manages connection state."""
 
-    def __init__(self, market_data_type: int | None = None) -> None:
+    def __init__(
+        self,
+        market_data_type: int | None = None,
+        *,
+        on_pacing_violation: Callable[[float | None], None] | None = None,
+    ) -> None:
         self.market_data_type = market_data_type
+        # Called as cb(retry_after) on a 162 pacing violation or a 420 message-rate error.
+        self._on_pacing_violation = on_pacing_violation
         self._pending_request_waiters: dict[int, Future[Any]] = {}
         self._pending_order_waiters: dict[int, Future[Any]] = {}
         # Starts False: the transport flips it after a successful connect.
@@ -134,6 +141,8 @@ class _ErrorRouter:
         for stream_cb in list(self._stream_error_listeners):
             stream_cb(req_id, code, msg)
 
+        self._report_pacing(code, msg)
+
         # Code 10090: market data partially unavailable — log warning, do not raise.
         if code == 10090:
             logger.warning("IB error %d (partial data): %s", code, msg)
@@ -189,6 +198,15 @@ class _ErrorRouter:
         self._fail_waiter(self._pending_request_waiters, req_id, request_exc)
         if code == 309 and not waiting:
             logger.warning("IB error %d (subscription limit, no request waiting): %s", code, msg)
+
+    def _report_pacing(self, code: int, msg: str) -> None:
+        """Tell the pacer about a historical pacing violation (162) or message-rate error (420)."""
+        if self._on_pacing_violation is None:
+            return
+        if code == 162 and "pacing violation" in msg.lower():
+            self._on_pacing_violation(HISTORICAL_PACING_RETRY_AFTER)
+        elif code == 420:
+            self._on_pacing_violation(MESSAGE_RATE_RETRY_AFTER)
 
     def _request_exception(
         self, code: int, msg: str, exc_cls: type[IbError] | None

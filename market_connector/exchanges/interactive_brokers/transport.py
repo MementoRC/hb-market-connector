@@ -47,6 +47,7 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     WhatIfTimeoutError,
 )
 from market_connector.exchanges.interactive_brokers.linked_orders import OcaType
+from market_connector.exchanges.interactive_brokers.pacing import IbPacer
 from market_connector.hb_compat.event_bus import EventBus
 from market_connector.hb_compat.logging import get_logger
 
@@ -431,7 +432,7 @@ class IbGatewayTransport:
     the fan-out to the caller's callback is bridged through the bus.
     """
 
-    def __init__(self, spec: IbConnectionSpec) -> None:
+    def __init__(self, spec: IbConnectionSpec, *, pacer: IbPacer | None = None) -> None:
         if IB is None:
             raise ImportError(
                 "ib_async is required for IbGatewayTransport. "
@@ -445,7 +446,11 @@ class IbGatewayTransport:
         # Live PnL requests, one refcounted feed per (account, "") / (account, "", con_id);
         # streams and snapshots on the same key share it.
         self._pnl_feeds: dict[tuple[Any, ...], _PnlFeed] = {}
-        self._error_router = _ErrorRouter(market_data_type=spec.resolved_market_data_type)
+        self.pacer: IbPacer = pacer if pacer is not None else IbPacer()
+        self._error_router = _ErrorRouter(
+            market_data_type=spec.resolved_market_data_type,
+            on_pacing_violation=self.pacer.report_pacing_violation,
+        )
         self._first_status_timeout: float = 30.0
         self._event_bus = EventBus(name="ib-ws")
         self._subscribe_seq: int = 0
@@ -822,6 +827,7 @@ class IbGatewayTransport:
 
     async def match_symbols(self, pattern: str) -> list[Any]:
         """Return IB ContractDescriptions matching pattern (reqMatchingSymbols); [] if none."""
+        await self.pacer.matching_symbols()
         return await self._ib.reqMatchingSymbolsAsync(pattern) or []
 
     async def _resolve_via_ib(self, ref: InstrumentRef) -> list:

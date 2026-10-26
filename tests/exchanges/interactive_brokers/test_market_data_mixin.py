@@ -12,6 +12,7 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
     MarketDataTimeoutError,
 )
 from market_connector.exchanges.interactive_brokers.mixins.market_data import MarketDataMixin
+from market_connector.exchanges.interactive_brokers.pacing import IbPacer
 
 _Levels = list[tuple[Decimal, Decimal]]
 
@@ -35,6 +36,7 @@ class FakeTransport:
         error: Exception | None = None,
     ) -> None:
         self._ib = MagicMock()
+        self.pacer = IbPacer()
         self._bid_ask = bid_ask
         self._depth = depth
         self._error = error

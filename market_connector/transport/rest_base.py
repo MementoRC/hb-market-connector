@@ -146,6 +146,7 @@ class RestConnectorBase:
         path_params: Mapping[str, Any] | None = None,
         limit_id: str | None = None,
         weights: Mapping[str, int] | None = None,
+        pools: Mapping[str, int] | None = None,
         signer: Signer | None = None,
     ) -> Response:
         """Execute a rate-limited, retried request.
@@ -175,6 +176,10 @@ class RestConnectorBase:
         the limit or its linked limits; hb-rate-limit raises ``ValueError`` otherwise,
         before anything is sent.
 
+        ``pools`` is hb-rate-limit's per-call ``{pool_id: cost}`` override: it replaces a
+        linked pool's declared charge (0 skips that pool; the endpoint itself is still
+        charged) or charges another registered pool ad hoc, registering nothing.
+
         ``signer`` overrides the configured signer for this call. Only then is
         ``data`` serialized once to a JSON string that is both signed (as
         ``Request.body``) and sent verbatim, so the signed and sent bodies match.
@@ -186,7 +191,9 @@ class RestConnectorBase:
         elif not self._rate_limiter.has_limit(limit_id):
             raise ValueError(f"limit_id {limit_id!r} is not registered (missing)")
         charge = await self._rate_limiter.reserve(
-            limit_id, weights if weights is not None else {limit_id: endpoint.weight}
+            limit_id,
+            weights if weights is not None else {limit_id: endpoint.weight},
+            pools=pools,
         )
 
         url = f"{self._base_url}{resolved_path}"

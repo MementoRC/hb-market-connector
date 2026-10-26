@@ -118,16 +118,17 @@ class MarketDataMixin:
         ib_contract = _native(contract)
         end_time, what_to_show, use_rth = "", "TRADES", False
         con_id = getattr(ib_contract, "conId", 0)
+        exchange = getattr(ib_contract, "exchange", "")
         contract_key = con_id or (
-            ib_contract.symbol,
-            ib_contract.secType,
-            ib_contract.exchange,
-            ib_contract.currency,
+            getattr(ib_contract, "symbol", ""),
+            getattr(ib_contract, "secType", ""),
+            exchange,
+            getattr(ib_contract, "currency", ""),
         )
         request_key = (contract_key, end_time, duration, bar_size, what_to_show, use_rth)
         async with self._transport.pacer.historical(
             contract_key=contract_key,
-            exchange=ib_contract.exchange,
+            exchange=exchange,
             what_to_show=what_to_show,
             bar_size=bar_size,
             request_key=request_key,

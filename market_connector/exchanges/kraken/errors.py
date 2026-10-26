@@ -17,6 +17,7 @@ from market_connector.exceptions import (
     AuthenticationError,
     ExchangePermissionError,
     OrderNotFoundError,
+    OrderRejectedError,
     RateLimitError,
     ServiceUnavailableError,
 )
@@ -34,6 +35,14 @@ class KrakenAPIError(Exception):
         super().__init__(f"Kraken API error: {error_codes!r}")
 
 
+class OpenOrdersLimitError(OrderRejectedError):
+    """The pair already has the maximum number of open orders for the account tier.
+
+    Raised client-side before sending (see ``OrdersMixin``) and mapped from Kraken's
+    ``EOrder:Orders limit exceeded``. The caps are in ``KRAKEN_MAX_OPEN_ORDERS_PER_PAIR``.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Error code → exception type mapping
 # ---------------------------------------------------------------------------
@@ -43,6 +52,7 @@ ERROR_CODE_MAPPING: dict[str, type[Exception]] = {
     "EOrder:Unknown order": OrderNotFoundError,
     "EOrder:Rate limit exceeded": RateLimitError,
     "EOrder:Insufficient funds": OrderNotFoundError,
+    "EOrder:Orders limit exceeded": OpenOrdersLimitError,
     # API / authentication errors
     "EAPI:Invalid key": AuthenticationError,
     "EAPI:Invalid signature": AuthenticationError,

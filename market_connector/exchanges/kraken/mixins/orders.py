@@ -12,7 +12,7 @@ from market_connector.exchanges.kraken.age_penalties import (
     cancel_penalty,
     edit_penalty,
 )
-from market_connector.exchanges.kraken.errors import raise_on_kraken_error
+from market_connector.exchanges.kraken.errors import OpenOrdersLimitError, raise_on_kraken_error
 from market_connector.exchanges.kraken.schemas.rest import (
     AddOrderBatchResult,
     AddOrderResult,
@@ -23,7 +23,10 @@ from market_connector.exchanges.kraken.schemas.rest import (
     OrderInfo,
     TradeInfo,
 )
-from market_connector.exchanges.kraken.specs import KRAKEN_RATE_LIMIT_SPEC
+from market_connector.exchanges.kraken.specs import (
+    KRAKEN_MAX_OPEN_ORDERS_PER_PAIR,
+    KRAKEN_RATE_LIMIT_SPEC,
+)
 from market_connector.primitives import OrderType, TradeType
 from market_connector.rate_limits.limiter import ensure_keyed_limit, ensure_multi_keyed_limit
 
@@ -130,6 +133,36 @@ def _age(owner: OrdersMixin, txid: str) -> float:
     return 0.0 if placed is None else owner._order_clock() - placed
 
 
+def _open_counts(owner: object) -> dict[str, int]:
+    """The owner's pair -> open-order upper-bound count, created on first use."""
+    return vars(owner).setdefault("_open_order_counts", {})  # type: ignore[no-any-return]
+
+
+async def _ensure_room(owner: OrdersMixin, pair: str, n: int) -> None:
+    """Raise ``OpenOrdersLimitError`` unless ``n`` more orders fit under the pair's cap.
+
+    The local count only over-estimates (fills are not seen), so it is re-read from
+    OpenOrders, and only when ``count + n`` would pass the cap.
+    """
+    counts = _open_counts(owner)
+    # No tier's cap is below the smallest, so the config is only read past that.
+    if counts.get(pair, 0) + n <= min(KRAKEN_MAX_OPEN_ORDERS_PER_PAIR.values()):
+        return
+    cap = KRAKEN_MAX_OPEN_ORDERS_PER_PAIR[owner._config.tier]  # type: ignore[attr-defined]
+    if counts.get(pair, 0) + n <= cap:
+        return
+    open_orders = await owner.get_open_orders()
+    counts[pair] = sum(1 for order in open_orders.values() if order.descr.pair == pair)
+    if counts[pair] + n > cap:
+        raise OpenOrdersLimitError(f"{pair} has {counts[pair]} open orders; cap is {cap}")
+
+
+def _add_open(owner: object, pair: str, delta: int) -> None:
+    """Move the pair's open-order count by ``delta``, never below 0."""
+    counts = _open_counts(owner)
+    counts[pair] = max(0, counts.get(pair, 0) + delta)
+
+
 # ---------------------------------------------------------------------------
 # Mixin
 # ---------------------------------------------------------------------------
@@ -179,12 +212,16 @@ class OrdersMixin:
         if price is not None:
             body["price"] = str(price)
 
+        await _ensure_room(self, trading_pair, 1)
         response = await _request_keyed(self._rest, "add_order", trading_pair, body)
+        # Error replies carry no result, so raise before validating it.
+        raise_on_kraken_error(response.raw.get("error", []))  # type: ignore[union-attr]
         envelope = KrakenResponse[AddOrderResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)
         placed = self._order_clock()
         for txid in envelope.result.txid:  # type: ignore[union-attr]
             _placed_at(self)[txid] = placed
+        _add_open(self, trading_pair, len(envelope.result.txid))  # type: ignore[union-attr]
         return envelope.result.txid[0]  # type: ignore[union-attr]
 
     async def cancel_order(
@@ -219,6 +256,7 @@ class OrdersMixin:
         envelope = KrakenResponse[CancelOrderResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)
         _placed_at(self).pop(txid, None)
+        _add_open(self, trading_pair, -1)
         return envelope.result.count >= 1  # type: ignore[union-attr]
 
     async def amend_order(
@@ -310,6 +348,7 @@ class OrdersMixin:
             raise ValueError(f"A batch takes 2 to 15 orders, got {len(orders)}")
 
         body: dict[str, object] = {"pair": trading_pair, "orders": list(orders)}
+        await _ensure_room(self, trading_pair, len(orders))
         response = await _request_keyed(
             self._rest, "add_order_batch", trading_pair, body, math.ceil(len(orders) / 2)
         )
@@ -319,6 +358,7 @@ class OrdersMixin:
         txids = [entry.txid for entry in envelope.result.orders]  # type: ignore[union-attr]
         for txid in txids:
             _placed_at(self)[txid] = placed
+        _add_open(self, trading_pair, len(txids))
         return txids
 
     async def cancel_orders_batch(
@@ -349,8 +389,9 @@ class OrdersMixin:
         response = await _request_multi_keyed(self._rest, "cancel_order_batch", units, body)
         envelope = KrakenResponse[CancelOrderResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)
-        for _, txid in orders:
+        for pair, txid in orders:
             _placed_at(self).pop(txid, None)
+            _add_open(self, pair, -1)
         return envelope.result.count  # type: ignore[union-attr]
 
     async def get_open_orders(

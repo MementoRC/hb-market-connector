@@ -170,6 +170,28 @@ class CancelOrderResult(_Base):
 
 
 # ---------------------------------------------------------------------------
+# /0/private/AmendOrder  /  EditOrder  /  AddOrderBatch
+# (CancelOrderBatch returns CancelOrderResult)
+# ---------------------------------------------------------------------------
+
+
+class AmendOrderResult(_Base):
+    amend_id: str
+
+
+class EditOrderResult(_Base):
+    txid: str
+
+
+class BatchOrderEntry(_Base):
+    txid: str
+
+
+class AddOrderBatchResult(_Base):
+    orders: list[BatchOrderEntry] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # /0/private/OpenOrders  /  QueryOrders
 # ---------------------------------------------------------------------------
 

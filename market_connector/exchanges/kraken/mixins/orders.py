@@ -2,25 +2,33 @@
 
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING
 
 from market_connector.exceptions import GatewayNotStartedError
-from market_connector.exchanges.kraken.age_penalties import cancel_penalty
+from market_connector.exchanges.kraken.age_penalties import (
+    amend_penalty,
+    cancel_penalty,
+    edit_penalty,
+)
 from market_connector.exchanges.kraken.errors import raise_on_kraken_error
 from market_connector.exchanges.kraken.schemas.rest import (
+    AddOrderBatchResult,
     AddOrderResult,
+    AmendOrderResult,
     CancelOrderResult,
+    EditOrderResult,
     KrakenResponse,
     OrderInfo,
     TradeInfo,
 )
 from market_connector.exchanges.kraken.specs import KRAKEN_RATE_LIMIT_SPEC
 from market_connector.primitives import OrderType, TradeType
-from market_connector.rate_limits.limiter import ensure_keyed_limit
+from market_connector.rate_limits.limiter import ensure_keyed_limit, ensure_multi_keyed_limit
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from decimal import Decimal
 
     from market_connector.exchanges.kraken.mixins.protocols import HasReady, HasRest
@@ -90,9 +98,36 @@ async def _request_keyed(
     return await rest.request(endpoint_name, data=body, limit_id=limit_id, weights=weights)
 
 
+async def _request_multi_keyed(
+    rest: RestConnectorBase,
+    endpoint_name: str,
+    matching_units: dict[str, int],
+    body: dict[str, object],
+) -> Response:
+    """Send ``endpoint_name`` charging ``matching_units`` (pair -> units) to each pair's pool.
+
+    Pairs with 0 units are not charged; with none left the unkeyed endpoint is used.
+    """
+    charged = {pair: units for pair, units in matching_units.items() if units > 0}
+    limiter = getattr(rest, "rate_limiter", None)
+    if limiter is None or not charged:
+        return await rest.request(endpoint_name, data=body)
+    limit_id = ensure_multi_keyed_limit(
+        limiter, endpoint_name, charged, KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools[endpoint_name]
+    )
+    weights = {f"matching:{pair}": units for pair, units in charged.items()}
+    return await rest.request(endpoint_name, data=body, limit_id=limit_id, weights=weights)
+
+
 def _placed_at(owner: object) -> dict[str, float]:
     """The owner's txid -> placement-time map, created on first use (mixins are stateless)."""
     return vars(owner).setdefault("_order_placed_at", {})  # type: ignore[no-any-return]
+
+
+def _age(owner: OrdersMixin, txid: str) -> float:
+    """Seconds since this process placed ``txid``; 0 (worst-case penalty) if unknown."""
+    placed = _placed_at(owner).get(txid)
+    return 0.0 if placed is None else owner._order_clock() - placed
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +220,138 @@ class OrdersMixin:
         raise_on_kraken_error(envelope.error)
         _placed_at(self).pop(txid, None)
         return envelope.result.count >= 1  # type: ignore[union-attr]
+
+    async def amend_order(
+        self: HasRest & HasReady,  # type: ignore[valid-type]
+        trading_pair: str,
+        txid: str,
+        *,
+        amount: Decimal | None = None,
+        price: Decimal | None = None,
+    ) -> str:
+        """Amend an order in place (keeps its txid) and return the ``amend_id``.
+
+        Unset ``amount`` / ``price`` are omitted from the request. The matching
+        counter is charged the amend penalty for the order's age, which then restarts.
+
+        Raises:
+            GatewayNotStartedError: If the gateway is not ready.
+        """
+        if not self.ready:
+            raise GatewayNotStartedError("Gateway not started")
+
+        body: dict[str, object] = {"txid": txid}
+        if amount is not None:
+            body["order_qty"] = str(amount)
+        if price is not None:
+            body["limit_price"] = str(price)
+        units = amend_penalty(_age(self, txid))
+        response = await _request_keyed(self._rest, "amend_order", trading_pair, body, units)
+        envelope = KrakenResponse[AmendOrderResult].model_validate(response.raw)
+        raise_on_kraken_error(envelope.error)
+        _placed_at(self)[txid] = self._order_clock()
+        return envelope.result.amend_id  # type: ignore[union-attr]
+
+    async def edit_order(
+        self: HasRest & HasReady,  # type: ignore[valid-type]
+        trading_pair: str,
+        txid: str,
+        *,
+        amount: Decimal | None = None,
+        price: Decimal | None = None,
+    ) -> str:
+        """Edit an order (cancel and replace) and return the new txid.
+
+        Unset ``amount`` / ``price`` are omitted from the request. The matching
+        counter is charged the edit penalty for the order's age; the old txid is
+        forgotten and the new one starts ageing now.
+
+        Raises:
+            GatewayNotStartedError: If the gateway is not ready.
+        """
+        if not self.ready:
+            raise GatewayNotStartedError("Gateway not started")
+
+        body: dict[str, object] = {"txid": txid, "pair": trading_pair}
+        if amount is not None:
+            body["volume"] = str(amount)
+        if price is not None:
+            body["price"] = str(price)
+        units = edit_penalty(_age(self, txid))
+        response = await _request_keyed(self._rest, "edit_order", trading_pair, body, units)
+        envelope = KrakenResponse[EditOrderResult].model_validate(response.raw)
+        raise_on_kraken_error(envelope.error)
+        _placed_at(self).pop(txid, None)
+        new_txid = envelope.result.txid  # type: ignore[union-attr]
+        _placed_at(self)[new_txid] = self._order_clock()
+        return new_txid
+
+    async def place_orders_batch(
+        self: HasRest & HasReady,  # type: ignore[valid-type]
+        trading_pair: str,
+        orders: Sequence[dict[str, object]],
+    ) -> list[str]:
+        """Place 2 to 15 orders on one pair in a single request; return their txids.
+
+        Args:
+            trading_pair: Exchange-native pair shared by every order.
+            orders: Kraken-native order dicts (``type``, ``ordertype``, ``volume``,
+                optional ``price``), sent as given.
+
+        The matching counter is charged ``ceil(len(orders) / 2)``.
+
+        Raises:
+            GatewayNotStartedError: If the gateway is not ready.
+            ValueError: If there are not 2 to 15 orders (nothing is sent).
+        """
+        if not self.ready:
+            raise GatewayNotStartedError("Gateway not started")
+        if not 2 <= len(orders) <= 15:
+            raise ValueError(f"A batch takes 2 to 15 orders, got {len(orders)}")
+
+        body: dict[str, object] = {"pair": trading_pair, "orders": list(orders)}
+        response = await _request_keyed(
+            self._rest, "add_order_batch", trading_pair, body, math.ceil(len(orders) / 2)
+        )
+        envelope = KrakenResponse[AddOrderBatchResult].model_validate(response.raw)
+        raise_on_kraken_error(envelope.error)
+        placed = self._order_clock()
+        txids = [entry.txid for entry in envelope.result.orders]  # type: ignore[union-attr]
+        for txid in txids:
+            _placed_at(self)[txid] = placed
+        return txids
+
+    async def cancel_orders_batch(
+        self: HasRest & HasReady,  # type: ignore[valid-type]
+        orders: Sequence[tuple[str, str]],
+    ) -> int:
+        """Cancel up to 50 ``(trading_pair, txid)`` orders in a single request.
+
+        Returns:
+            The number of orders cancelled (``result.count``).
+
+        Each pair's matching counter is charged the sum of its orders' cancel
+        penalties; a pair whose sum is 0 is not charged.
+
+        Raises:
+            GatewayNotStartedError: If the gateway is not ready.
+            ValueError: If there are not 1 to 50 orders (nothing is sent).
+        """
+        if not self.ready:
+            raise GatewayNotStartedError("Gateway not started")
+        if not 1 <= len(orders) <= 50:
+            raise ValueError(f"A cancel batch takes 1 to 50 orders, got {len(orders)}")
+
+        units: dict[str, int] = {}
+        for pair, txid in orders:
+            units[pair] = units.get(pair, 0) + cancel_penalty(_age(self, txid))
+        body: dict[str, object] = {"orders": [txid for _, txid in orders]}
+        response = await _request_multi_keyed(self._rest, "cancel_order_batch", units, body)
+        envelope = KrakenResponse[CancelOrderResult].model_validate(response.raw)
+        raise_on_kraken_error(envelope.error)
+        for _, txid in orders:
+            _placed_at(self).pop(txid, None)
+        return envelope.result.count  # type: ignore[union-attr]
 
     async def get_open_orders(
         self: HasRest & HasReady,  # type: ignore[valid-type]

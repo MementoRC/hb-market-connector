@@ -41,4 +41,8 @@ ENDPOINT_REGISTRY: dict[str, Endpoint] = {
     # ------------------------------------------------------------------
     "add_order": Endpoint(path="/0/private/AddOrder", method="POST"),
     "cancel_order": Endpoint(path="/0/private/CancelOrder", method="POST"),
+    "amend_order": Endpoint(path="/0/private/AmendOrder", method="POST"),
+    "edit_order": Endpoint(path="/0/private/EditOrder", method="POST"),
+    "add_order_batch": Endpoint(path="/0/private/AddOrderBatch", method="POST"),
+    "cancel_order_batch": Endpoint(path="/0/private/CancelOrderBatch", method="POST"),
 }

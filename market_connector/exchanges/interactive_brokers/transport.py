@@ -352,12 +352,22 @@ class DepthBook:
 
 @dataclass
 class SubscriptionHandle:
-    """Handle returned by IbGatewayTransport.subscribe(). Owns cleanup on close()."""
+    """Handle returned by IbGatewayTransport.subscribe(). Owns cleanup on close().
+
+    ``error`` is set (and the handle closed) when IB fails the stream itself, e.g. error 101 or
+    a hard permission code on a trades stream; it stays None for caller-initiated closes.
+    """
 
     channel: str
     contract: object
     _cleanup: Callable[[], None]
     _closed: bool = field(default=False, init=False)
+    error: Exception | None = field(default=None, init=False)
+
+    @property
+    def closed(self) -> bool:
+        """True once the handle was closed, by the caller or after a stream failure."""
+        return self._closed
 
     def close(self) -> None:
         """Unregister event handler and cancel IB stream. Idempotent."""
@@ -376,6 +386,8 @@ class _ActiveSubscription:
     dispatch: Callable[[Any], None]
     ticker: Any = None
     line_held: bool = False  # trades only: the subscription owns one market-data line
+    req_id: int | None = None  # trades only: reqId of the current reqTickByTickData
+    fail: Callable[[Exception], None] | None = None  # trades only: surfaces an IB failure
 
 
 @dataclass
@@ -465,6 +477,7 @@ class IbGatewayTransport:
         self._depth_streams: dict[Hashable, _Stream] = {}
         # IB reqId -> (stream, is_depth) for the streams' current requests; errors route by it.
         self._stream_by_req_id: dict[int, tuple[_Stream, bool]] = {}
+        self._trades_by_req_id: dict[int, _ActiveSubscription] = {}
         # IB-side market-data streams held (L1, depth, trades), capped by spec.market_data_lines.
         self._md_lines: int = 0
         # Fill de-duplication: execId base (final ".NN" removed) -> last full execId.
@@ -1444,6 +1457,8 @@ class IbGatewayTransport:
         channel: str,
         contract: Contract,
         callback: Callable[[Any], None],
+        *,
+        on_error: Callable[[Exception], None] | None = None,
     ) -> SubscriptionHandle:
         """Register a synchronous callback for IB event-driven market data.
 
@@ -1458,7 +1473,13 @@ class IbGatewayTransport:
         Args:
             channel: "depth" (DOM updates via reqMktDepth) or "trades"
                 (tick-by-tick via reqTickByTickData).
-            callback: sync Callable[[ticker_or_tick], None].
+            callback: sync Callable[[ticker_or_tick], None]. Never receives an exception.
+            on_error: optional keyword-only Callable[[Exception], None]. For "trades", it is
+                called once with the typed error when IB reports 101
+                (MarketDataLinesExhaustedError) or a hard permission code
+                (MarketDataPermissionError) on the stream's reqId; the line is released, the
+                IB stream cancelled, the handle closed and ``handle.error`` set first. An
+                exception raised by it is logged. Accepted but not yet fired for "depth".
 
         Returns:
             SubscriptionHandle whose .close() unregisters the handler and
@@ -1508,19 +1529,40 @@ class IbGatewayTransport:
             else:
                 self._drop_trades(active)
 
-        return SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup)
+        handle = SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup)
+
+        def _fail(exc: Exception) -> None:
+            if handle.closed:
+                return
+            handle.error = exc
+            handle.close()
+            if on_error is not None:
+                try:
+                    on_error(exc)
+                except Exception:
+                    logger.exception("on_error callback of %s raised", event_key)
+
+        active.fail = _fail
+        return handle
 
     def _issue_stream(self, sub: _ActiveSubscription) -> None:
-        """Send the IB request for a trades *sub* and hook the resulting ticker."""
+        """Send the IB request for a trades *sub*, hook its ticker and track its reqId."""
         ticker = self._ib.reqTickByTickData(_native(sub.contract), "AllLast", 0, False)
         ticker.updateEvent += sub.dispatch
         sub.ticker = ticker
+        req_id = self._ib.wrapper.ticker2ReqId["tickByTick"].get(ticker)
+        if req_id is not None:
+            sub.req_id = req_id
+            self._trades_by_req_id[req_id] = sub
 
     def _unhook_stream(self, sub: _ActiveSubscription) -> None:
-        """Detach *sub*'s dispatcher from its current ticker, if hooked."""
+        """Detach *sub*'s dispatcher from its ticker and forget its reqId, if hooked."""
         if sub.ticker is not None:
             sub.ticker.updateEvent -= sub.dispatch
             sub.ticker = None
+        if sub.req_id is not None:
+            self._trades_by_req_id.pop(sub.req_id, None)
+            sub.req_id = None
 
     def _cancel_stream(self, sub: _ActiveSubscription) -> None:
         """Cancel the IB-side tick-by-tick stream for a trades *sub*."""
@@ -1664,11 +1706,27 @@ class IbGatewayTransport:
         if streams.get(_stream_key(stream.contract)) is stream:
             self._drop_stream(streams, stream, depth=depth)
 
+    def _fail_trades(self, sub: _ActiveSubscription, code: int, msg: str) -> None:
+        """Fail a trades *sub* on 101 / a hard permission code; other codes leave it alone."""
+        exc: MarketDataPermissionError | MarketDataLinesExhaustedError
+        if code in _HARD_PERMISSION_CODES:
+            exc = MarketDataPermissionError(code, msg)
+        elif code == _MAX_TICKERS_CODE:
+            exc = MarketDataLinesExhaustedError(code, msg)
+        else:
+            return
+        if sub.fail is not None:
+            sub.fail(exc)
+
     def _on_stream_error(self, req_id: int, code: int, msg: str) -> None:
         """Route a permission or line-cap code IB reported against a persistent stream's reqId.
 
         Matches by reqId and code only; unknown reqIds (including -1) and other codes are ignored.
         """
+        trades = self._trades_by_req_id.get(req_id)
+        if trades is not None:
+            self._fail_trades(trades, code, msg)
+            return
         entry = self._stream_by_req_id.get(req_id)
         if entry is None:
             return

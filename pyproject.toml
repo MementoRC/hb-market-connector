@@ -90,7 +90,7 @@ ib_async = ">=2.1.0,<3.0.0"
 python = "3.12.*"
 
 [tool.pixi.environments]
-default = { features = ["py312", "interactive-brokers", "dev"], solve-group = "default" }
+default = { features = ["py312", "coinbase", "interactive-brokers", "dev"], solve-group = "default" }
 ci = { features = ["py312", "ci", "coinbase", "interactive-brokers", "dev"], solve-group = "default" }
 quality-ci = { features = ["py312", "ci", "coinbase", "interactive-brokers", "dev"], solve-group = "default" }
 coinbase = { features = ["py312", "coinbase", "dev"], solve-group = "default" }

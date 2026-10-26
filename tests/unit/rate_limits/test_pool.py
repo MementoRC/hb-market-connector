@@ -2,7 +2,7 @@
 
 import pytest
 
-from market_connector.rate_limits.pool import PoolSpec
+from market_connector.rate_limits.specs import PoolSpec
 
 
 def test_pool_spec_valid() -> None:

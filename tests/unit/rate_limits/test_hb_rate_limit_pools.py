@@ -22,7 +22,7 @@ from market_connector.rate_limits.limiter import (
     limiter_from_tiered_spec,
     pool_to_rate_limit,
 )
-from market_connector.rate_limits.pool import PoolSpec
+from market_connector.rate_limits.specs import PoolSpec
 from market_connector.transport.endpoint import Endpoint
 from market_connector.transport.rest_base import RestConnectorBase
 

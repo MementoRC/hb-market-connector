@@ -25,9 +25,7 @@ from rate_limit import LinkedLimitWeightPair, RateLimit, RateLimiter
 if TYPE_CHECKING:
     from rate_limit import Clock, Sleep
 
-    from market_connector.rate_limits.flat import FlatRateLimitSpec
-    from market_connector.rate_limits.pool import PoolSpec
-    from market_connector.rate_limits.tiered import TieredRateLimitSpec
+    from market_connector.rate_limits.specs import FlatRateLimitSpec, PoolSpec, TieredRateLimitSpec
 
 
 def pool_to_rate_limit(pool: PoolSpec) -> RateLimit:

@@ -23,8 +23,7 @@ from market_connector.auth.spec import (
     TimestampSpec,
     TimestampUnit,
 )
-from market_connector.rate_limits.flat import FlatRateLimitSpec
-from market_connector.rate_limits.pool import PoolSpec
+from market_connector.rate_limits.specs import FlatRateLimitSpec, PoolSpec
 from market_connector.symbols.mapper import IdentityMapper, RuleBasedMapper
 from market_connector.ws_models.decoder import (
     JsonEnvelopeDecoder,

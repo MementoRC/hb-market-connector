@@ -1,7 +1,7 @@
 """Declarative specs for Kraken REST API authentication, rate limits, symbol mapping,
 and WebSocket message decoding.
 
-All specs are consumed by DeclarativeRestSigner, TieredRateLimit, RuleBasedMapper,
+All specs are consumed by DeclarativeRestSigner, limiter_from_tiered_spec, RuleBasedMapper,
 and KrakenWsDecoder.  Stage 2 will wire these into conformance test suites.
 
 Signing algorithm (two-stage Kraken HMAC-SHA512):
@@ -35,8 +35,7 @@ from market_connector.auth.spec import (
     TimestampUnit,
 )
 from market_connector.exchanges.kraken._aliases_generated import KRAKEN_ASSET_ALIASES
-from market_connector.rate_limits.pool import PoolSpec
-from market_connector.rate_limits.tiered import TieredRateLimitSpec, TierProfile
+from market_connector.rate_limits.specs import PoolSpec, TieredRateLimitSpec, TierProfile
 from market_connector.symbols.mapper import RuleBasedMapper
 from market_connector.ws_models.auth_models import (
     PassThroughAuth,

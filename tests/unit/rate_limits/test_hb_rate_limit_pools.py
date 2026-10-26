@@ -74,7 +74,10 @@ class TestRegistryCoverage:
         assert set(COINBASE_RATE_LIMIT_SPEC.endpoint_pools) == set(COINBASE_ENDPOINTS)
 
     def test_kraken_spec_matches_registry(self) -> None:
-        assert set(KRAKEN_RATE_LIMIT_SPEC.endpoint_pools) == set(KRAKEN_ENDPOINTS)
+        static = set(KRAKEN_RATE_LIMIT_SPEC.endpoint_pools)
+        keyed = set(KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools)
+        assert static.isdisjoint(keyed)
+        assert static | keyed == set(KRAKEN_ENDPOINTS)
 
 
 class TestCoinbaseSharedPools:
@@ -117,15 +120,19 @@ class TestCoinbaseSharedPools:
 
 
 class TestKrakenTiered:
-    async def test_add_order_charges_private_and_matching(self, clock: ManualClock) -> None:
+    async def test_add_order_charges_pair_matching_only(self, clock: ManualClock) -> None:
+        from market_connector.rate_limits.limiter import ensure_keyed_limit
+
         client, limiter = _kraken(clock, "STARTER")
+        lid = ensure_keyed_limit(
+            limiter, "add_order", "XBTUSD", KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools["add_order"]
+        )
+
+        await client.request("add_order", limit_id=lid)
+
+        assert limiter.blocked_for("matching:XBTUSD", {"matching:XBTUSD": 60}) > 0
         assert limiter.blocked_for("matching", {"matching": 60}) == 0
         assert limiter.blocked_for("private", {"private": 15}) == 0
-
-        await client.request("add_order")
-
-        assert limiter.blocked_for("matching", {"matching": 60}) > 0
-        assert limiter.blocked_for("private", {"private": 15}) > 0
         await client.close()
 
     async def test_balance_charges_private_only(self, clock: ManualClock) -> None:
@@ -137,25 +144,50 @@ class TestKrakenTiered:
         assert limiter.blocked_for("matching", {"matching": 60}) == 0
         await client.close()
 
-    async def test_cancel_order_charges_matching(self, clock: ManualClock) -> None:
+    async def test_cancel_order_charges_pair_matching(self, clock: ManualClock) -> None:
+        from market_connector.rate_limits.limiter import ensure_keyed_limit
+
         client, limiter = _kraken(clock, "STARTER")
+        lid = ensure_keyed_limit(
+            limiter,
+            "cancel_order",
+            "XBTUSD",
+            KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools["cancel_order"],
+        )
 
-        await client.request("cancel_order")
+        await client.request("cancel_order", limit_id=lid)
 
-        assert limiter.blocked_for("matching", {"matching": 60}) > 0
+        assert limiter.blocked_for("matching:XBTUSD", {"matching:XBTUSD": 60}) > 0
+        assert limiter.blocked_for("matching", {"matching": 60}) == 0
         await client.close()
 
     async def test_trading_drains_private_but_public_still_passes(self, clock: ManualClock) -> None:
         client, _ = _kraken(clock, "STARTER")
         for _ in range(15):
-            await client.request("add_order")
+            await client.request("balance")
         assert clock.sleeps == []
 
         await client.request("server_time")  # separate public pool
         assert clock.sleeps == []
 
-        await client.request("cancel_order")
+        await client.request("open_orders")
         assert clock.sleeps, "private pool (cap 15) is exhausted"
+        await client.close()
+
+    async def test_trading_does_not_drain_private(self, clock: ManualClock) -> None:
+        from market_connector.rate_limits.limiter import ensure_keyed_limit
+
+        client, limiter = _kraken(clock, "STARTER")
+        lid = ensure_keyed_limit(
+            limiter, "add_order", "XBTUSD", KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools["add_order"]
+        )
+        for _ in range(15):
+            await client.request("add_order", limit_id=lid)
+        assert clock.sleeps == []
+
+        for _ in range(15):
+            await client.request("balance")
+        assert clock.sleeps == [], "AddOrder must not count against the REST counter"
         await client.close()
 
     async def test_starter_private_cap_is_15(self, clock: ManualClock) -> None:
@@ -227,5 +259,8 @@ class TestGatewayWiring:
         limiter = gw._rest._rate_limiter
         assert not hasattr(gw, "_rate_limit")
         assert all(limiter.has_limit(name) for name in KRAKEN_RATE_LIMIT_SPEC.endpoint_pools)
+        assert not any(
+            limiter.has_limit(name) for name in KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools
+        )
         expected = KRAKEN_RATE_LIMIT_SPEC.tiers[str(tier)].pools["matching"]
         assert limiter.get_raw_limit("matching") == pool_to_rate_limit(expected)

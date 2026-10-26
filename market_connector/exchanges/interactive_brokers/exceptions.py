@@ -83,6 +83,10 @@ class SubscriptionLimitError(IbError):
     """IB error 309 — maximum number of market-depth requests exceeded."""
 
 
+class MarketDataLinesExhaustedError(SubscriptionLimitError):
+    """IB error 101 or the local ``market_data_lines`` cap — no free market-data line."""
+
+
 class ConnectionLostError(IbError):
     """IB connectivity lost: 1100, 2110 (TWS-to-server), 502 / 504 (API socket)."""
 

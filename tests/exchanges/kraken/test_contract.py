@@ -1,12 +1,12 @@
 """Stage 2 Kraken conformance suite wiring.
 
-Drives the 5 framework conformance suites against Kraken's declarative specs
+Drives the 4 framework conformance suites against Kraken's declarative specs
 and recorded JSON fixtures.  Each test method covers one conformance dimension:
   - SignerConformance         : REST HMAC header injection
   - WsShapeDecoderConformance : shape-decode of recorded WS frames
   - WsAuthModelConformance    : public (PassThrough) and private (TokenFetch) auth
   - SymbolMapperConformance   : bidirectional pair round-trips
-  - RateLimitConformance      : public-pool throughput ceiling
+Rate-limit coverage lives in tests/unit/rate_limits/test_hb_rate_limit_pools.py.
 """
 
 from __future__ import annotations
@@ -21,13 +21,10 @@ from market_connector.auth.protocols import Request
 from market_connector.exchanges.kraken.specs import (
     KRAKEN_HMAC_SPEC,
     KRAKEN_PUBLIC_WS_AUTH,
-    KRAKEN_RATE_LIMIT_SPEC,
     KRAKEN_SYMBOL_MAPPER,
     KRAKEN_WS_DECODER,
 )
-from market_connector.rate_limits.tiered import TieredRateLimit
 from market_connector.testing.contract import (
-    RateLimitConformance,
     SignerConformance,
     SymbolMapperConformance,
     WsAuthModelConformance,
@@ -249,20 +246,3 @@ class TestKrakenContractConformance:
             ("XRP-USD", "XXRPZUSD"),
         ]
         SymbolMapperConformance(KRAKEN_SYMBOL_MAPPER, fixture_pairs).run()
-
-    # -----------------------------------------------------------------------
-    # 6. Rate limit conformance
-    # -----------------------------------------------------------------------
-
-    @pytest.mark.asyncio
-    async def test_rate_limit_conformance(self) -> None:
-        """Public pool (1 rps) serves 3 server_time calls within 3.5 s ceiling.
-
-        The public pool has capacity=1 and refill_rate=1.0 token/s.  Three
-        requests acquire 1 token each: first is immediate (bucket starts full),
-        second waits ~1 s, third waits ~1 s more — theoretical minimum ~2 s.
-        CI ceiling: 3.5 s (generous for scheduler jitter).
-        """
-        limiter = TieredRateLimit(KRAKEN_RATE_LIMIT_SPEC, active_tier="STARTER")
-        request_stream = [("server_time", 1)] * 3
-        await RateLimitConformance(limiter, request_stream, expected_max_duration_seconds=3.5).run()

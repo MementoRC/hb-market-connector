@@ -9,24 +9,27 @@ Also provides 5 conformance suite classes for framework abstractions:
   - WsShapeDecoderConformance
   - WsAuthModelConformance
   - SymbolMapperConformance
-  - RateLimitConformance
+  - RateLimitConformance (delegates to rate_limit.testing)
 """
 
 from __future__ import annotations
 
-import time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 import pytest
+from rate_limit.testing import assert_conforms_rest_limiter
 
 from market_connector.primitives import OrderBookSnapshot
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from rate_limit import Clock, Sleep
+
     from market_connector.auth.protocols import Request, Signer
     from market_connector.protocols import ExchangeGateway
-    from market_connector.rate_limits.flat import RateLimit
     from market_connector.symbols.mapper import SymbolMapper
     from market_connector.ws_models.auth_models import WsAuthModel
     from market_connector.ws_models.decoder import NormalizedWsMessage, WsShapeDecoder
@@ -376,41 +379,32 @@ class SymbolMapperConformance:
 
 
 class RateLimitConformance:
-    """Validates that a RateLimit completes a request stream within a time budget.
+    """Validates a REST rate limiter against its declared ``limit`` per ``interval``.
 
-    Fires all requests via ``acquire``, measures wall time, and asserts the
-    total elapsed time is ``<= expected_max_duration_seconds``.  Timing
-    tolerances are intentionally generous — keep ``expected_max_duration_seconds``
-    ≥ 0.5 s above the theoretical minimum to avoid CI flakiness.
+    Delegates to hb-rate-limit's REST limiter conformance suite
+    (``rate_limit.testing.assert_conforms_rest_limiter``).
 
     Args:
-        rate_limit: Concrete RateLimit instance.
-        request_stream: List of ``(endpoint_name, weight)`` tuples.
-        expected_max_duration_seconds: Wall-time ceiling in seconds.
+        make: Factory ``(clock, sleep) -> bound limiter`` for the limit under test.
+        limit: Declared request capacity of the limit.
+        interval: Declared window length in seconds.
 
-    Usage (inside an async test)::
+    Usage::
 
-        await RateLimitConformance(limiter, [("ep", 1)] * 10, 2.0).run()
+        RateLimitConformance(make, limit=3, interval=1.0).run()
     """
 
     def __init__(
         self,
-        rate_limit: RateLimit,
-        request_stream: list[tuple[str, int]],
-        expected_max_duration_seconds: float,
+        make: Callable[[Clock, Sleep], Any],
+        *,
+        limit: int,
+        interval: float,
     ) -> None:
-        self._limiter = rate_limit
-        self._stream = request_stream
-        self._max_duration = expected_max_duration_seconds
+        self._make = make
+        self._limit = limit
+        self._interval = interval
 
-    async def run(self) -> None:
-        """Acquire all requests and assert total elapsed ≤ expected_max_duration_seconds."""
-        start = time.monotonic()
-        for endpoint_name, weight in self._stream:
-            await self._limiter.acquire(endpoint_name, weight)
-        elapsed = time.monotonic() - start
-
-        assert elapsed <= self._max_duration, (
-            f"RateLimitConformance: elapsed {elapsed:.3f}s exceeded "
-            f"ceiling {self._max_duration:.3f}s"
-        )
+    def run(self) -> None:
+        """Assert the limiter produced by ``make`` conforms to ``limit`` / ``interval``."""
+        assert_conforms_rest_limiter(self._make, limit=self._limit, interval=self._interval)

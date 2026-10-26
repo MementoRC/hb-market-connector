@@ -2,7 +2,7 @@
 
 Stage 3 Task 14: replaces inline auth recipes in auth.py with typed SigningSpec
 dataclasses.  The constants here are consumed by DeclarativeRestSigner (Task 15)
-and FlatRateLimit (already implemented in rate_limits/flat.py).
+and limiter_from_flat_spec (rate_limits/limiter.py).
 """
 
 from __future__ import annotations
@@ -25,8 +25,7 @@ from market_connector.auth.spec import (
     TimestampSpec,
     TimestampUnit,
 )
-from market_connector.rate_limits.flat import FlatRateLimitSpec
-from market_connector.rate_limits.pool import PoolSpec
+from market_connector.rate_limits.specs import FlatRateLimitSpec, PoolSpec
 from market_connector.ws_models.decoder import WsMessageKind
 
 # ---------------------------------------------------------------------------

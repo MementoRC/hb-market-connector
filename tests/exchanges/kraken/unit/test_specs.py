@@ -172,7 +172,7 @@ class TestKrakenRateLimitSpec:
         }
 
     def test_keyed_endpoint_pools_default_empty(self) -> None:
-        from market_connector.rate_limits.tiered import TieredRateLimitSpec
+        from market_connector.rate_limits.specs import TieredRateLimitSpec
 
         spec = TieredRateLimitSpec(public_pools={}, tiers={}, endpoint_pools={})
         assert spec.keyed_endpoint_pools == {}

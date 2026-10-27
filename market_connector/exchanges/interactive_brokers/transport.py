@@ -355,7 +355,7 @@ class SubscriptionHandle:
     """Handle returned by IbGatewayTransport.subscribe(). Owns cleanup on close().
 
     ``error`` is set (and the handle closed) when IB fails the stream itself, e.g. error 101 or
-    a hard permission code on a trades stream; it stays None for caller-initiated closes.
+    a hard permission code on a trades or depth stream; it stays None for caller-initiated closes.
     """
 
     channel: str
@@ -407,6 +407,8 @@ class _Stream:
     asks: list[tuple[Decimal, Decimal]] = field(default_factory=list)
     refs: int = 0
     idle: asyncio.TimerHandle | None = None
+    # Depth only: fail callbacks of the subscriptions sharing this stream.
+    subscribers: list[Callable[[Exception], None]] = field(default_factory=list)
     # IB reqId of the current ticker (keys the transport's reqId map) and the last SOFT
     # permission warning (code, text) IB sent against it.
     req_id: int | None = None
@@ -1478,8 +1480,9 @@ class IbGatewayTransport:
                 called once with the typed error when IB reports 101
                 (MarketDataLinesExhaustedError) or a hard permission code
                 (MarketDataPermissionError) on the stream's reqId; the line is released, the
-                IB stream cancelled, the handle closed and ``handle.error`` set first. An
-                exception raised by it is logged. Accepted but not yet fired for "depth".
+                IB stream cancelled, the handle closed and ``handle.error`` set first. For
+                "depth", every subscriber sharing the contract's stream is failed the same way
+                and the stream's line is released once. An exception raised by it is logged.
 
         Returns:
             SubscriptionHandle whose .close() unregisters the handler and
@@ -1525,6 +1528,8 @@ class IbGatewayTransport:
             self._subscriptions.pop(event_key, None)
             self._event_bus.unsubscribe(bus_subscription)
             if depth_stream is not None:
+                if _fail in depth_stream.subscribers:
+                    depth_stream.subscribers.remove(_fail)
                 self._release_depth(depth_stream)
             else:
                 self._drop_trades(active)
@@ -1543,6 +1548,8 @@ class IbGatewayTransport:
                     logger.exception("on_error callback of %s raised", event_key)
 
         active.fail = _fail
+        if depth_stream is not None:
+            depth_stream.subscribers.append(_fail)
         return handle
 
     def _issue_stream(self, sub: _ActiveSubscription) -> None:
@@ -1697,7 +1704,11 @@ class IbGatewayTransport:
         depth: bool,
         exc: MarketDataPermissionError | MarketDataLinesExhaustedError | None = None,
     ) -> None:
-        """Release *stream* after a permission or line problem: fail waiters, cancel, forget."""
+        """Release *stream* after a permission or line problem: fail waiters, cancel, forget.
+
+        With *exc*, the depth subscribers sharing the stream are failed after it is dropped,
+        so the line is released once and their later close() is a no-op.
+        """
         if exc is not None:
             for fut in stream.waiters:
                 if not fut.done():
@@ -1705,6 +1716,11 @@ class IbGatewayTransport:
         streams = self._depth_streams if depth else self._l1_streams
         if streams.get(_stream_key(stream.contract)) is stream:
             self._drop_stream(streams, stream, depth=depth)
+        if exc is not None:
+            subscribers = list(stream.subscribers)
+            stream.subscribers.clear()
+            for notify in subscribers:
+                notify(exc)
 
     def _fail_trades(self, sub: _ActiveSubscription, code: int, msg: str) -> None:
         """Fail a trades *sub* on 101 / a hard permission code; other codes leave it alone."""

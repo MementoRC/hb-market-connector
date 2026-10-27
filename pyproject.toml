@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-hummingbot = ["hb-strategy-framework>=0.1.0"]
+hummingbot = ["hb-strategy-framework @ git+https://github.com/MementoRC/hb-strategy-framework.git@v0.1.1"]
 coinbase = [
     "pyjwt>=2.8",
     "cryptography>=41",

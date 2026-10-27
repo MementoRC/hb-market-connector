@@ -16,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kraken: `cancel_orders_batch` charges every pair's matching pool through one ad-hoc multi-pool reserve; no limit is registered per pair combination (#130).
 - Requires hb-rate-limit v0.5.0.
 - hb-logger, hb-data-type-primitives and hb-event-bus are pinned to their signed `v0.1.0` tags instead of commit SHAs, per ADR 0001 (#135).
+- The `hummingbot` extra now pins `hb-strategy-framework` to the v0.1.1 release tag instead of an unversioned `>=0.1.0` range (v0.1.1 itself pins hb-data-type-primitives, hb-event-bus and hb-logger @v0.1.0, matching ours).
 
 ### Removed
 

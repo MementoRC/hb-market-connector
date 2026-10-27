@@ -11,11 +11,11 @@ from enum import Enum
 
 import pytest
 from data_type_primitives import PositionSide
+
+from market_connector import primitives as core
 from market_connector.hb_compat.cancellation_result import CancellationResult
 from market_connector.hb_compat.funding_info import FundingInfo, FundingInfoUpdate
 from market_connector.hb_compat.position import Position
-
-import market_connector.primitives as core
 
 
 class LegacyPositionSide(Enum):

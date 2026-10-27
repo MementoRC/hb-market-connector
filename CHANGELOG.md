@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kraken: cancels of orders aged 300s or more reserve the declared per-pair endpoint limit with a zero matching-pool charge, instead of going unkeyed through a lazily created default limit (#131).
 - Kraken: `cancel_orders_batch` charges every pair's matching pool through one ad-hoc multi-pool reserve; no limit is registered per pair combination (#130).
 - Requires hb-rate-limit v0.5.0.
+- hb-logger, hb-data-type-primitives and hb-event-bus are pinned to their signed `v0.1.0` tags instead of commit SHAs, per ADR 0001 (#135).
 
 ### Removed
 

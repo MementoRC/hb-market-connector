@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal  # noqa: TCH003
 
+from data_type_primitives import PositionSide  # noqa: TCH002
 from pydantic import BaseModel, ConfigDict
 
 from market_connector.hb_compat.primitives import OrderType, TradeType
@@ -19,12 +20,16 @@ from market_connector.hb_compat.primitives import OrderType, TradeType
 type ConnectorPair = str
 
 __all__ = [
+    "CancellationResult",
     "CandleData",
     "ConnectorPair",
+    "FundingInfo",
+    "FundingInfoUpdate",
     "OpenOrder",
     "OrderBookSnapshot",
     "OrderBookUpdate",
     "OrderType",
+    "Position",
     "TradeEvent",
     "TradeType",
 ]
@@ -89,3 +94,74 @@ class CandleData:
     low: Decimal
     close: Decimal
     volume: Decimal  # 0 if exchange reports no volume for the bar
+
+
+class FundingInfoUpdate(BaseModel):
+    """Partial funding update; ``None`` fields mean "unchanged".
+
+    Mirrors hummingbot's ``FundingInfoUpdate``. The legacy mutable API lives in
+    ``market_connector.hb_compat.funding_info``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    trading_pair: str
+    index_price: Decimal | None = None
+    mark_price: Decimal | None = None
+    next_funding_utc_timestamp: int | None = None
+    rate: Decimal | None = None
+
+
+class FundingInfo(BaseModel):
+    """Funding snapshot of a perpetual market.
+
+    Mirrors hummingbot's ``FundingInfo``. The legacy mutable API lives in
+    ``market_connector.hb_compat.funding_info``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    trading_pair: str
+    index_price: Decimal
+    mark_price: Decimal
+    next_funding_utc_timestamp: int
+    rate: Decimal
+
+    def with_update(self, update: FundingInfoUpdate) -> FundingInfo:
+        """Return a new ``FundingInfo`` with the update's non-None fields applied.
+
+        Raises:
+            ValueError: If ``update`` targets a different trading pair.
+        """
+        if update.trading_pair != self.trading_pair:
+            raise ValueError(
+                f"FundingInfoUpdate for {update.trading_pair!r} cannot update {self.trading_pair!r}"
+            )
+        changes = update.model_dump(exclude={"trading_pair"}, exclude_none=True)
+        return self.model_copy(update=changes)
+
+
+class CancellationResult(BaseModel):
+    """Outcome of a single order cancellation.
+
+    Mirrors hummingbot's ``CancellationResult``. The legacy tuple form lives in
+    ``market_connector.hb_compat.cancellation_result``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    order_id: str
+    success: bool
+
+
+class Position(BaseModel):
+    """An open derivative position.
+
+    Mirrors hummingbot's ``Position``. The legacy mutable API lives in
+    ``market_connector.hb_compat.position``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    trading_pair: str
+    position_side: PositionSide
+    unrealized_pnl: Decimal
+    entry_price: Decimal
+    amount: Decimal
+    leverage: Decimal

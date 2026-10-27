@@ -105,6 +105,24 @@ class ConnectionStateEvent:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class IbServerInfo:
+    """Server version negotiated at connect, against ib_async's client ceiling.
+
+    ``max_client_version`` is None when ib_async does not expose it.
+    ``at_client_ceiling`` means the server may offer features the client
+    library cannot yet speak.
+    """
+
+    server_version: int
+    max_client_version: int | None
+
+    @property
+    def at_client_ceiling(self) -> bool:
+        ceiling = self.max_client_version
+        return ceiling is not None and self.server_version >= ceiling
+
+
 # EventBus topic carrying FarmStatusEvent payloads.
 FARM_TOPIC = "farm"
 
@@ -461,6 +479,8 @@ class IbGatewayTransport:
         self._ib = IB()
         # Resolved on connect: the configured account, else the single managed one.
         self._account: str | None = spec.account_id
+        # Negotiated at every (re)connect; kept across disconnects.
+        self._server_info: IbServerInfo | None = None
         self._handle_registry: dict[int, OrderHandle] = {}
         # Live PnL requests, one refcounted feed per (account, "") / (account, "", con_id);
         # streams and snapshots on the same key share it.
@@ -530,6 +550,11 @@ class IbGatewayTransport:
         """Account orders, balances and positions are scoped to; None until one is known."""
         return self._account
 
+    @property
+    def server_info(self) -> IbServerInfo | None:
+        """Server version from the latest successful (re)connect; None before the first."""
+        return self._server_info
+
     async def connect(self) -> None:
         """Connect to IB Gateway, retrying timeouts a bounded number of times.
 
@@ -595,6 +620,7 @@ class IbGatewayTransport:
             timeout=self._spec.connect_timeout,
             raiseSyncErrors=True,
         )
+        self._capture_server_info()
         self._resolve_account()
         try:
             self._attach_handlers()
@@ -605,6 +631,22 @@ class IbGatewayTransport:
             self._detach_handlers()
             raise
         self._error_router.set_connected(True)
+
+    def _capture_server_info(self) -> None:
+        """Record the negotiated server version and log it (one line per connect)."""
+        client = self._ib.client
+        server_version = client.serverVersion()
+        if not isinstance(server_version, int) or isinstance(server_version, bool):
+            return
+        max_version = getattr(client, "MaxClientVersion", None)
+        if not isinstance(max_version, int) or isinstance(max_version, bool):
+            max_version = None
+        self._server_info = IbServerInfo(server_version, max_version)
+        logger.info(
+            "IB connected: server version %d (ib_async max client version %s)",
+            server_version,
+            max_version,
+        )
 
     def _resolve_account(self) -> None:
         """Pick the account to trade on from IB's managed list, or reject the configuration.

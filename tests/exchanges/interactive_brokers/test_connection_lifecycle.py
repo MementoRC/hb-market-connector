@@ -8,6 +8,7 @@ against MockIb; the real-Gateway integration tests live in test_integration.py.
 from __future__ import annotations
 
 import asyncio
+import logging
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +23,7 @@ from market_connector.exchanges.interactive_brokers.transport import (
     ConnectionStateEvent,
     DepthBook,
     IbGatewayTransport,
+    IbServerInfo,
 )
 
 from ._doubles import MockIb
@@ -354,6 +356,70 @@ class TestReconnectSupervisor:
         ib.simulate_drop()
         assert transport._supervisor is not None
         await transport._supervisor
+
+
+_TRANSPORT_LOGGER = "market_connector.exchanges.interactive_brokers.transport"
+
+
+class TestServerInfo:
+    def test_none_before_connect(self) -> None:
+        transport, _, _ = _make()
+        assert transport.server_info is None
+
+    async def test_populated_after_connect(self) -> None:
+        transport, _, _ = _make()
+        await transport.connect()
+        info = transport.server_info
+        assert info == IbServerInfo(server_version=176, max_client_version=178)
+        assert info is not None
+        assert info.at_client_ceiling is False
+
+    async def test_at_client_ceiling(self) -> None:
+        transport, ib, _ = _make()
+        ib.client.server_version = 178
+        await transport.connect()
+        assert transport.server_info is not None
+        assert transport.server_info.at_client_ceiling is True
+
+    def test_ceiling_unknown_max_is_false(self) -> None:
+        assert IbServerInfo(server_version=200, max_client_version=None).at_client_ceiling is False
+
+    async def test_connect_logs_server_version(self, caplog: pytest.LogCaptureFixture) -> None:
+        transport, _, _ = _make()
+        with caplog.at_level(logging.INFO, logger=_TRANSPORT_LOGGER):
+            await transport.connect()
+        records = [r for r in caplog.records if r.name == _TRANSPORT_LOGGER]
+        assert any(
+            r.levelno == logging.INFO and "server version 176" in r.getMessage() for r in records
+        )
+
+    async def test_reconnect_refreshes_and_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        transport, ib, _ = _make()
+        await transport.connect()
+        ib.client.server_version = 177
+        with caplog.at_level(logging.INFO, logger=_TRANSPORT_LOGGER):
+            ib.simulate_drop()
+            # Retained across the drop: the supervisor has not run yet.
+            assert transport.server_info == IbServerInfo(176, 178)
+            supervisor = transport._supervisor
+            assert supervisor is not None
+            await supervisor
+        assert transport.server_info == IbServerInfo(177, 178)
+        assert any("server version 177" in r.getMessage() for r in caplog.records)
+
+    async def test_retained_after_disconnect(self) -> None:
+        transport, _, _ = _make()
+        await transport.connect()
+        await transport.disconnect()
+        assert transport.server_info == IbServerInfo(176, 178)
+
+    async def test_gateway_delegates(self) -> None:
+        transport, _, _ = _make()
+        gateway = IbGatewayGateway(transport=transport, signer=MagicMock())
+        assert gateway.server_info is None
+        await gateway.start()
+        assert gateway.server_info == transport.server_info
+        assert gateway.server_info == IbServerInfo(176, 178)
 
 
 class TestConnectionStateTopic:

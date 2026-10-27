@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         FeeEvent,
         FillEvent,
         IbGatewayTransport,
+        IbServerInfo,
         SubscriptionHandle,
     )
     from market_connector.exchanges.interactive_brokers.what_if import IbWhatIfResult
@@ -97,6 +98,11 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
 
     async def stop(self) -> None:
         await self._transport.disconnect()
+
+    @property
+    def server_info(self) -> IbServerInfo | None:
+        """Delegate to transport: negotiated server version, None before the first connect."""
+        return self._transport.server_info
 
     def subscribe_connection_state(
         self, callback: Callable[[ConnectionStateEvent], None]

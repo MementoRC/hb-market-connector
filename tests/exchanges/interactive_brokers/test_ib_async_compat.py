@@ -23,6 +23,13 @@ def _field_names(cls: type) -> set[str]:
     return {f.name for f in dataclasses.fields(cls)}
 
 
+def test_client_exposes_server_version_surface() -> None:
+    """Issue #59: the transport reads Client.serverVersion() and MaxClientVersion."""
+    client_cls = ib_async.client.Client
+    assert callable(client_cls.serverVersion)
+    assert isinstance(client_cls.MaxClientVersion, int)
+
+
 @pytest.mark.parametrize(
     ("method", "params"),
     [

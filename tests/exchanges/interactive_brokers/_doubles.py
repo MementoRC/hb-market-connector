@@ -33,8 +33,11 @@ class FakeEvent:
 class FakeClient:
     """Fake ib_async.Client: records setConnectOptions."""
 
+    MaxClientVersion = 178  # noqa: N815
+
     def __init__(self, owner: MockIb) -> None:
         self._owner = owner
+        self.server_version = 176
         self.connect_options: list[str] = []
         # ib_async Client.getReqId: increasing ints from a settable start.
         self.next_req_id = 100
@@ -45,6 +48,9 @@ class FakeClient:
         req_id = self.next_req_id
         self.next_req_id += 1
         return req_id
+
+    def serverVersion(self) -> int:  # noqa: N802
+        return self.server_version
 
     def setConnectOptions(self, opts: str) -> None:  # noqa: N802
         self._owner.call_order.append("setConnectOptions")

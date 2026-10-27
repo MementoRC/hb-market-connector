@@ -28,7 +28,7 @@ from market_connector.exchanges.kraken.specs import (
     KRAKEN_RATE_LIMIT_SPEC,
 )
 from market_connector.primitives import OrderType, TradeType
-from market_connector.rate_limits.limiter import ensure_keyed_limit, ensure_multi_keyed_limit
+from market_connector.rate_limits.limiter import ensure_keyed_limit
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -86,19 +86,18 @@ async def _request_keyed(
 ) -> Response:
     """Send ``endpoint_name`` charged to the per-pair matching limit when supported.
 
-    ``matching_units`` overrides the units charged to the pair's matching counter;
-    0 sends the request without charging it (hb-rate-limit rejects zero weights, so
-    the unkeyed endpoint is used, which never touches ``matching:{pair}``).
+    ``matching_units`` overrides the units charged to the pair's matching counter; 0
+    skips that counter but the declared per-pair endpoint limit is still reserved.
     REST clients without a ``rate_limiter`` (e.g. test doubles) are called unkeyed.
     """
     limiter = getattr(rest, "rate_limiter", None)
-    if limiter is None or matching_units == 0:
+    if limiter is None:
         return await rest.request(endpoint_name, data=body)
     limit_id = ensure_keyed_limit(
         limiter, endpoint_name, pair, KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools[endpoint_name]
     )
-    weights = None if matching_units is None else {f"matching:{pair}": matching_units}
-    return await rest.request(endpoint_name, data=body, limit_id=limit_id, weights=weights)
+    pools = None if matching_units is None else {f"matching:{pair}": matching_units}
+    return await rest.request(endpoint_name, data=body, limit_id=limit_id, pools=pools)
 
 
 async def _request_multi_keyed(
@@ -109,17 +108,18 @@ async def _request_multi_keyed(
 ) -> Response:
     """Send ``endpoint_name`` charging ``matching_units`` (pair -> units) to each pair's pool.
 
-    Pairs with 0 units are not charged; with none left the unkeyed endpoint is used.
+    The first pair's declared endpoint limit is reserved; every pair's matching pool is
+    registered first and charged through an ad-hoc multi-pool reserve (0 skips a pool).
     """
-    charged = {pair: units for pair, units in matching_units.items() if units > 0}
     limiter = getattr(rest, "rate_limiter", None)
-    if limiter is None or not charged:
+    if limiter is None:
         return await rest.request(endpoint_name, data=body)
-    limit_id = ensure_multi_keyed_limit(
-        limiter, endpoint_name, charged, KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools[endpoint_name]
-    )
-    weights = {f"matching:{pair}": units for pair, units in charged.items()}
-    return await rest.request(endpoint_name, data=body, limit_id=limit_id, weights=weights)
+    charges = KRAKEN_RATE_LIMIT_SPEC.keyed_endpoint_pools[endpoint_name]
+    limit_ids = [
+        ensure_keyed_limit(limiter, endpoint_name, pair, charges) for pair in matching_units
+    ]
+    pools = {f"matching:{pair}": units for pair, units in matching_units.items()}
+    return await rest.request(endpoint_name, data=body, limit_id=limit_ids[0], pools=pools)
 
 
 def _placed_at(owner: object) -> dict[str, float]:
@@ -371,7 +371,7 @@ class OrdersMixin:
             The number of orders cancelled (``result.count``).
 
         Each pair's matching counter is charged the sum of its orders' cancel
-        penalties; a pair whose sum is 0 is not charged.
+        penalties; a pair whose sum is 0 is not charged (the endpoint limit still is).
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.

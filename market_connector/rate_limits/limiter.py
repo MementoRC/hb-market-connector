@@ -23,8 +23,6 @@ from typing import TYPE_CHECKING
 from rate_limit import LinkedLimitWeightPair, RateLimit, RateLimiter
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from rate_limit import Clock, Sleep
 
     from market_connector.rate_limits.specs import FlatRateLimitSpec, PoolSpec, TieredRateLimitSpec
@@ -102,42 +100,6 @@ def ensure_keyed_limit(
             kind="token_bucket",
         )
     )
-    return limit_id
-
-
-def ensure_multi_keyed_limit(
-    limiter: RateLimiter,
-    endpoint_name: str,
-    keys: Iterable[str],
-    charges: list[tuple[str, int]],
-) -> str:
-    """Register (idempotently) one endpoint limit linking the pools of several keys.
-
-    For a request that charges several keys at once (a Kraken cancel batch across
-    pairs). Each key's pools are the ones :func:`ensure_keyed_limit` creates, so the
-    charges land on the same pools as the single-key endpoints. The limit is named
-    ``"{endpoint_name}:{key1}+{key2}..."`` over the sorted distinct keys; reserve it
-    with ``weights`` naming the keyed pools to charge.
-    """
-    distinct = sorted(set(keys))
-    single_ids = [ensure_keyed_limit(limiter, endpoint_name, key, charges) for key in distinct]
-    if len(distinct) == 1:
-        return single_ids[0]
-    limit_id = f"{endpoint_name}:{'+'.join(distinct)}"
-    if not limiter.has_limit(limit_id):
-        limiter.add_limit(
-            RateLimit(
-                limit_id,
-                max(limiter.get_raw_limit(pool).limit for pool, _ in charges),  # type: ignore[union-attr]
-                1.0,
-                linked_limits=[
-                    LinkedLimitWeightPair(f"{pool}:{key}", w)
-                    for key in distinct
-                    for pool, w in charges
-                ],
-                kind="token_bucket",
-            )
-        )
     return limit_id
 
 

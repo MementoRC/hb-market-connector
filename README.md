@@ -12,6 +12,14 @@ This package provides `LiveMarketAccess`, a concrete implementation that wraps H
 pip install hb-market-connector
 ```
 
+## Interactive Brokers
+
+### Gateway version policy
+
+Run a pinned IB Gateway version (a pinned container tag or installer version) rather than whatever is latest. Upgrade only after running the gated live suites (the #59 matrix) against the new version.
+
+Each connect logs `server version N (ib_async max client version 178)`, so the negotiated version is visible in the logs. If Gateway refuses the client/server version pairing, the connect now fails fast with `IbVersionIncompatibleError` instead of retrying until a timeout (#142), and the reconnect supervisor stops with a `disconnected` state.
+
 ## Development
 
 ```bash

@@ -58,6 +58,7 @@ class FakeWrapper:
         self.ticker2ReqId: dict[str, dict[FakeTicker, int]] = {  # noqa: N815
             "mktData": {},
             "mktDepth": {},
+            "tickByTick": {},
         }
         self.reqId2Ticker: dict[int, FakeTicker] = {}  # noqa: N815
 
@@ -115,6 +116,7 @@ class MockIb:
         # Request ids in send order, for injecting IB errors against a specific request.
         self._depth_req_ids: list[int] = []
         self._mkt_data_req_ids: list[int] = []
+        self._tick_req_ids: list[int] = []
         # placeOrder/cancelOrder recordings; trades are real ib_async Trade objects.
         self.placed_orders: list[Any] = []
         self.placed_contracts: list[Any] = []
@@ -407,6 +409,7 @@ class MockIb:
     ) -> FakeTicker:
         """Return the pre-configured tick-by-tick FakeTicker."""
         self.req_tick_by_tick_calls.append(contract)
+        self._tick_req_ids.append(self._start_ticker("tickByTick", self._tick_ticker))
         return self._tick_ticker
 
     def cancelTickByTickData(self, contract: object, tickType: str) -> None:  # noqa: N802, N803

@@ -115,6 +115,9 @@ def _endpoint() -> tuple[str, int]:
 
 
 async def _server_info(host: str, port: int) -> tuple[int, int, bool]:
+    # run as a file: scripts/ is on sys.path, the repo root is not
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
     from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 

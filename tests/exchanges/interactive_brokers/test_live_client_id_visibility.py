@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 
 from ._live import live_endpoint
 
-pytestmark = pytest.mark.ib_gateway
+pytestmark = [pytest.mark.ib_gateway, pytest.mark.ib_orders]
 
 CLIENT_A, CLIENT_B, CLIENT_C, CLIENT_D = 11, 12, 13, 14
 _WORKING = {"Submitted", "PreSubmitted"}

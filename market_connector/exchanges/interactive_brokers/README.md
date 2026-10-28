@@ -125,6 +125,21 @@ Markers: `ib_gateway` gates every live test; `ib_orders` additionally marks live
 that place, modify or cancel orders on the paper account. `pixi run test-ib-gateway`
 runs `ib_gateway and not ib_orders`.
 
+Latest channel: to record the `latest` Gateway build, put `IBKR_PAPER_LATEST_USER` /
+`IBKR_PAPER_LATEST_PASSWORD` (a different paper username from the stable one) in your
+local `.env` next to the compose file, then run:
+
+```bash
+docker compose -f ib-gateway-compose.yml --profile latest up -d ib-gateway-latest
+IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=14003 IB_GATEWAY_CONTAINER=market-connector-ib-gateway-latest pixi run ib-gateway-compat --channel latest
+docker compose -f ib-gateway-compose.yml --profile latest stop ib-gateway-latest
+```
+
+The `ib-gateway-latest` service is off by default (compose profile `latest`) and runs with
+`READ_ONLY_API=yes`, so only the read-only suite applies. A different account (e.g. an
+IRA-linked paper account) may have different permissions and market-data sharing, so a
+latest-vs-stable difference should first be checked on the same account.
+
 <!-- ib-compat-matrix:start -->
 | Date | Channel | Gateway build | Server version | ib_async max | At ceiling | Read-only suite | Commit |
 |---|---|---|---|---|---|---|---|

@@ -128,7 +128,7 @@ runs `ib_gateway and not ib_orders`.
 <!-- ib-compat-matrix:start -->
 | Date | Channel | Gateway build | Server version | ib_async max | At ceiling | Read-only suite | Commit |
 |---|---|---|---|---|---|---|---|
-| 2026-10-27 | stable | unknown | 178 | 178 | yes | #101 6/6 (manual) | 3b8c752 |
+| 2026-10-28 | stable | 10.50.1f | 178 | 178 | yes | 9 passed, 1 skipped | eff6e53 |
 <!-- ib-compat-matrix:end -->
 
 ## Stage roadmap

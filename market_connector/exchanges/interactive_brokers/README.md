@@ -135,14 +135,17 @@ IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=14003 IB_GATEWAY_CONTAINER=market-conn
 docker compose -f ib-gateway-compose.yml --profile latest stop ib-gateway-latest
 ```
 
-The `ib-gateway-latest` service is off by default (compose profile `latest`) and runs with
-`READ_ONLY_API=yes`, so only the read-only suite applies. A different account (e.g. an
+The `ib-gateway-latest` service is off by default (compose profile `latest`) and currently runs with
+`READ_ONLY_API=no`, because the connector cannot yet start against a read-only API Gateway (#151).
+`ib-gateway-compat` still runs only the read-only suite (no orders); once #151 lands, the service
+goes back to `READ_ONLY_API=yes`. A different account (e.g. an
 IRA-linked paper account) may have different permissions and market-data sharing, so a
 latest-vs-stable difference should first be checked on the same account.
 
 <!-- ib-compat-matrix:start -->
 | Date | Channel | Gateway build | Server version | ib_async max | At ceiling | Read-only suite | Commit |
 |---|---|---|---|---|---|---|---|
+| 2026-10-28 | latest | 10.51.1e | 178 | 178 | yes | 7 passed, 3 skipped | f975c96 |
 | 2026-10-28 | stable | 10.50.1f | 178 | 178 | yes | 9 passed, 1 skipped | eff6e53 |
 <!-- ib-compat-matrix:end -->
 

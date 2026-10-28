@@ -118,7 +118,7 @@ format = "ruff format market_connector tests"
 format-check = "ruff format --check market_connector tests"
 typecheck = "mypy market_connector"
 build = "hatchling build"
-quality = { depends-on = ["lint", "format-check"] }
+quality = { depends-on = ["lint", "format-check", "typecheck"] }
 check = { depends-on = ["quality", "typecheck", "coverage"] }
 
 [tool.pytest.ini_options]

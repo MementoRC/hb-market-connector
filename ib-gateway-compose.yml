@@ -10,3 +10,17 @@ services:
       READ_ONLY_API: "no"
     ports:
       - "127.0.0.1:14002:4004"
+  ib-gateway-latest:
+    # Off by default: start only for `ib-gateway-compat --channel latest` (#59), then stop.
+    # Uses a separate paper login (one IB session per username), e.g. the IRA-linked paper account.
+    image: ghcr.io/gnzsnz/ib-gateway:latest
+    profiles: ["latest"]
+    container_name: market-connector-ib-gateway-latest
+    restart: "no"
+    environment:
+      TWS_USERID: ${IBKR_PAPER_LATEST_USER:-}
+      TWS_PASSWORD: ${IBKR_PAPER_LATEST_PASSWORD:-}
+      TRADING_MODE: paper
+      READ_ONLY_API: "yes"
+    ports:
+      - "127.0.0.1:14003:4004"

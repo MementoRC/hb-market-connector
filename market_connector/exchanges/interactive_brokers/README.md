@@ -102,6 +102,29 @@ services:
   `ValueError` before any IB call). `what_if(..., options=...)` previews the same
   order. Bracket and OCA orders do not take options yet.
 
+## Gateway compatibility matrix
+
+After each Gateway upgrade, record what the new build negotiates against the pinned
+ib_async:
+
+```bash
+IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=14002 pixi run ib-gateway-compat --channel stable --gateway-build <x.y>
+```
+
+The task connects to a paper Gateway, reads the negotiated server version, runs the
+read-only live suite and upserts one row (same channel and build replaces its row).
+The read-only suite places no orders. Use `--dry-run` to print the row only.
+
+Markers: `ib_gateway` gates every live test; `ib_orders` additionally marks live tests
+that place, modify or cancel orders on the paper account. `pixi run test-ib-gateway`
+runs `ib_gateway and not ib_orders`.
+
+<!-- ib-compat-matrix:start -->
+| Date | Channel | Gateway build | Server version | ib_async max | At ceiling | Read-only suite | Commit |
+|---|---|---|---|---|---|---|---|
+| 2026-10-27 | stable | unknown | 178 | 178 | yes | #101 6/6 (manual) | 3b8c752 |
+<!-- ib-compat-matrix:end -->
+
 ## Stage roadmap
 
 | Stage | Scope | Status |

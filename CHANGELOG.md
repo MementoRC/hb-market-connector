@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Interactive Brokers: `pixi run ib-gateway-compat --channel {stable,latest}` records the negotiated server version, ib_async ceiling and read-only live suite result in a README compatibility matrix; new `ib_orders` marker and `test-ib-gateway` task separate order-placing live tests from read-only ones (#144).
 - Interactive Brokers: `IbGatewayTransport.server_info` / `IbGatewayGateway.server_info` (`IbServerInfo`: `server_version`, `max_client_version`, `at_client_ceiling`), refreshed on every connect and reconnect and kept across disconnects, plus one INFO log line per connect recording the negotiated server version (#59).
 - Interactive Brokers: `IbGatewayTransport.subscribe(..., on_error=)` and `SubscriptionHandle.error` / `SubscriptionHandle.closed`. Error 101 or a hard permission code on a trades (tick-by-tick) stream frees its line once, closes the handle, sets `error` and calls `on_error`. On a shared depth (reqMktDepth) stream the same failure fails every subscriber on that stream and releases its line once; a later `close()` is a no-op (#129, #136).
 - Interactive Brokers: `IbVersionIncompatibleError`. A client/server version refusal (reported by ib_async only via `client.apiError`, followed by a timeout) now fails the connect fast without retrying, and stops the reconnect supervisor with a `disconnected` state. README documents a pinned Gateway version policy (#142, #59).

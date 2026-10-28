@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.ib_gateway
+pytestmark = [pytest.mark.ib_gateway, pytest.mark.ib_orders]
 
 
 @pytest.fixture

@@ -17,7 +17,7 @@ if not os.environ.get("IB_GATEWAY_HOST"):
         allow_module_level=True,
     )
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.ib_gateway]
 
 
 @pytest.mark.asyncio

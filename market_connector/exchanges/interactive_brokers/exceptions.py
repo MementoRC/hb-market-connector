@@ -150,6 +150,14 @@ class IbAccountConfigError(Exception):
     """
 
 
+class IbVersionIncompatibleError(Exception):
+    """TWS/Gateway refused the connection because of a client/server version mismatch.
+
+    Raised on connect when ib_async reports a version refusal via ``client.apiError``;
+    retrying cannot fix it. Pin a compatible Gateway version (see #59). NOT an IB error code.
+    """
+
+
 class AmbiguousContractError(Exception):
     """reqContractDetails returned more than one match. NOT an IB error code; a domain decision."""
 

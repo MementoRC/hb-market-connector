@@ -39,6 +39,7 @@ from market_connector.exchanges.interactive_brokers._error_router import _ErrorR
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     IbAccountConfigError,
+    IbVersionIncompatibleError,
     LinkedOrderRejectedError,
     MarketDataLinesExhaustedError,
     MarketDataPermissionError,
@@ -589,7 +590,7 @@ class IbGatewayTransport:
                     ):
                         raise
                     logger.warning(
-                        "IB connect attempt %d/%d failed (retry in %.1fs): %s",
+                        "IB connect attempt %d/%d failed (retry in %.1fs): %r",
                         attempt,
                         self._spec.connect_attempts,
                         delay,
@@ -611,15 +612,7 @@ class IbGatewayTransport:
         """
         if self._spec.pace_api:
             self._ib.client.setConnectOptions("+PACEAPI")
-        await self._ib.connectAsync(
-            host=self._spec.host,
-            port=self._spec.port,
-            clientId=self._spec.client_id,
-            readonly=self._spec.readonly,
-            account=self._spec.account_id or "",
-            timeout=self._spec.connect_timeout,
-            raiseSyncErrors=True,
-        )
+        await self._open_socket()
         self._capture_server_info()
         self._resolve_account()
         try:
@@ -631,6 +624,43 @@ class IbGatewayTransport:
             self._detach_handlers()
             raise
         self._error_router.set_connected(True)
+
+    async def _open_socket(self) -> None:
+        """connectAsync, turning a version refusal into IbVersionIncompatibleError.
+
+        ib_async reports a client/server version refusal only via ``client.apiError``
+        and then times out; capture the message for the duration of this attempt.
+        """
+        client = self._ib.client
+        last_message: list[str] = []
+
+        def on_api_error(message: object) -> None:
+            last_message.append(str(message))
+
+        client.apiError += on_api_error
+        try:
+            await self._ib.connectAsync(
+                host=self._spec.host,
+                port=self._spec.port,
+                clientId=self._spec.client_id,
+                readonly=self._spec.readonly,
+                account=self._spec.account_id or "",
+                timeout=self._spec.connect_timeout,
+                raiseSyncErrors=True,
+            )
+        except Exception as exc:
+            refused = [m for m in last_message if "version must be" in m.lower()]
+            if not refused:
+                raise
+            refusal = refused[-1]
+            low = getattr(client, "MinClientVersion", "?")
+            high = getattr(client, "MaxClientVersion", "?")
+            raise IbVersionIncompatibleError(
+                f"IB refused the connection: {refusal}. "
+                f"ib_async speaks client versions {low}..{high}; see #59"
+            ) from exc
+        finally:
+            client.apiError -= on_api_error
 
     def _capture_server_info(self) -> None:
         """Record the negotiated server version and log it (one line per connect)."""
@@ -840,8 +870,12 @@ class IbGatewayTransport:
                 logger.error("IB reconnect aborted, account configuration invalid: %s", exc)
                 self._publish_state("disconnected", message=str(exc))
                 return
+            except IbVersionIncompatibleError as exc:
+                logger.error("IB reconnect aborted, version incompatible: %s", exc)
+                self._publish_state("disconnected", message=str(exc))
+                return
             except Exception as exc:
-                logger.warning("IB reconnect attempt failed (next delay %.1fs): %s", delay, exc)
+                logger.warning("IB reconnect attempt failed (next delay %.1fs): %r", delay, exc)
                 delay = min(delay * 2, self._spec.reconnect_max_delay)
                 continue
             break

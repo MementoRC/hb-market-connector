@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Interactive Brokers: `IbGatewayTransport.server_info` / `IbGatewayGateway.server_info` (`IbServerInfo`: `server_version`, `max_client_version`, `at_client_ceiling`), refreshed on every connect and reconnect and kept across disconnects, plus one INFO log line per connect recording the negotiated server version (#59).
 - Interactive Brokers: `IbGatewayTransport.subscribe(..., on_error=)` and `SubscriptionHandle.error` / `SubscriptionHandle.closed`. Error 101 or a hard permission code on a trades (tick-by-tick) stream frees its line once, closes the handle, sets `error` and calls `on_error`. On a shared depth (reqMktDepth) stream the same failure fails every subscriber on that stream and releases its line once; a later `close()` is a no-op (#129, #136).
+- Interactive Brokers: `IbVersionIncompatibleError`. A client/server version refusal (reported by ib_async only via `client.apiError`, followed by a timeout) now fails the connect fast without retrying, and stops the reconnect supervisor with a `disconnected` state. README documents a pinned Gateway version policy (#142, #59).
 - `RestConnectorBase.request(..., pools=)`: hb-rate-limit's per-call pool override (0 skips a linked pool; other registered pools are charged ad hoc) (#130, #131).
 - `FundingInfo`, `FundingInfoUpdate`, `CancellationResult` and `Position` primitives (frozen Pydantic, canonical `PositionSide`), with drop-in legacy hummingbot classes in `market_connector.hb_compat.{funding_info,cancellation_result,position}` for re-export shims (#27).
 
@@ -16,6 +17,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Kraken: cancels of orders aged 300s or more reserve the declared per-pair endpoint limit with a zero matching-pool charge, instead of going unkeyed through a lazily created default limit (#131).
 - Kraken: `cancel_orders_batch` charges every pair's matching pool through one ad-hoc multi-pool reserve; no limit is registered per pair combination (#130).
+- Interactive Brokers: connect and reconnect retry warnings log the exception with `repr`, so an empty `TimeoutError()` is no longer a blank message (#142).
 - Requires hb-rate-limit v0.5.0.
 - hb-logger, hb-data-type-primitives and hb-event-bus are pinned to their signed `v0.1.0` tags instead of commit SHAs, per ADR 0001 (#135).
 - The `hummingbot` extra now pins `hb-strategy-framework` to the v0.1.1 release tag instead of an unversioned `>=0.1.0` range (v0.1.1 itself pins hb-data-type-primitives, hb-event-bus and hb-logger @v0.1.0, matching ours).

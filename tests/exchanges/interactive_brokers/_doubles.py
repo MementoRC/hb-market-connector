@@ -29,6 +29,8 @@ class FakeEvent:
         for h in list(self._handlers):
             h(*args, **kwargs)  # type: ignore[operator]
 
+    emit = __call__
+
 
 class FakeClient:
     """Fake ib_async.Client: records setConnectOptions."""
@@ -39,6 +41,8 @@ class FakeClient:
         self._owner = owner
         self.server_version = 176
         self.connect_options: list[str] = []
+        # ib_async Client.apiError: emitted with a message when the API handshake is refused.
+        self.apiError = FakeEvent()  # noqa: N815
         # ib_async Client.getReqId: increasing ints from a settable start.
         self.next_req_id = 100
         self.req_id_calls = 0

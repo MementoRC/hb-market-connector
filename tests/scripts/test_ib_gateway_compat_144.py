@@ -176,3 +176,16 @@ def test_pixi_task_ib_gateway_compat() -> None:
     cmd = _all_tasks(_pyproject()).get("ib-gateway-compat")
     assert cmd is not None, "pixi task ib-gateway-compat missing"
     assert "scripts/ib_gateway_compat.py" in cmd
+
+
+def test_endpoint_requires_host(mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IB_GATEWAY_HOST", raising=False)
+    with pytest.raises(SystemExit):
+        mod._endpoint()
+
+
+def test_endpoint_rejects_live_port(mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IB_GATEWAY_HOST", "127.0.0.1")
+    monkeypatch.setenv("IB_GATEWAY_PORT", "4001")
+    with pytest.raises(SystemExit):
+        mod._endpoint()

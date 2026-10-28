@@ -12,10 +12,13 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 MATRIX_START = "<!-- ib-compat-matrix:start -->"
 MATRIX_END = "<!-- ib-compat-matrix:end -->"
@@ -34,7 +37,7 @@ SUITE_CMD = [
     "--no-cov",
     "-q",
 ]
-_SUMMARY = re.compile(r"\d+ (?:passed|failed|errors?)\b")
+_SUMMARY = re.compile(r"\d+ (?:passed|failed|skipped|errors?)\b")
 
 
 @dataclass(frozen=True)
@@ -93,7 +96,11 @@ def upsert_row(text: str, row: MatrixRow) -> str:
 
 
 def _endpoint() -> tuple[str, int]:
-    host = os.environ.get("IB_GATEWAY_HOST", "127.0.0.1")
+    # The live suite skips unless IB_GATEWAY_HOST is set, so require it here too:
+    # a defaulted host would record an all-skipped run as a matrix row.
+    host = os.environ.get("IB_GATEWAY_HOST")
+    if not host:
+        raise SystemExit("IB_GATEWAY_HOST must be set (and IB_GATEWAY_PORT for a non-4002 Gateway)")
     raw = os.environ.get("IB_GATEWAY_PORT", "4002")
     try:
         port = int(raw)
@@ -165,6 +172,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     host, port = _endpoint()
     server, ceiling, at_ceiling = asyncio.run(_server_info(host, port))
     suite, code = _run_suite()
+    if code == 0 and "passed" not in suite:
+        code = 1  # nothing actually ran against the Gateway
     row = MatrixRow(
         date=datetime.now(UTC).date().isoformat(),
         channel=validate_channel(args.channel),

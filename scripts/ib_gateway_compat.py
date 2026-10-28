@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Mapping, Sequence
+    from typing import Any
 
 MATRIX_START = "<!-- ib-compat-matrix:start -->"
 MATRIX_END = "<!-- ib-compat-matrix:end -->"
@@ -161,10 +162,54 @@ def _git_sha() -> str:
     return out.stdout.strip()
 
 
+_ENV_TEMPLATE = (
+    '{{range .Config.Env}}{{if eq (index (split . "=") 0) "IB_GATEWAY_VERSION"}}'
+    "{{println .}}{{end}}{{end}}"
+)
+_VERSION_PREFIX = "IB_GATEWAY_VERSION="
+
+
+def detect_gateway_build(container: str, run: Callable[..., Any] = subprocess.run) -> str | None:
+    """Read only IB_GATEWAY_VERSION from a container's env (it also holds IB credentials)."""
+    try:
+        proc = run(
+            ["docker", "inspect", container, "--format", _ENV_TEMPLATE],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in proc.stdout.splitlines():
+        if line.startswith(_VERSION_PREFIX):
+            return line[len(_VERSION_PREFIX) :].strip() or None
+    return None
+
+
+def resolve_gateway_build(
+    cli: str | None,
+    env: Mapping[str, str],
+    run: Callable[..., Any] = subprocess.run,
+    container: str | None = None,
+) -> str:
+    """Precedence: CLI > IB_GATEWAY_BUILD > container detection > 'unknown'."""
+    if cli:
+        return cli
+    if env.get("IB_GATEWAY_BUILD"):
+        return env["IB_GATEWAY_BUILD"]
+    name = container or env.get("IB_GATEWAY_CONTAINER")
+    if name:
+        return detect_gateway_build(name, run=run) or "unknown"
+    return "unknown"
+
+
 def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--channel", required=True, choices=CHANNELS)
-    parser.add_argument("--gateway-build", default=os.environ.get("IB_GATEWAY_BUILD", "unknown"))
+    parser.add_argument("--gateway-build", default=None)
+    parser.add_argument("--container", default=None, help="Gateway container to auto-detect from")
     parser.add_argument("--readme", type=Path, default=DEFAULT_README)
     parser.add_argument("--dry-run", action="store_true", help="print the row only")
     return parser.parse_args(argv)
@@ -180,7 +225,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     row = MatrixRow(
         date=datetime.now(UTC).date().isoformat(),
         channel=validate_channel(args.channel),
-        gateway_build=args.gateway_build,
+        gateway_build=resolve_gateway_build(
+            args.gateway_build, os.environ, container=args.container
+        ),
         server_version=server,
         max_client_version=ceiling,
         at_client_ceiling=at_ceiling,

@@ -115,6 +115,12 @@ The task connects to a paper Gateway, reads the negotiated server version, runs 
 read-only live suite and upserts one row (same channel and build replaces its row).
 The read-only suite places no orders. Use `--dry-run` to print the row only.
 
+Build auto-detection: set `IB_GATEWAY_CONTAINER=market-connector-ib-gateway-1` (the
+gnzsnz/ib-gateway container) or pass `--container`, and `--gateway-build` can be omitted.
+Precedence: `--gateway-build` > `IB_GATEWAY_BUILD` > detection from the container >
+`unknown`. Only `IB_GATEWAY_VERSION` is read from the container env (it also holds
+credentials, which are never printed).
+
 Markers: `ib_gateway` gates every live test; `ib_orders` additionally marks live tests
 that place, modify or cancel orders on the paper account. `pixi run test-ib-gateway`
 runs `ib_gateway and not ib_orders`.

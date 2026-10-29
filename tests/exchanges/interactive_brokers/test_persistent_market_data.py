@@ -925,7 +925,14 @@ class TestD10OwnDepthBook:
         real_ib = ib_async.IB()
         wrapper = real_ib.wrapper
         ticker = ib_async.Ticker()
-        wrapper.reqId2Ticker[1] = ticker
+        if hasattr(wrapper, "reqId2Ticker"):  # ib_async 2.x
+            wrapper.reqId2Ticker[1] = ticker
+        else:  # ib_async 3.0: tickers resolve through the subscription registry
+            from ib_async._subscriptions import MktDepthSub  # noqa: PLC0415
+
+            wrapper.subscriptions.add(
+                MktDepthSub(reqId=1, contract=ib_async.Stock("AAPL", "SMART", "USD"), ticker=ticker)
+            )
         rig = _rig()
         rig.ib._depth_ticker = ticker  # the transport's reqMktDepth now returns the real Ticker
         contract = await rig.resolver.resolve_from_pair("AAPL-USD")

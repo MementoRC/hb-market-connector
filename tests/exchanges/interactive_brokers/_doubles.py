@@ -458,6 +458,8 @@ def make_order_state(**kw: Any) -> Any:
         "commissionCurrency": "USD",
         "warningText": "",
     }
+    if "commission" in kw and commission_field != "commission":
+        kw[commission_field] = kw.pop("commission")
     fields.update(kw)
     return OrderState(**fields)
 

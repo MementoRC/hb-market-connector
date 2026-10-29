@@ -156,7 +156,7 @@ latest-vs-stable difference should first be checked on the same account.
 <!-- ib-compat-matrix:start -->
 | Date | Channel | Gateway build | Server version | ib_async max | At ceiling | Read-only suite | Commit |
 |---|---|---|---|---|---|---|---|
-| 2026-10-29 | latest | 10.51.1e | 178 | 178 | yes | 1 failed, 6 passed, 3 skipped | d6f21e0 |
+| 2026-10-29 | latest | 10.51.1e | 178 | 178 | yes | 6 passed, 4 skipped | 4f95635 |
 | 2026-10-28 | stable | 10.50.1f | 178 | 178 | yes | 9 passed, 1 skipped | eff6e53 |
 <!-- ib-compat-matrix:end -->
 

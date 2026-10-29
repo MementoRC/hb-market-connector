@@ -108,13 +108,25 @@ def _native(contract: Any) -> Any:
     return contract.native if isinstance(contract, ResolvedContract) else contract
 
 
+class _WireDecimal(Decimal):
+    """Decimal whose str() is positional, as IB's wire format needs.
+
+    ib_async formats order Decimals via str(); stock Decimal emits '1E+2' / '1E-7'.
+    """
+
+    __slots__ = ()
+
+    def __str__(self) -> str:
+        return format(self, "f")
+
+
 def _exact(value: Decimal) -> Any:
     """An order field as the exact Decimal (no float rounding).
 
     ib_async 2.1 annotates Order.totalQuantity as float but formats any value with str() on
     the wire; 3.0 types it Decimal. Typed Any so one call serves both stubs.
     """
-    return value
+    return _WireDecimal(value)
 
 
 def _issue_request(ib: Any, kind: str, request: Callable[[], Ticker]) -> tuple[Ticker, int | None]:

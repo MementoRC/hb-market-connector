@@ -21,6 +21,6 @@ services:
       TWS_USERID: ${IBKR_PAPER_LATEST_USER:-}
       TWS_PASSWORD: ${IBKR_PAPER_LATEST_PASSWORD:-}
       TRADING_MODE: paper
-      READ_ONLY_API: "yes"
+      READ_ONLY_API: "no"  # read-only API breaks our startup order sync (#151); compat runs read-only tests only
     ports:
       - "127.0.0.1:14003:4004"

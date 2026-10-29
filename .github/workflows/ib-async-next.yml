@@ -40,7 +40,8 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           environments: interactive-brokers
-          frozen: true
+          # pixi.lock does not cover the interactive-brokers env; this canary solves it fresh.
+          locked: false
 
       - name: Cache TWS API proto archive
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

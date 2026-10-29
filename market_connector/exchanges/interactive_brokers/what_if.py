@@ -40,6 +40,16 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _commission(state: Any) -> Any:
+    """OrderState commission: ``commissionAndFees`` (ib_async 3.0), else ``commission`` (2.x).
+
+    Checked by presence so 3.0's deprecated ``commission`` alias is never touched.
+    """
+    if hasattr(state, "commissionAndFees"):
+        return state.commissionAndFees
+    return getattr(state, "commission", None)
+
+
 @dataclass(frozen=True)
 class IbWhatIfResult:
     """Projected margin, equity-with-loan and commission impact of a not-yet-placed order."""
@@ -72,7 +82,7 @@ class IbWhatIfResult:
             equity_with_loan_before=_margin(getattr(state, "equityWithLoanBefore", None)),
             equity_with_loan_change=_margin(getattr(state, "equityWithLoanChange", None)),
             equity_with_loan_after=_margin(getattr(state, "equityWithLoanAfter", None)),
-            commission=decimal_or_none(getattr(state, "commission", None)),
+            commission=decimal_or_none(_commission(state)),
             min_commission=decimal_or_none(getattr(state, "minCommission", None)),
             max_commission=decimal_or_none(getattr(state, "maxCommission", None)),
             commission_currency=_text(getattr(state, "commissionCurrency", None)),

@@ -107,7 +107,8 @@ class OrderHandle:
                 base_state = _TRADE_STATUS_MAP[effective]
             except KeyError as exc:
                 raise ValueError(f"Unknown IB order status: {raw}") from exc
-        filled = Decimal(str(trade.orderStatus.filled))
+        raw_filled = trade.orderStatus.filled  # None when unset (ib_async 3.0 default)
+        filled = Decimal(0) if raw_filled is None else Decimal(str(raw_filled))
         # promote to PARTIALLY_FILLED if fills present but base state is SUBMITTED
         if base_state is IBOrderState.SUBMITTED and filled > 0:
             base_state = IBOrderState.PARTIALLY_FILLED

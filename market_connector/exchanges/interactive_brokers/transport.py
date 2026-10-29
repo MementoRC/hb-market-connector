@@ -108,6 +108,43 @@ def _native(contract: Any) -> Any:
     return contract.native if isinstance(contract, ResolvedContract) else contract
 
 
+def _exact(value: Decimal) -> Any:
+    """An order field as the exact Decimal (no float rounding).
+
+    ib_async 2.1 annotates Order.totalQuantity as float but formats any value with str() on
+    the wire; 3.0 types it Decimal. Typed Any so one call serves both stubs.
+    """
+    return value
+
+
+def _issue_request(ib: Any, kind: str, request: Callable[[], Ticker]) -> tuple[Ticker, int | None]:
+    """Run an ib_async ticker *request*; return its ticker and the reqId sent on the wire.
+
+    ib_async 3.0 removed ``Wrapper.ticker2ReqId`` (2.x) for a private subscription registry,
+    but both draw the reqId from ``Client.getReqId()``, so that call is observed. *kind* is
+    the 2.x registry key ("mktData", "mktDepth", "tickByTick"), consulted only when the
+    request drew no id. None when neither source knows the id.
+    """
+    client = ib.client
+    real = client.getReqId
+    issued: list[int] = []
+
+    def _spy() -> int:
+        req_id: int = real()
+        issued.append(req_id)
+        return req_id
+
+    client.getReqId = _spy
+    try:
+        ticker = request()
+    finally:
+        client.getReqId = real
+    if issued:
+        return ticker, issued[0]
+    registry = getattr(ib.wrapper, "ticker2ReqId", None)
+    return ticker, registry[kind].get(ticker) if registry is not None else None
+
+
 @dataclass(frozen=True)
 class ConnectionStateEvent:
     """Connection lifecycle notification published on CONNECTION_TOPIC.
@@ -291,7 +328,7 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
         )
 
     if hb_order.order_type == OrderType.MARKET:
-        market = Order(action=action, orderType="MKT", totalQuantity=float(hb_order.amount))
+        market = Order(action=action, orderType="MKT", totalQuantity=_exact(hb_order.amount))
         # Explicit DAY: without it IB answers 10349 and ib_async locally cancels the trade.
         market.tif = str(hb_order.time_in_force)
         if hb_order.outside_rth:
@@ -304,8 +341,8 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
         limit = Order(
             action=action,
             orderType="LMT",
-            totalQuantity=float(hb_order.amount),
-            lmtPrice=float(hb_order.price),
+            totalQuantity=_exact(hb_order.amount),
+            lmtPrice=_exact(hb_order.price),
         )
         limit.tif = str(hb_order.time_in_force)
         if hb_order.outside_rth:
@@ -318,8 +355,8 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
         stop = Order(
             action=action,
             orderType="STP",
-            totalQuantity=float(hb_order.amount),
-            auxPrice=float(hb_order.stop_price),
+            totalQuantity=_exact(hb_order.amount),
+            auxPrice=_exact(hb_order.stop_price),
         )
         stop.tif = str(hb_order.time_in_force)
         if hb_order.outside_rth:
@@ -334,9 +371,9 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
         stop_limit = Order(
             action=action,
             orderType="STP LMT",
-            totalQuantity=float(hb_order.amount),
-            lmtPrice=float(hb_order.price),
-            auxPrice=float(hb_order.stop_price),
+            totalQuantity=_exact(hb_order.amount),
+            lmtPrice=_exact(hb_order.price),
+            auxPrice=_exact(hb_order.stop_price),
         )
         stop_limit.tif = str(hb_order.time_in_force)
         if hb_order.outside_rth:
@@ -1669,10 +1706,13 @@ class IbGatewayTransport:
 
     def _issue_stream(self, sub: _ActiveSubscription) -> None:
         """Send the IB request for a trades *sub*, hook its ticker and track its reqId."""
-        ticker = self._ib.reqTickByTickData(_native(sub.contract), "AllLast", 0, False)
+        ticker, req_id = _issue_request(
+            self._ib,
+            "tickByTick",
+            lambda: self._ib.reqTickByTickData(_native(sub.contract), "AllLast", 0, False),
+        )
         ticker.updateEvent += sub.dispatch
         sub.ticker = ticker
-        req_id = self._ib.wrapper.ticker2ReqId["tickByTick"].get(ticker)
         if req_id is not None:
             sub.req_id = req_id
             self._trades_by_req_id[req_id] = sub
@@ -1754,15 +1794,19 @@ class IbGatewayTransport:
 
     def _request_persistent(self, stream: _Stream, *, depth: bool) -> None:
         """Send the reqMktDepth / reqMktData request and hook its ticker."""
+        contract = _native(stream.contract)
         if depth:
-            ticker = self._ib.reqMktDepth(
-                _native(stream.contract), numRows=_DEPTH_ROWS, isSmartDepth=True
+            ticker, req_id = _issue_request(
+                self._ib,
+                "mktDepth",
+                lambda: self._ib.reqMktDepth(contract, numRows=_DEPTH_ROWS, isSmartDepth=True),
             )
         else:
-            ticker = self._ib.reqMktData(_native(stream.contract))
+            ticker, req_id = _issue_request(
+                self._ib, "mktData", lambda: self._ib.reqMktData(contract)
+            )
         ticker.updateEvent += stream.hook
         stream.ticker = ticker
-        req_id = self._ib.wrapper.ticker2ReqId["mktDepth" if depth else "mktData"].get(ticker)
         if req_id is not None:
             stream.req_id = req_id
             self._stream_by_req_id[req_id] = (stream, depth)

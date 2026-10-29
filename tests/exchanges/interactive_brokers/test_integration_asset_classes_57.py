@@ -35,7 +35,7 @@ from market_connector.exchanges.interactive_brokers.exceptions import (
 from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
-from ._live import live_endpoint
+from ._live import live_endpoint, live_readonly
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -56,6 +56,7 @@ def _paper_spec() -> IbConnectionSpec:
         client_id=int(os.environ.get("IB_CLIENT_ID", "957")),
         account_id=os.environ.get("IB_PAPER_ACCOUNT"),
         paper=True,
+        readonly=live_readonly(),
     )
     assert spec.paper
     return spec

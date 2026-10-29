@@ -26,6 +26,7 @@ MATRIX_END = "<!-- ib-compat-matrix:end -->"
 
 CHANNELS = ("stable", "latest")
 LIVE_TRADING_PORTS = frozenset({4001, 7496})
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_README = REPO_ROOT / "market_connector/exchanges/interactive_brokers/README.md"
 SUITE_CMD = [
@@ -115,20 +116,28 @@ def _endpoint() -> tuple[str, int]:
     return host, port
 
 
-async def _server_info(host: str, port: int) -> tuple[int, int, bool]:
+def _connection_spec(env: Mapping[str, str]) -> Any:
+    """Build the paper connection spec; IB_READONLY (1/true/yes/on) connects read-only (#154)."""
     # run as a file: scripts/ is on sys.path, the repo root is not
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
-    from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
-    spec = IbConnectionSpec(
+    host, port = _endpoint()
+    return IbConnectionSpec(
         host=host,
         port=port,
-        client_id=int(os.environ.get("IB_CLIENT_ID", "958")),
-        account_id=os.environ.get("IB_PAPER_ACCOUNT"),
+        client_id=int(env.get("IB_CLIENT_ID", "958")),
+        account_id=env.get("IB_PAPER_ACCOUNT"),
         paper=True,
+        readonly=env.get("IB_READONLY", "").strip().lower() in _TRUTHY,
     )
+
+
+async def _server_info(env: Mapping[str, str]) -> tuple[int, int, bool]:
+    from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
+
+    spec = _connection_spec(env)
     gateway = build_ib_gateway(spec)
     try:
         await gateway.start()
@@ -217,8 +226,7 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse(argv)
-    host, port = _endpoint()
-    server, ceiling, at_ceiling = asyncio.run(_server_info(host, port))
+    server, ceiling, at_ceiling = asyncio.run(_server_info(os.environ))
     suite, code = _run_suite()
     if code == 0 and "passed" not in suite:
         code = 1  # nothing actually ran against the Gateway

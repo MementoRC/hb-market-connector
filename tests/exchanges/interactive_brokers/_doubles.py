@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -434,6 +435,13 @@ def make_order_state(**kw: Any) -> Any:
     except ImportError:  # optional extra not installed
         OrderState = lambda **kw: SimpleNamespace(**kw)  # noqa: E731, N806
 
+    # ib_async 3.0 renamed OrderState.commission to commissionAndFees.
+    try:
+        names = {f.name for f in dataclasses.fields(OrderState)}
+    except TypeError:  # SimpleNamespace fallback is not a dataclass
+        names = set()
+    commission_field = "commissionAndFees" if "commissionAndFees" in names else "commission"
+
     fields: dict[str, Any] = {
         "initMarginBefore": "1000.00",
         "initMarginChange": "250.50",
@@ -444,12 +452,14 @@ def make_order_state(**kw: Any) -> Any:
         "equityWithLoanBefore": "50000.00",
         "equityWithLoanChange": "-100.00",
         "equityWithLoanAfter": "49900.00",
-        "commission": 1.25,
+        commission_field: 1.25,
         "minCommission": 1.0,
         "maxCommission": 2.5,
         "commissionCurrency": "USD",
         "warningText": "",
     }
+    if "commission" in kw and commission_field != "commission":
+        kw[commission_field] = kw.pop("commission")
     fields.update(kw)
     return OrderState(**fields)
 

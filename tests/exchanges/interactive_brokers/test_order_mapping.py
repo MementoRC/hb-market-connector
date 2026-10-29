@@ -51,7 +51,7 @@ class TestLimitOrders:
             action="BUY",
             orderType="LMT",
             totalQuantity=10.0,
-            lmtPrice=123.45,
+            lmtPrice=Decimal("123.45"),
         )
 
     def test_limit_sell_with_price(self):
@@ -62,7 +62,7 @@ class TestLimitOrders:
             action="SELL",
             orderType="LMT",
             totalQuantity=10.0,
-            lmtPrice=99.99,
+            lmtPrice=Decimal("99.99"),
         )
 
     def test_limit_without_price_raises_value_error(self):

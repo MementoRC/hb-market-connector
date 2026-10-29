@@ -54,7 +54,7 @@ class IbPositionPnL:
         return cls(
             account=pnl.account,
             con_id=pnl.conId,
-            position=Decimal(repr(float(pnl.position))),
+            position=Decimal(0) if pnl.position is None else Decimal(repr(float(pnl.position))),
             daily_pnl=_decimal_or_none(pnl.dailyPnL),
             unrealized_pnl=_decimal_or_none(pnl.unrealizedPnL),
             realized_pnl=_decimal_or_none(pnl.realizedPnL),

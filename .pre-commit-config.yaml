@@ -6,7 +6,9 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
+      # PEM header/footer literals and runtime-generated or dummy test keys; no key material
       - id: detect-private-key
+        exclude: ^(market_connector/exchanges/coinbase/_auth_helpers\.py|tests/exchanges/coinbase/conftest\.py|tests/exchanges/coinbase/unit/test_auth_helpers\.py|tests/unit/auth/test_declarative_coverage\.py)$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.10

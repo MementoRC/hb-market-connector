@@ -42,7 +42,8 @@ services:
 
 - `IbConnectionSpec(readonly=True)` opens a read-only API session: the all-open-orders
   sync is skipped and `place_order`, `place_bracket`, `place_oca`, `cancel_order` and
-  `cancel_all` raise `IbReadOnlyModeError` before any IB call.
+  `cancel_all` and `what_if` raise `IbReadOnlyModeError` before any IB call (`what_if` is
+  an order-API request, so a `READ_ONLY_API` Gateway never answers it).
 - A Gateway run with `READ_ONLY_API=yes` does not answer the startup order sync, so a
   connect with `readonly=False` fails immediately (no retries) with `IbReadOnlyApiError`.
   Either disable `READ_ONLY_API` or connect with `readonly=True`.
@@ -155,7 +156,7 @@ latest-vs-stable difference should first be checked on the same account.
 <!-- ib-compat-matrix:start -->
 | Date | Channel | Gateway build | Server version | ib_async max | At ceiling | Read-only suite | Commit |
 |---|---|---|---|---|---|---|---|
-| 2026-10-28 | latest | 10.51.1e | 178 | 178 | yes | 7 passed, 3 skipped | f975c96 |
+| 2026-10-29 | latest | 10.51.1e | 178 | 178 | yes | 1 failed, 6 passed, 3 skipped | d6f21e0 |
 | 2026-10-28 | stable | 10.50.1f | 178 | 178 | yes | 9 passed, 1 skipped | eff6e53 |
 <!-- ib-compat-matrix:end -->
 

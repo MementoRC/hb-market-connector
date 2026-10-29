@@ -28,3 +28,12 @@ repos:
       - id: isort
         files: "\\.(py)$"
         args: [--settings-path=pyproject.toml]
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (pixi typecheck)
+        entry: pixi run typecheck
+        language: system
+        types: [python]
+        pass_filenames: false

@@ -303,6 +303,39 @@ def test_market_order_carries_exact_decimal_quantity() -> None:
     assert _exact(order.totalQuantity) == _QTY
 
 
+def test_limit_order_decimals_serialise_in_plain_notation() -> None:
+    # ib_async 2.1 Client.send has no Decimal handler and falls back to str(); str(Decimal("1E+2"))
+    # is "1E+2" and str(Decimal("1E-7")) is "1E-7", which IB's wire protocol cannot take.
+    order = _hb_to_ib_order(
+        HBOrder(
+            order_type=OrderType.LIMIT,
+            side=TradeType.BUY,
+            amount=Decimal("1E+2"),
+            price=Decimal("1E-7"),
+        )
+    )
+
+    assert _exact(order.totalQuantity) == Decimal("100")
+    assert _exact(order.lmtPrice) == Decimal("1E-7")
+    assert str(order.totalQuantity) == "100"
+    assert str(order.lmtPrice) == "0.0000001"
+
+
+def test_stop_order_decimal_serialises_in_plain_notation() -> None:
+    order = _hb_to_ib_order(
+        HBOrder(
+            order_type=OrderType.STOP_LOSS,
+            side=TradeType.SELL,
+            amount=Decimal("1E+2"),
+            stop_price=Decimal("1E-7"),
+        )
+    )
+
+    assert _exact(order.auxPrice) == Decimal("1E-7")
+    assert str(order.totalQuantity) == "100"
+    assert str(order.auxPrice) == "0.0000001"
+
+
 async def test_bracket_legs_carry_exact_decimal_values() -> None:
     transport, ib = await _make()
     qty = str(_QTY)

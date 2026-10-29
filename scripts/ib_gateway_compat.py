@@ -135,9 +135,9 @@ def _connection_spec(env: Mapping[str, str]) -> Any:
 
 
 async def _server_info(env: Mapping[str, str]) -> tuple[int, int, bool]:
+    spec = _connection_spec(env)  # puts the repo root on sys.path first
     from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 
-    spec = _connection_spec(env)
     gateway = build_ib_gateway(spec)
     try:
         await gateway.start()

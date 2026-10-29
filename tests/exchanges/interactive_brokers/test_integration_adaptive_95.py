@@ -34,7 +34,7 @@ from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpe
 from market_connector.exchanges.interactive_brokers.what_if import IbWhatIfResult
 from market_connector.orders import HBOrder, OrderType, TradeType
 
-from ._live import live_endpoint
+from ._live import live_endpoint, live_readonly
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -52,6 +52,7 @@ def _paper_spec() -> IbConnectionSpec:
         client_id=int(os.environ.get("IB_CLIENT_ID", "958")),
         account_id=os.environ.get("IB_PAPER_ACCOUNT"),
         paper=True,
+        readonly=live_readonly(),
     )
     assert spec.paper
     return spec

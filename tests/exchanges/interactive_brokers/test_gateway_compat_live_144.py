@@ -20,7 +20,7 @@ from ib_async.client import Client
 from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
-from ._live import live_endpoint
+from ._live import live_endpoint, live_readonly
 
 pytestmark = [pytest.mark.ib_gateway]
 
@@ -35,6 +35,7 @@ async def test_server_info_reports_compat_facts() -> None:
         client_id=int(os.environ.get("IB_CLIENT_ID", "958")),
         account_id=os.environ.get("IB_PAPER_ACCOUNT"),
         paper=True,
+        readonly=live_readonly(),
     )
     gateway = build_ib_gateway(spec)
     try:

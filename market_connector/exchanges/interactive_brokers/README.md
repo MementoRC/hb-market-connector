@@ -46,6 +46,8 @@ services:
 - A Gateway run with `READ_ONLY_API=yes` does not answer the startup order sync, so a
   connect with `readonly=False` fails immediately (no retries) with `IbReadOnlyApiError`.
   Either disable `READ_ONLY_API` or connect with `readonly=True`.
+- The live tests and `ib-gateway-compat` connect with `readonly=True` when `IB_READONLY` is
+  `1`/`true`/`yes`/`on`; order-placing (`ib_orders`) tests are then skipped (#154).
 
 ## Client IDs and open-order visibility
 
@@ -140,14 +142,13 @@ local `.env` next to the compose file, then run:
 
 ```bash
 docker compose -f ib-gateway-compose.yml --profile latest up -d ib-gateway-latest
-IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=14003 IB_GATEWAY_CONTAINER=market-connector-ib-gateway-latest pixi run ib-gateway-compat --channel latest
+IB_READONLY=1 IB_GATEWAY_HOST=127.0.0.1 IB_GATEWAY_PORT=14003 IB_GATEWAY_CONTAINER=market-connector-ib-gateway-latest pixi run ib-gateway-compat --channel latest
 docker compose -f ib-gateway-compose.yml --profile latest stop ib-gateway-latest
 ```
 
-The `ib-gateway-latest` service is off by default (compose profile `latest`) and currently runs with
-`READ_ONLY_API=no`, because the connector cannot yet start against a read-only API Gateway (#151).
-`ib-gateway-compat` still runs only the read-only suite (no orders); once #151 lands, the service
-goes back to `READ_ONLY_API=yes`. A different account (e.g. an
+The `ib-gateway-latest` service is off by default (compose profile `latest`) and runs with
+`READ_ONLY_API=yes`. The compat run connects read-only via `IB_READONLY=1` (`ib_orders` tests are
+skipped) and runs only the read-only suite (no orders). A different account (e.g. an
 IRA-linked paper account) may have different permissions and market-data sharing, so a
 latest-vs-stable difference should first be checked on the same account.
 

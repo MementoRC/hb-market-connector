@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayGateway
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
 
-from ._live import live_endpoint
+from ._live import live_endpoint, live_readonly
 
 pytestmark = [pytest.mark.ib_gateway, pytest.mark.ib_orders]
 
@@ -71,6 +71,7 @@ def _spec(client_id: int, *, fetch_all: bool = True) -> IbConnectionSpec:
         client_id=client_id,
         paper=True,
         fetch_all_open_orders=fetch_all,
+        readonly=live_readonly(),
     )
     assert spec.paper
     return spec

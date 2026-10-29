@@ -29,6 +29,8 @@ async def test_get_orderbook_returns_non_empty_snapshot_for_aapl() -> None:
     from market_connector.exchanges.interactive_brokers.factory import build_ib_gateway
     from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 
+    from ._live import live_readonly
+
     depth_permission_codes = {2152, 10089, 10090, 354}
 
     spec = IbConnectionSpec(
@@ -36,6 +38,7 @@ async def test_get_orderbook_returns_non_empty_snapshot_for_aapl() -> None:
         port=int(os.environ.get("IB_GATEWAY_PORT", "4002")),
         client_id=int(os.environ.get("IB_CLIENT_ID", "999")),
         paper=True,  # resolved_market_data_type → 3 (delayed)
+        readonly=live_readonly(),
     )
     gateway = build_ib_gateway(spec)
 

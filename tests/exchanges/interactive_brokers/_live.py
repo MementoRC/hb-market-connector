@@ -11,9 +11,14 @@ port, so IB_GATEWAY_PORT must point at a paper Gateway.
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
+READONLY_TRUTHY = frozenset({"1", "true", "yes", "on"})
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4002
 LIVE_TRADING_PORTS = frozenset({4001, 7496})
@@ -41,3 +46,19 @@ def live_port() -> int:
 
 def live_endpoint() -> tuple[str, int]:
     return live_host(), live_port()
+
+
+def live_readonly(env: Mapping[str, str] | None = None) -> bool:
+    """True when IB_READONLY is set to 1/true/yes/on (case-insensitive): connect read-only."""
+    source = os.environ if env is None else env
+    return source.get("IB_READONLY", "").strip().lower() in READONLY_TRUTHY
+
+
+def apply_readonly_skips(items: Iterable[Any], readonly: bool) -> None:
+    """Skip order-placing (``ib_orders``) tests when connected to a read-only Gateway."""
+    if not readonly:
+        return
+    marker = pytest.mark.skip(reason="order placement needs a writable API; IB_READONLY is set")
+    for item in items:
+        if item.get_closest_marker("ib_orders") is not None:
+            item.add_marker(marker)

@@ -43,7 +43,11 @@ class IbConnectionSpec:
     market_data_type: int | None = None
     # 1=live, 2=frozen, 3=delayed, 4=delayed-frozen.
     # When None: defaults to 3 if paper else 1.
-    readonly: bool = False  # read-only API session (no order placement)
+    # Read-only API session. Skips the startup all-open-orders sync and
+    # makes place_order/place_bracket/place_oca/cancel_order/cancel_all raise
+    # IbReadOnlyModeError. Required when the Gateway runs with READ_ONLY_API=yes; with
+    # readonly=False such a Gateway fails the connect with IbReadOnlyApiError.
+    readonly: bool = False
     pace_api: bool = True  # send "+PACEAPI" so IB paces API messages for us
     reconnect_initial_delay: float = 1.0  # seconds before the first reconnect attempt
     reconnect_max_delay: float = 60.0  # backoff cap in seconds

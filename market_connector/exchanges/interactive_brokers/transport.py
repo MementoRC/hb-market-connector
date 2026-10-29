@@ -39,6 +39,8 @@ from market_connector.exchanges.interactive_brokers._error_router import _ErrorR
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     IbAccountConfigError,
+    IbReadOnlyApiError,
+    IbReadOnlyModeError,
     IbVersionIncompatibleError,
     LinkedOrderRejectedError,
     MarketDataLinesExhaustedError,
@@ -86,6 +88,19 @@ def _is_retryable_connect_error(exc: BaseException) -> bool:
     if isinstance(exc, TimeoutError):
         return True
     return type(exc) is ConnectionError and bool(exc.args) and isinstance(exc.args[0], list)
+
+
+def _is_order_sync_timeout(exc: BaseException) -> bool:
+    """True for ib_async's startup order-sync timeout (what READ_ONLY_API=yes causes)."""
+    if type(exc) is not ConnectionError or not exc.args:
+        return False
+    first = exc.args[0]
+    messages = first if isinstance(first, list) else exc.args
+    return any(
+        isinstance(m, str)
+        and ("open orders request timed out" in m or "completed orders request timed out" in m)
+        for m in messages
+    )
 
 
 def _native(contract: Any) -> Any:
@@ -649,6 +664,12 @@ class IbGatewayTransport:
                 raiseSyncErrors=True,
             )
         except Exception as exc:
+            if _is_order_sync_timeout(exc):
+                raise IbReadOnlyApiError(
+                    "IB Gateway did not answer the startup order sync; it is likely "
+                    "configured with READ_ONLY_API=yes. Disable READ_ONLY_API or connect "
+                    "with IbConnectionSpec(readonly=True)."
+                ) from exc
             refused = [m for m in last_message if "version must be" in m.lower()]
             if not refused:
                 raise
@@ -826,7 +847,7 @@ class IbGatewayTransport:
         Runs after every successful (re)connect when ``fetch_all_open_orders``
         is set. Failure is logged and never fails the connect.
         """
-        if not self._spec.fetch_all_open_orders:
+        if self._spec.readonly or not self._spec.fetch_all_open_orders:
             return
         try:
             await self._ib.reqAllOpenOrdersAsync()
@@ -1019,6 +1040,7 @@ class IbGatewayTransport:
         if IB rejects the order before statusEvent fires, or asyncio.TimeoutError
         if no status arrives within _first_status_timeout seconds.
         """
+        self._require_writable("place_order")
         if not self._error_router.is_connected:
             from market_connector.exchanges.interactive_brokers.exceptions import (  # noqa: PLC0415
                 ConnectionLostError,
@@ -1060,6 +1082,14 @@ class IbGatewayTransport:
         self._handle_registry[trade.order.orderId] = new_handle
         return new_handle
 
+    def _require_writable(self, op: str) -> None:
+        """Raise IbReadOnlyModeError when the session was opened with ``readonly=True``."""
+        if self._spec.readonly:
+            raise IbReadOnlyModeError(
+                f"{op} is not allowed: the transport is connected with "
+                "IbConnectionSpec(readonly=True)"
+            )
+
     def _require_connected(self) -> None:
         if not self._error_router.is_connected:
             raise ConnectionLostError(1100, "transport not connected")
@@ -1085,6 +1115,7 @@ class IbGatewayTransport:
             IbBracket,
         )
 
+        self._require_writable("place_bracket")
         self._require_connected()
         _validate_bracket(entry, take_profit, stop_loss)
         ib_orders = [_hb_to_ib_order(o) for o in (entry, take_profit, stop_loss)]
@@ -1118,6 +1149,7 @@ class IbGatewayTransport:
             IbOcaGroup,
         )
 
+        self._require_writable("place_oca")
         self._require_connected()
         if len(orders) < 2:
             raise ValueError(f"an OCA group needs at least 2 orders, got {len(orders)}")
@@ -1427,7 +1459,9 @@ class IbGatewayTransport:
 
         Raises:
             asyncio.TimeoutError: If no decisive status arrives within 10 seconds.
+            IbReadOnlyModeError: If the transport is connected with ``readonly=True``.
         """
+        self._require_writable("cancel_order")
         from market_connector.exchanges.interactive_brokers.order_handle import (  # noqa: PLC0415
             IBOrderState,
             OrderHandle,
@@ -1506,7 +1540,9 @@ class IbGatewayTransport:
         Raises ConnectionLostError if the transport is not connected (unwrapped).
         Raises CancelAllError (an ExceptionGroup whose ``cancelled`` lists the
         successful cancels) if any individual cancel fails.
+        Raises IbReadOnlyModeError if connected with ``readonly=True``.
         """
+        self._require_writable("cancel_all")
         from market_connector.exchanges.interactive_brokers.exceptions import (  # noqa: PLC0415
             CancelAllError,
         )

@@ -158,6 +158,32 @@ class IbVersionIncompatibleError(Exception):
     """
 
 
+class IbReadOnlyApiError(IbError):
+    """The Gateway has READ_ONLY_API enabled but the connection was opened with ``readonly=False``.
+
+    Raised on connect when ib_async's startup order sync times out; retrying cannot fix it.
+    Disable READ_ONLY_API or connect with ``IbConnectionSpec(readonly=True)``.
+    NOT an IB error code (``error_code`` is 0).
+    """
+
+    def __init__(self, message: str) -> None:
+        Exception.__init__(self, message)
+        self.error_code = 0
+        self.message = message
+
+
+class IbReadOnlyModeError(IbError):
+    """An order call was made on a transport connected with ``IbConnectionSpec(readonly=True)``.
+
+    Raised before any IB call. NOT an IB error code (``error_code`` is 0).
+    """
+
+    def __init__(self, message: str) -> None:
+        Exception.__init__(self, message)
+        self.error_code = 0
+        self.message = message
+
+
 class AmbiguousContractError(Exception):
     """reqContractDetails returned more than one match. NOT an IB error code; a domain decision."""
 

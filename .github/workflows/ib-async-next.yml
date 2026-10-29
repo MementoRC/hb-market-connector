@@ -1,0 +1,70 @@
+# Advisory ib_async v3 (upstream next-protobuf) canary for #157.
+# Not a required check; failures here do not block merges.
+# Remove when the ib_async pin moves to >=3.
+name: ib_async next (advisory)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+  pull_request:
+    branches: [development]
+    paths:
+      - "market_connector/exchanges/interactive_brokers/**"
+      - "tests/exchanges/interactive_brokers/**"
+      - "pyproject.toml"
+      - "pixi.lock"
+      - ".github/workflows/ib-async-next.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  ib-async-next:
+    name: ib_async v3 (next-protobuf)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      IB_ASYNC_REPO: https://github.com/ib-api-reloaded/ib_async.git
+      IB_ASYNC_REF: next-protobuf
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          environments: interactive-brokers
+          locked: true
+
+      - name: Cache TWS API proto archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ib_async
+          key: ib-async-twsapi-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            ib-async-twsapi-${{ runner.os }}-
+
+      - name: Build ib_async v3 with generated protobuf bindings
+        run: |
+          pixi run -e interactive-brokers python -m ensurepip --upgrade
+          pixi run -e interactive-brokers python -m pip install grpcio-tools
+          git clone --depth 1 --branch "$IB_ASYNC_REF" "$IB_ASYNC_REPO" "$RUNNER_TEMP/ib_async"
+          (cd "$RUNNER_TEMP/ib_async" && pixi run --manifest-path "$GITHUB_WORKSPACE/pyproject.toml" -e interactive-brokers python scripts/generate_protos.py)
+          pixi run -e interactive-brokers python -m pip install --upgrade "$RUNNER_TEMP/ib_async"
+          pixi run -e interactive-brokers python -m pip install -e . --no-deps
+          pixi run -e interactive-brokers python -c "import ib_async; print(ib_async.__version__)"
+
+      - name: IB unit tests
+        run: >-
+          pixi run -e interactive-brokers python -m pytest
+          tests/exchanges/interactive_brokers -q --no-cov -p no:cacheprovider
+          -W error::DeprecationWarning:market_connector
+
+      - name: mypy
+        run: pixi run -e interactive-brokers python -m mypy market_connector/exchanges/interactive_brokers

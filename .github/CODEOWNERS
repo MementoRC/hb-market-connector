@@ -1,6 +1,6 @@
 # These owners will be the default owners for everything in the repo
-* @hummingbot/core-dev
+* @MementoRC
 
 # Ownership of specific directories or files
-/market_connector/ @hummingbot/core-dev
-/.github/ @hummingbot/devops
+/market_connector/ @MementoRC
+/.github/ @MementoRC

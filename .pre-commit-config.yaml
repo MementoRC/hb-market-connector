@@ -6,10 +6,12 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
+      # PEM header/footer literals and runtime-generated or dummy test keys; no key material
       - id: detect-private-key
+        exclude: ^(market_connector/exchanges/coinbase/_auth_helpers\.py|tests/exchanges/coinbase/conftest\.py|tests/exchanges/coinbase/unit/test_auth_helpers\.py|tests/unit/auth/test_declarative_coverage\.py)$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.7
+    rev: v0.15.10
     hooks:
       - id: ruff
         args: [--fix]
@@ -21,13 +23,6 @@ repos:
       - id: detect-wallet-private-key
         types: [file]
         exclude: .json
-
-  - repo: https://github.com/pycqa/isort
-    rev: 5.12.0
-    hooks:
-      - id: isort
-        files: "\\.(py)$"
-        args: [--settings-path=pyproject.toml]
 
   - repo: local
     hooks:

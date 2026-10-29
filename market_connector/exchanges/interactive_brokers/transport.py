@@ -1215,11 +1215,14 @@ class IbGatewayTransport:
         """Ask IB for the margin and commission impact of an order without placing it.
 
         ``options`` (e.g. the Adaptive algo) are previewed exactly as place_order
-        would send them. Nothing is submitted or tracked. Raises ConnectionLostError
-        if not connected, ValueError/NotImplementedError for orders or ``options``
+        would send them. Nothing is submitted or tracked. Raises IbReadOnlyModeError
+        in read-only mode (IB treats whatIf as an order-API request, so a READ_ONLY_API
+        Gateway never answers), ConnectionLostError if not connected,
+        ValueError/NotImplementedError for orders or ``options``
         that cannot be translated (before any IB call), WhatIfTimeoutError if IB does not
         answer within ``what_if_timeout``; IB errors propagate unchanged.
         """
+        self._require_writable("what_if")
         if not self._error_router.is_connected:
             raise ConnectionLostError(1100, "transport not connected")
 

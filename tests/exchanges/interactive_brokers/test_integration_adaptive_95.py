@@ -70,6 +70,8 @@ async def _connected() -> AsyncIterator[IbGatewayGateway]:
 
 @pytest.mark.asyncio
 async def test_what_if_aapl_limit_with_adaptive_normal_returns_result() -> None:
+    if live_readonly():
+        pytest.skip("what-if is an order-API request; a READ_ONLY_API Gateway does not answer it")
     ref = InstrumentRef(symbol="AAPL", instrument_type=InstrumentType.STOCK, quote_currency="USD")
     order = HBOrder(
         order_type=OrderType.LIMIT,

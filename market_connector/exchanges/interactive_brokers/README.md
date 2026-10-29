@@ -38,6 +38,15 @@ services:
 - Paper account: register a separate paper login from the IBKR client portal.
 - 2FA: use the IBKR Mobile soft-token (TOTP) for headless automation.
 
+## Read-only mode and READ_ONLY_API
+
+- `IbConnectionSpec(readonly=True)` opens a read-only API session: the all-open-orders
+  sync is skipped and `place_order`, `place_bracket`, `place_oca`, `cancel_order` and
+  `cancel_all` raise `IbReadOnlyModeError` before any IB call.
+- A Gateway run with `READ_ONLY_API=yes` does not answer the startup order sync, so a
+  connect with `readonly=False` fails immediately (no retries) with `IbReadOnlyApiError`.
+  Either disable `READ_ONLY_API` or connect with `readonly=True`.
+
 ## Client IDs and open-order visibility
 
 - Use one stable, unique `client_id` per bot. Order ids come from ib_async's

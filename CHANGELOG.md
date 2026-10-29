@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Interactive Brokers: read-only connect handling. `IbConnectionSpec(readonly=True)` skips the all-open-orders sync, and `place_order`, `place_bracket`, `place_oca`, `cancel_order` and `cancel_all` raise the new `IbReadOnlyModeError`. A Gateway with `READ_ONLY_API=yes` reached with `readonly=False` (ib_async's order-sync timeout) now fails the connect fast with `IbReadOnlyApiError` instead of retrying (#151).
 - Interactive Brokers: `pixi run ib-gateway-compat --channel {stable,latest}` records the negotiated server version, ib_async ceiling and read-only live suite result in a README compatibility matrix; new `ib_orders` marker and `test-ib-gateway` task separate order-placing live tests from read-only ones (#144).
 - Interactive Brokers: `ib-gateway-compat` auto-detects the Gateway build from its container (`IB_GATEWAY_CONTAINER` / `--container`), reading only `IB_GATEWAY_VERSION`; precedence is `--gateway-build` > `IB_GATEWAY_BUILD` > detection > `unknown` (#148).
 - Interactive Brokers: `IbGatewayTransport.server_info` / `IbGatewayGateway.server_info` (`IbServerInfo`: `server_version`, `max_client_version`, `at_client_ceiling`), refreshed on every connect and reconnect and kept across disconnects, plus one INFO log line per connect recording the negotiated server version (#59).

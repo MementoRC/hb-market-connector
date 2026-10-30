@@ -55,14 +55,17 @@ python = "3.12.*"
 pydantic = ">=2"
 httpx = ">=0.27"
 websockets = ">=12.0"
+# Transitive dependency of an hb-* git dep; declared here so it comes from conda-forge
+pandas = "*"
 
 [tool.pixi.feature.dev.dependencies]
 pytest = ">=9.0.3"
-pytest-asyncio = ">=0.21.0"
+pytest-asyncio = ">=1.3.0"
 pytest-cov = ">=7.1.0"
-pytest-timeout = ">=2.2.0"
+pytest-timeout = ">=2.4.0"
 ruff = "=0.17.2"
-mypy = ">=1.5.1"
+mypy = ">=1.20.0"
+types-pyjwt = "*"
 pre-commit = ">=2.15.0"
 
 [tool.pixi.feature.ci.dependencies]
@@ -120,8 +123,9 @@ format = "ruff format market_connector tests scripts"
 format-check = "ruff format --check market_connector tests scripts"
 typecheck = "mypy market_connector scripts"
 build = "hatchling build"
-quality = { depends-on = ["lint", "format-check", "typecheck"] }
-check = { depends-on = ["quality", "typecheck", "coverage"] }
+check-conda-first = "python scripts/check_conda_first.py"
+quality = { depends-on = ["check-conda-first", "lint", "format-check", "typecheck"] }
+check = { depends-on = ["check-conda-first", "quality", "typecheck", "coverage"] }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -185,6 +189,12 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "event_bus.*"
 ignore_missing_imports = true
+
+# scripts/check_conda_first.py is a verbatim copy of the shared reference gate
+# (hb-candles-feed); it is not strict-clean on re.Match Optional access.
+[[tool.mypy.overrides]]
+module = "check_conda_first"
+disable_error_code = ["union-attr"]
 
 [tool.coverage.run]
 branch = true

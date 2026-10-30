@@ -1,5 +1,6 @@
 version: 2
 updates:
+  # No "pip" ecosystem: pip pins are mirrors of conda pins, enforced by scripts/check_conda_first.py
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

@@ -36,6 +36,7 @@ else:
 
 from market_connector.contracts.protocols import ResolvedContract
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
+from market_connector.exchanges.interactive_brokers._ib_numbers import decimal_or_none
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     IbAccountConfigError,
@@ -2078,10 +2079,11 @@ class IbGatewayTransport:
             ticker = stream.ticker
             if ticker is None:
                 return None
-            bid, ask = ticker.bid, ticker.ask
-            # NaN (unset) fails both comparisons; IB also uses -1 for "no value".
-            if bid > 0 and ask > 0:
-                return Decimal(str(bid)), Decimal(str(ask))
+            bid, ask = decimal_or_none(ticker.bid), decimal_or_none(ticker.ask)
+            # Unset values are None: NaN/UNSET_DOUBLE on 2.x, None on ib_async 3.0.
+            # IB also uses -1 for "no value", which the > 0 check rejects.
+            if bid is not None and ask is not None and bid > 0 and ask > 0:
+                return bid, ask
             return None
 
         result: tuple[Decimal, Decimal] = await self._wait_for(

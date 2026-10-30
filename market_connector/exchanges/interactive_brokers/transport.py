@@ -461,16 +461,12 @@ class SubscriptionHandle:
 
 @dataclass
 class _ActiveSubscription:
-    """Registry entry able to re-issue its IB request and re-hook the new ticker."""
+    """Registry entry for one subscriber; the contract's shared stream feeds ``dispatch``."""
 
     event_key: str
     channel: str
     contract: Any
     dispatch: Callable[[Any], None]
-    ticker: Any = None
-    line_held: bool = False  # trades only: the subscription owns one market-data line
-    req_id: int | None = None  # trades only: reqId of the current reqTickByTickData
-    fail: Callable[[Exception], None] | None = None  # trades only: surfaces an IB failure
 
 
 @dataclass
@@ -564,7 +560,8 @@ class IbGatewayTransport:
         self._depth_streams: dict[Hashable, _Stream] = {}
         # IB reqId -> (stream, is_depth) for the streams' current requests; errors route by it.
         self._stream_by_req_id: dict[int, tuple[_Stream, bool]] = {}
-        self._trades_by_req_id: dict[int, _ActiveSubscription] = {}
+        self._trades_streams: dict[Hashable, _Stream] = {}
+        self._trades_by_req_id: dict[int, _Stream] = {}
         # IB-side market-data streams held (L1, depth, trades), capped by spec.market_data_lines.
         self._md_lines: int = 0
         # Fill de-duplication: execId base (final ".NN" removed) -> last full execId.
@@ -1640,13 +1637,12 @@ class IbGatewayTransport:
             channel: "depth" (DOM updates via reqMktDepth) or "trades"
                 (tick-by-tick via reqTickByTickData).
             callback: sync Callable[[ticker_or_tick], None]. Never receives an exception.
-            on_error: optional keyword-only Callable[[Exception], None]. For "trades", it is
-                called once with the typed error when IB reports 101
-                (MarketDataLinesExhaustedError) or a hard permission code
-                (MarketDataPermissionError) on the stream's reqId; the line is released, the
-                IB stream cancelled, the handle closed and ``handle.error`` set first. For
-                "depth", every subscriber sharing the contract's stream is failed the same way
-                and the stream's line is released once. An exception raised by it is logged.
+            on_error: optional keyword-only Callable[[Exception], None]. It is called once
+                with the typed error when IB reports 101 (MarketDataLinesExhaustedError) or a
+                hard permission code (MarketDataPermissionError) on the stream's reqId; the
+                handle is closed and ``handle.error`` set first. Every subscriber sharing the
+                contract's stream is failed the same way and the stream's line is released
+                and the IB stream cancelled once. An exception raised by it is logged.
 
         Returns:
             SubscriptionHandle whose .close() unregisters the handler and
@@ -1673,16 +1669,13 @@ class IbGatewayTransport:
             contract=contract,
             dispatch=_dispatch_depth if channel == "depth" else _dispatch_trades,
         )
-        depth_stream: _Stream | None = None
         try:
-            if channel == "depth":
-                # Depth subscribers share the contract's stream; it feeds them DepthBooks.
-                depth_stream = self._acquire_depth(contract)
-            else:
-                self._require_free_line()
-                self._issue_stream(active)
-                self._take_line()
-                active.line_held = True
+            # Subscribers share the contract's per-channel stream, which feeds each of them.
+            stream = (
+                self._acquire_depth(contract)
+                if channel == "depth"
+                else self._acquire_trades(contract)
+            )
         except Exception:
             self._event_bus.unsubscribe(bus_subscription)
             raise
@@ -1691,12 +1684,12 @@ class IbGatewayTransport:
         def _cleanup() -> None:
             self._subscriptions.pop(event_key, None)
             self._event_bus.unsubscribe(bus_subscription)
-            if depth_stream is not None:
-                if _fail in depth_stream.subscribers:
-                    depth_stream.subscribers.remove(_fail)
-                self._release_depth(depth_stream)
+            if _fail in stream.subscribers:
+                stream.subscribers.remove(_fail)
+            if channel == "depth":
+                self._release_depth(stream)
             else:
-                self._drop_trades(active)
+                self._release_trades(stream)
 
         handle = SubscriptionHandle(channel=channel, contract=contract, _cleanup=_cleanup)
 
@@ -1711,69 +1704,94 @@ class IbGatewayTransport:
                 except Exception:
                     logger.exception("on_error callback of %s raised", event_key)
 
-        active.fail = _fail
-        if depth_stream is not None:
-            depth_stream.subscribers.append(_fail)
+        stream.subscribers.append(_fail)
         return handle
 
-    def _issue_stream(self, sub: _ActiveSubscription) -> None:
-        """Send the IB request for a trades *sub*, hook its ticker and track its reqId."""
+    def _acquire_trades(self, contract: Any) -> _Stream:
+        """Return the contract's shared trades stream (opening it) with one more user."""
+        key = _stream_key(contract)
+        stream = self._trades_streams.get(key)
+        if stream is None:
+
+            def hook(ticker: Any, _key: Hashable = key) -> None:
+                self._on_trades_update(_key, ticker)
+
+            self._require_free_line()
+            stream = _Stream(contract=contract, hook=hook)
+            self._request_trades(stream)
+            self._trades_streams[key] = stream
+            self._take_line()
+        stream.refs += 1
+        return stream
+
+    def _release_trades(self, stream: _Stream) -> None:
+        """Drop one user; the last one cancels the stream and frees its line."""
+        stream.refs -= 1
+        if stream.refs <= 0:
+            self._drop_trades(stream)
+
+    def _on_trades_update(self, key: Hashable, ticker: Any) -> None:
+        """Hand the shared ticker to every trades subscriber of the contract."""
+        for sub in list(self._subscriptions.values()):
+            if sub.channel == "trades" and _stream_key(sub.contract) == key:
+                sub.dispatch(ticker)
+
+    def _request_trades(self, stream: _Stream) -> None:
+        """Send the IB tick-by-tick request for a trades *stream*, hook its ticker and reqId."""
         ticker, req_id = _issue_request(
             self._ib,
             "tickByTick",
-            lambda: self._ib.reqTickByTickData(_native(sub.contract), "AllLast", 0, False),
+            lambda: self._ib.reqTickByTickData(_native(stream.contract), "AllLast", 0, False),
         )
-        ticker.updateEvent += sub.dispatch
-        sub.ticker = ticker
+        ticker.updateEvent += stream.hook
+        stream.ticker = ticker
         if req_id is not None:
-            sub.req_id = req_id
-            self._trades_by_req_id[req_id] = sub
+            stream.req_id = req_id
+            self._trades_by_req_id[req_id] = stream
 
-    def _unhook_stream(self, sub: _ActiveSubscription) -> None:
-        """Detach *sub*'s dispatcher from its ticker and forget its reqId, if hooked."""
-        if sub.ticker is not None:
-            sub.ticker.updateEvent -= sub.dispatch
-            sub.ticker = None
-        if sub.req_id is not None:
-            self._trades_by_req_id.pop(sub.req_id, None)
-            sub.req_id = None
+    def _unhook_trades(self, stream: _Stream) -> None:
+        """Detach the stream's hook and forget its reqId, if hooked."""
+        if stream.ticker is not None:
+            stream.ticker.updateEvent -= stream.hook
+            stream.ticker = None
+        if stream.req_id is not None:
+            self._trades_by_req_id.pop(stream.req_id, None)
+            stream.req_id = None
 
-    def _cancel_stream(self, sub: _ActiveSubscription) -> None:
-        """Cancel the IB-side tick-by-tick stream for a trades *sub*."""
-        self._ib.cancelTickByTickData(_native(sub.contract), "AllLast")
-
-    def _drop_trades(self, sub: _ActiveSubscription) -> None:
-        """Unhook, cancel and free the line of a trades *sub*; a no-op once already dropped."""
-        if not sub.line_held:
+    def _drop_trades(self, stream: _Stream) -> None:
+        """Forget, unhook, cancel and free the line of a trades *stream*; a no-op once dropped."""
+        key = _stream_key(stream.contract)
+        if self._trades_streams.get(key) is not stream:
             return
-        sub.line_held = False
-        self._subscriptions.pop(sub.event_key, None)
-        self._unhook_stream(sub)
+        del self._trades_streams[key]
+        self._unhook_trades(stream)
         self._release_line()
         try:
-            self._cancel_stream(sub)
+            self._ib.cancelTickByTickData(_native(stream.contract), "AllLast")
         except Exception as exc:
-            logger.warning("IB cancel of %s failed: %s", sub.event_key, exc)
+            logger.warning("IB cancel of trades stream %r failed: %s", stream.contract, exc)
+
+    def _resubscribe_trades(self, stream: _Stream, cancel_old: bool) -> None:
+        """Move a trades stream onto a freshly requested ticker."""
+        try:
+            self._unhook_trades(stream)
+            if cancel_old:
+                self._ib.cancelTickByTickData(_native(stream.contract), "AllLast")
+            self._request_trades(stream)
+        except Exception as exc:
+            logger.warning("IB resubscribe of trades stream %r failed: %s", stream.contract, exc)
 
     def resubscribe_all(self, *, cancel_old: bool = True) -> None:
         """Re-issue every open IB request on a fresh ticker.
 
-        Covers trades subscriptions, L1 tickers and shared depth streams (idle
+        Covers shared trades streams, L1 tickers and shared depth streams (idle
         but still open ones included). Bus subscriptions and caller callbacks
         are untouched; only the ticker hooks move, and depth books are cleared.
         Pass ``cancel_old=False`` after a full reconnect, where the old streams
         no longer exist server-side.
         """
-        for sub in list(self._subscriptions.values()):
-            if sub.channel == "depth":
-                continue  # served by the shared depth stream below
-            try:
-                self._unhook_stream(sub)
-                if cancel_old:
-                    self._cancel_stream(sub)
-                self._issue_stream(sub)
-            except Exception as exc:
-                logger.warning("IB resubscribe of %s failed: %s", sub.event_key, exc)
+        for trades in list(self._trades_streams.values()):
+            self._resubscribe_trades(trades, cancel_old)
         for stream in list(self._l1_streams.values()):
             self._resubscribe_stream(stream, cancel_old, depth=False)
         for stream in list(self._depth_streams.values()):
@@ -1845,8 +1863,8 @@ class IbGatewayTransport:
         for streams, depth in ((self._l1_streams, False), (self._depth_streams, True)):
             for stream in list(streams.values()):
                 self._drop_stream(streams, stream, depth=depth)
-        for sub in list(self._subscriptions.values()):
-            self._drop_trades(sub)
+        for trades in list(self._trades_streams.values()):
+            self._drop_trades(trades)
         for feed in list(self._pnl_feeds.values()):
             self._drop_pnl_feed(feed, exc=ConnectionLostError(1100, "transport disconnected"))
 
@@ -1893,8 +1911,12 @@ class IbGatewayTransport:
             for notify in subscribers:
                 notify(exc)
 
-    def _fail_trades(self, sub: _ActiveSubscription, code: int, msg: str) -> None:
-        """Fail a trades *sub* on 101 / a hard permission code; other codes leave it alone."""
+    def _fail_trades(self, stream: _Stream, code: int, msg: str) -> None:
+        """Fail every subscriber of a trades *stream* on 101 / a hard permission code.
+
+        The stream is dropped first (line freed, cancelled once), so the subscribers'
+        later close() is a no-op. Other codes leave it alone.
+        """
         exc: MarketDataPermissionError | MarketDataLinesExhaustedError
         if code in _HARD_PERMISSION_CODES:
             exc = MarketDataPermissionError(code, msg)
@@ -1902,8 +1924,11 @@ class IbGatewayTransport:
             exc = MarketDataLinesExhaustedError(code, msg)
         else:
             return
-        if sub.fail is not None:
-            sub.fail(exc)
+        self._drop_trades(stream)
+        subscribers = list(stream.subscribers)
+        stream.subscribers.clear()
+        for notify in subscribers:
+            notify(exc)
 
     def _on_stream_error(self, req_id: int, code: int, msg: str) -> None:
         """Route a permission or line-cap code IB reported against a persistent stream's reqId.

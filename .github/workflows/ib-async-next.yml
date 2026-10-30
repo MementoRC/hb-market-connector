@@ -13,7 +13,6 @@ on:
       - "market_connector/exchanges/interactive_brokers/**"
       - "tests/exchanges/interactive_brokers/**"
       - "pyproject.toml"
-      - "pixi.lock"
       - ".github/workflows/ib-async-next.yml"
 
 concurrency:
@@ -40,7 +39,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           environments: interactive-brokers
-          # pixi.lock does not cover the interactive-brokers env; this canary solves it fresh.
+          # pixi.lock is gitignored (never committed), so this canary solves the env fresh.
           locked: false
 
       - name: Cache TWS API proto archive

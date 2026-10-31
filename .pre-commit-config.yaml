@@ -1,6 +1,25 @@
 repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (pixi)
+        entry: pixi run ruff check --force-exclude --fix
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format (pixi)
+        entry: pixi run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: mypy
+        name: mypy (pixi typecheck)
+        entry: pixi run typecheck
+        language: system
+        types: [python]
+        pass_filenames: false
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v5.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -10,25 +29,9 @@ repos:
       - id: detect-private-key
         exclude: ^(market_connector/exchanges/coinbase/_auth_helpers\.py|tests/exchanges/coinbase/conftest\.py|tests/exchanges/coinbase/unit/test_auth_helpers\.py|tests/unit/auth/test_declarative_coverage\.py)$
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.2
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
   - repo: https://github.com/CoinAlpha/git-hooks
     rev: 78f0683233a09c68a072fd52740d32c0376d4f0f
     hooks:
       - id: detect-wallet-private-key
         types: [file]
         exclude: .json
-
-  - repo: local
-    hooks:
-      - id: mypy
-        name: mypy (pixi typecheck)
-        entry: pixi run typecheck
-        language: system
-        types: [python]
-        pass_filenames: false

@@ -39,7 +39,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
         with:
           environments: interactive-brokers
-          # pixi.lock is gitignored (never committed), so this canary solves the env fresh.
+          # advisory; pip-installs ib_async from next-protobuf on top of the env, so the lock is not enforced here
           locked: false
 
       - name: Cache TWS API proto archive

@@ -53,10 +53,10 @@ jobs:
       - name: Build ib_async v3 with generated protobuf bindings
         run: |
           pixi run -e interactive-brokers python -m ensurepip --upgrade
-          pixi run -e interactive-brokers python -m pip install grpcio-tools
+          pixi run -e interactive-brokers python -m pip install grpcio-tools  # pip-policy: allow (#157 advisory job: grpcio-tools only to generate ib_async next-protobuf bindings; not in any locked env)
           git clone --depth 1 --branch "$IB_ASYNC_REF" "$IB_ASYNC_REPO" "$RUNNER_TEMP/ib_async"
           (cd "$RUNNER_TEMP/ib_async" && pixi run --manifest-path "$GITHUB_WORKSPACE/pyproject.toml" -e interactive-brokers python scripts/generate_protos.py)
-          pixi run -e interactive-brokers python -m pip install --upgrade "$RUNNER_TEMP/ib_async"
+          pixi run -e interactive-brokers python -m pip install --upgrade "$RUNNER_TEMP/ib_async"  # pip-policy: allow (#157 advisory job: ib_async v3 from unreleased next-protobuf source; no conda-forge build exists)
           pixi run -e interactive-brokers python -m pip install -e . --no-deps
           pixi run -e interactive-brokers python -c "import ib_async; print(ib_async.__version__)"
 

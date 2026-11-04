@@ -2,8 +2,8 @@
 
 Exchange-specific implementation of the market_connector transport
 contracts (``RestConnectorBase``, ``WsConnectorBase``) for Coinbase's
-Advanced Trade REST + WebSocket API. Install runtime dependencies via
-the ``[coinbase]`` optional extra.
+Advanced Trade REST + WebSocket API. Runtime dependencies come from the
+``coinbase`` pixi feature (conda-forge).
 """
 
 from market_connector.exchanges.coinbase.__about__ import __version__

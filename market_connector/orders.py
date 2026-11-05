@@ -29,6 +29,7 @@ class TimeInForce(StrEnum):
     DAY = "DAY"
     GTC = "GTC"
     IOC = "IOC"
+    OPG = "OPG"
 
 
 class HBOrder(BaseModel):

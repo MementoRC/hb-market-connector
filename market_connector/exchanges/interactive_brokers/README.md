@@ -134,6 +134,20 @@ local size-increment check are pending a live survey (#182).
   `since` returns fewer fills. The fee is `None` for a fill whose commission report has not arrived yet.
 - The `ExecutionFilter.time` format (`yyyymmdd-hh:mm:ss`, UTC) is pending live confirmation (#181).
 
+## Auction orders (MOC/LOC, MOO/LOO)
+
+STK only, MARKET or LIMIT only:
+
+- Opening (MOO/LOO): set `HBOrder(time_in_force=TimeInForce.OPG, ...)`; sent as tif `OPG`.
+- Closing (MOC/LOC): pass `options=IbOrderOptions(auction="close")`; MARKET becomes
+  `MOC`, LIMIT becomes `LOC` (keeps `lmtPrice`).
+- `ValueError` before any IB call (`place_order` and `what_if`) for: non-STK contract,
+  other order types, `outside_rth`, OPG together with `auction`, or `auction` with
+  `adaptive_priority`.
+- No local cut-off: IB rejects late orders (`OrderRejectedError`); NYSE MOC cut-off is
+  about 15:50 ET.
+- Bracket and OCA do not support auction orders.
+
 ## Gateway compatibility matrix
 
 After each Gateway upgrade, record what the new build negotiates against the pinned

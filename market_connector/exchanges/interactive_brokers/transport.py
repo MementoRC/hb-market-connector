@@ -341,19 +341,41 @@ def _fee_event(fill: Any, report: Any, *, reconciled: bool) -> FeeEvent | None:
 def _apply_order_options(
     order: Any, native_contract: Any, hb_order: HBOrder, options: IbOrderOptions | None
 ) -> None:
-    """Apply *options* to the converted IB *order* in place; no-op when none are set.
+    """Validate auction/OPG settings and apply *options* to the converted IB *order* in place.
 
     Adaptive requires a SMART-routed STK contract and a MARKET or LIMIT order.
+    Auction orders (``auction="close"`` -> MOC/LOC, or TIF ``OPG`` -> MOO/LOO) require
+    an STK contract and a MARKET or LIMIT order, and exclude outside_rth, each other
+    and Adaptive.
 
     Raises:
         ValueError: the options do not fit the contract or order type.
     """
+    from market_connector.orders import OrderType, TimeInForce  # noqa: PLC0415
+
+    auction = options.auction if options is not None else None
+    is_opg = hb_order.time_in_force == TimeInForce.OPG
+    if is_opg or auction is not None:
+        label = "OPG time-in-force" if is_opg else f"auction={auction!r}"
+        if is_opg and auction is not None:
+            raise ValueError("OPG time-in-force and auction='close' are mutually exclusive")
+        if native_contract.secType != "STK":
+            raise ValueError(f"{label} requires secType STK, got {native_contract.secType!r}")
+        if hb_order.order_type not in (OrderType.MARKET, OrderType.LIMIT):
+            raise ValueError(
+                f"{label} supports only MARKET and LIMIT orders, got {hb_order.order_type.name}"
+            )
+        if hb_order.outside_rth:
+            raise ValueError(f"{label} cannot be combined with outside_rth")
+        if options is not None and options.adaptive_priority is not None and auction is not None:
+            raise ValueError("auction orders cannot be combined with the Adaptive algo")
+        if auction == "close":
+            order.orderType = "MOC" if hb_order.order_type == OrderType.MARKET else "LOC"
+
     if options is None or options.adaptive_priority is None:
         return
 
     from ib_async import TagValue  # noqa: PLC0415 — lazy, ib_async is optional
-
-    from market_connector.orders import OrderType  # noqa: PLC0415
 
     if native_contract.secType != "STK":
         raise ValueError(f"Adaptive algo requires secType STK, got {native_contract.secType!r}")

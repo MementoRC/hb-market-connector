@@ -123,6 +123,17 @@ size is accepted. When IB refuses, `place_order` and the other placement calls r
 submitted size as a plain string, e.g. `"1.5"`). The exact set of refusal codes and a
 local size-increment check are pending a live survey (#182).
 
+## Account summary and fill history
+
+- `get_account_summary(currency=None)` returns an `IbAccountSummary` (`net_liquidation`,
+  `gross_position_value`, `total_cash_value`, exact `Decimal`). `None` selects `"BASE"`, the
+  account's base currency; a named code is upper-cased. A figure IB did not report is `None`, never 0.
+- `get_fills(since)` returns `[(FillEvent, FeeEvent | None)]`, oldest first. `since` must be
+  timezone-aware. It publishes nothing to the fill/fee topics and does not touch live de-duplication.
+- IB returns executions for roughly the last 7 days (current day only on some setups); an earlier
+  `since` returns fewer fills. The fee is `None` for a fill whose commission report has not arrived yet.
+- The `ExecutionFilter.time` format (`yyyymmdd-hh:mm:ss`, UTC) is pending live confirmation (#181).
+
 ## Gateway compatibility matrix
 
 After each Gateway upgrade, record what the new build negotiates against the pinned

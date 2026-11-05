@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from datetime import datetime
     from decimal import Decimal
 
     from market_connector.auth.passthrough import PassThroughSigner
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
         ConnectionStateEvent,
         FeeEvent,
         FillEvent,
+        IbAccountSummary,
         IbGatewayTransport,
         IbServerInfo,
         SubscriptionHandle,
@@ -230,6 +232,17 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
     async def get_balance(self, currency: str) -> Decimal:
         """Delegate to transport: available balance of *currency* for the resolved account."""
         return await self._transport.get_balance(currency)
+
+    async def get_account_summary(self, currency: str | None = None) -> IbAccountSummary:
+        """Delegate to transport: account summary in *currency* (None = BASE)."""
+        return await self._transport.get_account_summary(currency)
+
+    async def get_fills(self, since: datetime) -> list[tuple[FillEvent, FeeEvent | None]]:
+        """Delegate to transport: executions since *since* (aware) with fees, oldest first.
+
+        IB keeps roughly 7 days; the fee is None until its commission report arrives.
+        """
+        return await self._transport.get_fills(since)
 
     async def get_positions(self) -> list[IbPosition]:
         """Delegate to transport: open positions of the resolved account."""

@@ -223,6 +223,9 @@ _DEPTH_ROWS = 10
 _HARD_PERMISSION_CODES = frozenset({354})
 _SOFT_PERMISSION_CODES = frozenset({2152, 10089, 10090})
 
+# accountValues tags reported by get_account_summary.
+_SUMMARY_TAGS = frozenset({"NetLiquidation", "GrossPositionValue", "TotalCashValue"})
+
 # IB error 101: the account's market-data line allowance is used up (issue #104).
 _MAX_TICKERS_CODE = 101
 
@@ -268,6 +271,79 @@ class FeeEvent:
     fee: Decimal
     fee_currency: str
     reconciled: bool = False
+
+
+@dataclass(frozen=True)
+class IbAccountSummary:
+    """Account-level totals in one currency; a figure IB did not report is None, never 0.
+
+    ``currency`` is "BASE" (the account's base currency) or an upper-case code.
+    """
+
+    account: str
+    currency: str
+    net_liquidation: Decimal | None
+    gross_position_value: Decimal | None
+    total_cash_value: Decimal | None
+
+
+def _account_decimal(value: Any) -> Decimal | None:
+    """Exact Decimal from an IB account-value (str, or float); None when unset."""
+    if isinstance(value, str):
+        from market_connector.exchanges.interactive_brokers.what_if import (  # noqa: PLC0415
+            _margin,
+        )
+
+        return _margin(value)
+    return decimal_or_none(value)
+
+
+def _fill_event(fill: Any, *, is_correction: bool, reconciled: bool) -> FillEvent:
+    """Convert an ib_async Fill into a FillEvent (shared by the live path and get_fills)."""
+    from market_connector.orders import TradeType  # noqa: PLC0415
+
+    ex = fill.execution
+    return FillEvent(
+        exec_id=ex.execId,
+        order_id=ex.orderId,
+        perm_id=ex.permId,
+        con_id=fill.contract.conId,
+        symbol=fill.contract.symbol,
+        side=TradeType.BUY if ex.side == "BOT" else TradeType.SELL,
+        price=Decimal(str(ex.price)),
+        size=Decimal(str(ex.shares)),
+        cum_qty=Decimal(str(ex.cumQty)),
+        time=fill.time,
+        account=ex.acctNumber,
+        is_correction=is_correction,
+        reconciled=reconciled,
+    )
+
+
+def _fill_report(fill: Any) -> Any:
+    """The fill's commission report: ``commissionAndFeesReport`` (3.0), else ``commissionReport``.
+
+    Checked by presence so 3.0's deprecated alias is never touched.
+    """
+    if hasattr(fill, "commissionAndFeesReport"):
+        return fill.commissionAndFeesReport
+    return getattr(fill, "commissionReport", None)
+
+
+def _fee_event(fill: Any, report: Any, *, reconciled: bool) -> FeeEvent | None:
+    """Convert a commission report into a FeeEvent; None when empty execId or unset commission."""
+    if report is None or not report.execId:
+        return None
+    fee = decimal_or_none(report.commission)
+    if fee is None:
+        return None
+    return FeeEvent(
+        exec_id=report.execId,
+        order_id=fill.execution.orderId,
+        fee=fee,
+        fee_currency=report.currency,
+        reconciled=reconciled,
+    )
 
 
 def _apply_order_options(
@@ -819,10 +895,7 @@ class IbGatewayTransport:
         base with a different ``.NN`` suffix is a correction and is published
         with ``is_correction=True``, but only if the suffix is strictly newer.
         """
-        from market_connector.orders import TradeType  # noqa: PLC0415
-
-        ex = fill.execution
-        exec_id: str = ex.execId
+        exec_id: str = fill.execution.execId
         base = exec_id.rpartition(".")[0] or exec_id
         last = self._seen_fills.get(base)
         if last is not None and self._exec_suffix(exec_id) <= self._exec_suffix(last):
@@ -830,40 +903,20 @@ class IbGatewayTransport:
         self._remember(self._seen_fills, base, exec_id)
         self._event_bus.publish(
             FILL_TOPIC,
-            FillEvent(
-                exec_id=exec_id,
-                order_id=ex.orderId,
-                perm_id=ex.permId,
-                con_id=fill.contract.conId,
-                symbol=fill.contract.symbol,
-                side=TradeType.BUY if ex.side == "BOT" else TradeType.SELL,
-                price=Decimal(str(ex.price)),
-                size=Decimal(str(ex.shares)),
-                cum_qty=Decimal(str(ex.cumQty)),
-                time=fill.time,
-                account=ex.acctNumber,
-                is_correction=last is not None,
-                reconciled=reconciled,
-            ),
+            _fill_event(fill, is_correction=last is not None, reconciled=reconciled),
         )
         return True
 
     def _ingest_fee(self, fill: Any, report: Any, *, reconciled: bool) -> bool:
-        """Publish the fee in *report* unless its execId is empty or already seen."""
+        """Publish the fee in *report* unless its execId is empty, unset or already seen."""
         exec_id: str = report.execId
         if not exec_id or exec_id in self._seen_fees:
             return False
+        event = _fee_event(fill, report, reconciled=reconciled)
+        if event is None:
+            return False
         self._remember(self._seen_fees, exec_id, None)
-        self._event_bus.publish(
-            FEE_TOPIC,
-            FeeEvent(
-                exec_id=exec_id,
-                order_id=fill.execution.orderId,
-                fee=Decimal(str(report.commission)),
-                fee_currency=report.currency,
-                reconciled=reconciled,
-            ),
-        )
+        self._event_bus.publish(FEE_TOPIC, event)
         return True
 
     async def _reconcile_executions(self) -> None:
@@ -882,7 +935,7 @@ class IbGatewayTransport:
             )
             for fill in fills:
                 self._ingest_fill(fill, reconciled=True)
-                report = fill.commissionReport
+                report = _fill_report(fill)
                 if report is not None:
                     self._ingest_fee(fill, report, reconciled=True)
         except Exception as exc:
@@ -988,6 +1041,58 @@ class IbGatewayTransport:
                 by_tag[row.tag] = row.value
         value = by_tag.get("AvailableFunds", by_tag.get("TotalCashValue"))
         return Decimal(value) if value is not None else Decimal("0")
+
+    async def get_account_summary(self, currency: str | None = None) -> IbAccountSummary:
+        """Return NetLiquidation, GrossPositionValue and TotalCashValue in *currency*.
+
+        *currency* None means "BASE" (the account's base currency); a named code is
+        upper-cased. A tag IB did not report, or reported unset, is None.
+        """
+        wanted = "BASE" if currency is None else currency.upper()
+        values: dict[str, Decimal | None] = {}
+        for row in self._ib.accountValues(self.account or ""):
+            if self.account is not None and row.account != self.account:
+                continue
+            if row.currency.upper() == wanted and row.tag in _SUMMARY_TAGS:
+                values[row.tag] = _account_decimal(row.value)
+        return IbAccountSummary(
+            account=self.account or "",
+            currency=wanted,
+            net_liquidation=values.get("NetLiquidation"),
+            gross_position_value=values.get("GrossPositionValue"),
+            total_cash_value=values.get("TotalCashValue"),
+        )
+
+    async def get_fills(self, since: datetime) -> list[tuple[FillEvent, FeeEvent | None]]:
+        """Return executions at or after *since* with their fees, oldest first.
+
+        *since* must be timezone-aware (ValueError otherwise). IB returns
+        executions for roughly the last 7 days (current day only on some
+        setups), so an earlier *since* returns fewer fills. The fee is None
+        when the fill's commission report has not arrived yet or carries no
+        commission. Does not publish to the fill/fee topics and does not
+        affect live de-duplication.
+        """
+        from datetime import timezone  # noqa: PLC0415
+
+        from ib_async import ExecutionFilter  # noqa: PLC0415 — lazy, ib_async is optional
+
+        if since.tzinfo is None or since.utcoffset() is None:
+            raise ValueError("since must be timezone-aware (tz-aware datetime required)")
+        self._require_connected()
+        stamp = since.astimezone(timezone.utc).strftime("%Y%m%d-%H:%M:%S")  # noqa: UP017
+        fills = await self._ib.reqExecutionsAsync(
+            ExecutionFilter(clientId=self._spec.client_id, acctCode=self.account or "", time=stamp)
+        )
+        result = [
+            (
+                _fill_event(fill, is_correction=False, reconciled=False),
+                _fee_event(fill, _fill_report(fill), reconciled=False),
+            )
+            for fill in fills
+        ]
+        result.sort(key=lambda pair: pair[0].time)
+        return result
 
     async def get_positions(self) -> list[IbPosition]:
         """Return the open positions of the resolved account (all managed accounts if unset)."""

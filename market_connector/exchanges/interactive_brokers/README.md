@@ -114,6 +114,15 @@ services:
   `ValueError` before any IB call). `what_if(..., options=...)` previews the same
   order. Bracket and OCA orders do not take options yet.
 
+## Fractional shares (STK)
+
+Order quantities are sent to IB exactly as given (no rounding, no local
+`sizeIncrement` check). IB decides per account and order type whether a fractional
+size is accepted. When IB refuses, `place_order` and the other placement calls raise
+`OrderRejectedError` with `error_code`, `message` (IB's text) and `quantity` (the
+submitted size as a plain string, e.g. `"1.5"`). The exact set of refusal codes and a
+local size-increment check are pending a live survey (#182).
+
 ## Gateway compatibility matrix
 
 After each Gateway upgrade, record what the new build negotiates against the pinned

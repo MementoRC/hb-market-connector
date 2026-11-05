@@ -27,6 +27,10 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+# IB's refusal of a fractional order size. The exact code set is pending live
+# confirmation (#182); 10243 is the code routed for now.
+FRACTIONAL_SIZE_REFUSED = 10243
+
 # Simple code -> exception mapping. Request-scoped codes fail the request waiter,
 # OrderRejectedError codes the order waiter. Codes needing more than a lookup are
 # handled in ``on_error``: 162 (text-disambiguated), 420/100 (rate limits),
@@ -40,6 +44,7 @@ _ERROR_TABLE: dict[int, type[IbError]] = {
     325: OrderRejectedError,
     354: MarketDataPermissionError,
     10089: MarketDataPermissionError,
+    FRACTIONAL_SIZE_REFUSED: OrderRejectedError,
 }
 
 # Order-scoped informational codes: IB is telling us about a preset, not failing the

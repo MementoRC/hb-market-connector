@@ -1122,9 +1122,12 @@ class IbGatewayTransport:
         try:
             new_handle = await self._wait_first_status_update(trade)
         except OrderRejectedError as exc:
-            # The router has no trade; attach IB's advanced reject text here.
+            # The router has no trade; attach IB's advanced reject text and the quantity here.
             raise OrderRejectedError(
-                exc.error_code, exc.message, advanced_reject=trade.advancedError or None
+                exc.error_code,
+                exc.message,
+                advanced_reject=trade.advancedError or None,
+                quantity=str(trade.order.totalQuantity),
             ) from exc
         self._handle_registry[trade.order.orderId] = new_handle
         return new_handle

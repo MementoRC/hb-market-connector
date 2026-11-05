@@ -34,11 +34,21 @@ class OrderRejectedError(IbError):
     """IB error 201 / 321 / 325 — order rejected.
 
     ``advanced_reject`` carries the ib_async ``Trade.advancedError`` text when present.
+    ``quantity`` is the submitted order quantity as a plain string (e.g. "1.5"), set when
+    the rejection is delivered for a placed order.
     """
 
-    def __init__(self, error_code: int, message: str, advanced_reject: str | None = None) -> None:
+    def __init__(
+        self,
+        error_code: int,
+        message: str,
+        advanced_reject: str | None = None,
+        *,
+        quantity: str | None = None,
+    ) -> None:
         super().__init__(error_code, message)
         self.advanced_reject = advanced_reject
+        self.quantity = quantity
 
 
 class LinkedOrderRejectedError(OrderRejectedError):

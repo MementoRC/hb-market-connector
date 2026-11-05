@@ -341,7 +341,7 @@ def _fee_event(fill: Any, report: Any, *, reconciled: bool) -> FeeEvent | None:
 def _apply_order_options(
     order: Any, native_contract: Any, hb_order: HBOrder, options: IbOrderOptions | None
 ) -> None:
-    """Apply *options* to the converted IB *order* in place; no-op when none are set.
+    """Validate auction/OPG settings and apply *options* to the converted IB *order* in place.
 
     Adaptive requires a SMART-routed STK contract and a MARKET or LIMIT order.
     Auction orders (``auction="close"`` -> MOC/LOC, or TIF ``OPG`` -> MOO/LOO) require
@@ -351,8 +351,6 @@ def _apply_order_options(
     Raises:
         ValueError: the options do not fit the contract or order type.
     """
-    from ib_async import TagValue  # noqa: PLC0415 — lazy, ib_async is optional
-
     from market_connector.orders import OrderType, TimeInForce  # noqa: PLC0415
 
     auction = options.auction if options is not None else None
@@ -376,6 +374,8 @@ def _apply_order_options(
 
     if options is None or options.adaptive_priority is None:
         return
+
+    from ib_async import TagValue  # noqa: PLC0415 — lazy, ib_async is optional
 
     if native_contract.secType != "STK":
         raise ValueError(f"Adaptive algo requires secType STK, got {native_contract.secType!r}")

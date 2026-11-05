@@ -36,7 +36,10 @@ else:
 
 from market_connector.contracts.protocols import ResolvedContract
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
-from market_connector.exchanges.interactive_brokers._ib_numbers import decimal_or_none
+from market_connector.exchanges.interactive_brokers._ib_numbers import (
+    decimal_from_str_or_none,
+    decimal_or_none,
+)
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     IbAccountConfigError,
@@ -285,17 +288,6 @@ class IbAccountSummary:
     net_liquidation: Decimal | None
     gross_position_value: Decimal | None
     total_cash_value: Decimal | None
-
-
-def _account_decimal(value: Any) -> Decimal | None:
-    """Exact Decimal from an IB account-value (str, or float); None when unset."""
-    if isinstance(value, str):
-        from market_connector.exchanges.interactive_brokers.what_if import (  # noqa: PLC0415
-            _margin,
-        )
-
-        return _margin(value)
-    return decimal_or_none(value)
 
 
 def _fill_event(fill: Any, *, is_correction: bool, reconciled: bool) -> FillEvent:
@@ -1054,7 +1046,7 @@ class IbGatewayTransport:
             if self.account is not None and row.account != self.account:
                 continue
             if row.currency.upper() == wanted and row.tag in _SUMMARY_TAGS:
-                values[row.tag] = _account_decimal(row.value)
+                values[row.tag] = decimal_from_str_or_none(row.value)
         return IbAccountSummary(
             account=self.account or "",
             currency=wanted,

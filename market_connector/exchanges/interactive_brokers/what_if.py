@@ -10,29 +10,15 @@ trading rules. Floats are converted through ``repr`` so ``0.35`` becomes
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from market_connector.exchanges.interactive_brokers._ib_numbers import (
-    UNSET_DOUBLE,
-    decimal_or_none,
+    decimal_from_str_or_none as _margin,
 )
+from market_connector.exchanges.interactive_brokers._ib_numbers import decimal_or_none
 
-# IB serialises the sentinel via repr, which is just below the exact binary value.
-_UNSET_MARGIN = Decimal(repr(UNSET_DOUBLE))
-
-
-def _margin(value: Any) -> Decimal | None:
-    """Parse an IB margin string; None when empty, unparsable, non-finite or the unset sentinel."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        parsed = Decimal(value.strip())
-    except InvalidOperation:
-        return None
-    if not parsed.is_finite() or abs(parsed) >= _UNSET_MARGIN:
-        return None
-    return parsed
+if TYPE_CHECKING:
+    from decimal import Decimal
 
 
 def _text(value: Any) -> str | None:

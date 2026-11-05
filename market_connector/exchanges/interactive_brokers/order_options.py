@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 
 class AdaptivePriority(StrEnum):
@@ -23,3 +24,4 @@ class IbOrderOptions:
     """
 
     adaptive_priority: AdaptivePriority | None = None
+    auction: Literal["close"] | None = None

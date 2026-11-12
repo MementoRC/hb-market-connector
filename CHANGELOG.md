@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Interactive Brokers: `IbGatewayGateway.managed_accounts()` and `IbGatewayTransport.managed_accounts()` return the Gateway session's logged-in accounts and raise the new `ManagedAccountsUnavailableError` when IB reports none. `sync_open_orders(timeout)` is an on-demand all-clients open-order refresh that raises `OpenOrdersSyncTimeoutError` or `OpenOrdersSyncError` instead of logging (#188).
+
 ## [0.4.0] - 2026-11-12
 
 ### Added

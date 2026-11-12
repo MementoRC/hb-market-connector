@@ -194,6 +194,34 @@ class IbReadOnlyModeError(IbError):
         self.message = message
 
 
+class ManagedAccountsUnavailableError(IbError):
+    """IB reported no managed accounts for the Gateway session.
+
+    NOT an IB error code (``error_code`` is 0).
+    """
+
+    def __init__(self, message: str) -> None:
+        Exception.__init__(self, message)
+        self.error_code = 0
+        self.message = message
+
+
+class OpenOrdersSyncError(IbError):
+    """The all-clients open-orders sync (``reqAllOpenOrdersAsync``) failed.
+
+    NOT an IB error code (``error_code`` is 0).
+    """
+
+    def __init__(self, message: str) -> None:
+        Exception.__init__(self, message)
+        self.error_code = 0
+        self.message = message
+
+
+class OpenOrdersSyncTimeoutError(OpenOrdersSyncError):
+    """The all-clients open-orders sync did not complete within the caller's timeout."""
+
+
 class AmbiguousContractError(Exception):
     """reqContractDetails returned more than one match. NOT an IB error code; a domain decision."""
 

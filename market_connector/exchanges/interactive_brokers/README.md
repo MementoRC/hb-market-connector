@@ -77,6 +77,12 @@ services:
   with orderId <= 0); cancel them explicitly with `cancel_order` if intended.
 - `cancel_all` attempts every owned order and raises `CancelAllError` (an
   `ExceptionGroup` carrying `.cancelled`) if any cancel fails.
+- `sync_open_orders(timeout)` is an on-demand refresh from all API clients and manual
+  TWS orders, the same request as the connect-time sync but it raises instead of logging:
+  `OpenOrdersSyncTimeoutError` after `timeout` seconds, `OpenOrdersSyncError` on any other
+  failure. Afterwards `get_open_orders()` includes other clients' orders (`owned=False`) and
+  manual TWS orders (`manual=True`). Those are a snapshot that IB does not live-update, and
+  `cancel_all` skips both (it cancels only this client's own orders).
 - `what_if(ref, order)` previews an order's margin, equity-with-loan and
   commission impact (`IbWhatIfResult`, exact `Decimal`, `None` when IB leaves a
   value unset) without placing anything. It raises `WhatIfTimeoutError` after
@@ -125,6 +131,9 @@ local size-increment check are pending a live survey (#182).
 
 ## Account summary and fill history
 
+- `managed_accounts()` returns the accounts the Gateway session is logged into. It raises
+  `ManagedAccountsUnavailableError` when IB reports none. Use it to verify that the configured
+  account is paper (`DU...`) before trading.
 - `get_account_summary(currency=None)` returns an `IbAccountSummary` (`net_liquidation`,
   `gross_position_value`, `total_cash_value`, exact `Decimal`). `None` selects `"BASE"`, the
   account's base currency; a named code is upper-cased. A figure IB did not report is `None`, never 0.

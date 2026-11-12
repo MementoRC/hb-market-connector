@@ -43,13 +43,17 @@ from market_connector.exchanges.interactive_brokers._ib_numbers import (
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     IbAccountConfigError,
+    IbError,
     IbReadOnlyApiError,
     IbReadOnlyModeError,
     IbVersionIncompatibleError,
     LinkedOrderRejectedError,
+    ManagedAccountsUnavailableError,
     MarketDataLinesExhaustedError,
     MarketDataPermissionError,
     MarketDataTimeoutError,
+    OpenOrdersSyncError,
+    OpenOrdersSyncTimeoutError,
     OrderRejectedError,
     PnlTimeoutError,
     WhatIfTimeoutError,
@@ -967,6 +971,45 @@ class IbGatewayTransport:
             await self._ib.reqAllOpenOrdersAsync()
         except Exception as exc:
             logger.warning("IB all-open-orders sync failed: %s", exc)
+
+    def managed_accounts(self) -> list[str]:
+        """Return the accounts the Gateway session is logged into, as IB reports them.
+
+        Returns a copy. Raises ConnectionLostError when not connected and
+        ManagedAccountsUnavailableError when IB reports none.
+        """
+        self._require_connected()
+        accounts = list(self._ib.managedAccounts())
+        if not accounts:
+            raise ManagedAccountsUnavailableError("IB reported no managed accounts")
+        return accounts
+
+    async def sync_open_orders(self, timeout: float) -> None:
+        """Refresh ib_async's open-order cache from ALL API clients and manual TWS orders.
+
+        Afterwards open_orders()/get_open_orders() include other clients' orders
+        (owned=False) and manual TWS orders (manual=True). Other clients' orders are a
+        snapshot: IB does not live-update them after the sync. cancel_all() still only
+        cancels this client's own orders. Unlike the connect-time sync, this raises
+        instead of logging: OpenOrdersSyncTimeoutError after *timeout* seconds,
+        OpenOrdersSyncError on any other failure. Raises ValueError for a non-positive
+        timeout, IbReadOnlyModeError when readonly=True and ConnectionLostError when
+        not connected; IB is not awaited when a guard fails.
+        """
+        if timeout <= 0:
+            raise ValueError(f"timeout must be positive, got {timeout}")
+        self._require_writable("sync_open_orders")
+        self._require_connected()
+        try:
+            await asyncio.wait_for(self._ib.reqAllOpenOrdersAsync(), timeout)
+        except TimeoutError as exc:
+            raise OpenOrdersSyncTimeoutError(
+                f"all-open-orders sync timed out after {timeout}s"
+            ) from exc
+        except IbError:
+            raise
+        except Exception as exc:
+            raise OpenOrdersSyncError(f"all-open-orders sync failed: {exc}") from exc
 
     def _publish_state(self, state: str, code: int | None = None, message: str = "") -> None:
         """Publish a ConnectionStateEvent on the connection topic."""

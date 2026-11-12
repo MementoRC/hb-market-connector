@@ -5,9 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
 ### Added
 
 - Interactive Brokers: `IbGatewayGateway.managed_accounts()` and `IbGatewayTransport.managed_accounts()` return the Gateway session's logged-in accounts and raise the new `ManagedAccountsUnavailableError` when IB reports none. `sync_open_orders(timeout)` is an on-demand all-clients open-order refresh that raises `OpenOrdersSyncTimeoutError` or `OpenOrdersSyncError` instead of logging (#188).
+- QA: import-linter `lint-boundaries` gate added to enforce package import boundaries (#195).
+
+### Fixed
+
+- `hb_compat.common` sources `OrderType`/`TradeType` from `hb-data-type-primitives`; `market_connector` has no `hummingbot` imports (#194).
 
 ## [0.4.0] - 2026-11-12
 
@@ -36,7 +43,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Removed
 
 - **BREAKING:** `rate_limits.limiter.ensure_multi_keyed_limit` (added in 0.3.0). Use `RestConnectorBase.request(..., pools=)` instead (#130).
->
+
 ## [0.3.0] - 2026-10-26
 
 ### Added

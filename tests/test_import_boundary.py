@@ -15,9 +15,7 @@ _DYNAMIC_IMPORTERS = {"import_module", "__import__"}
 FORBIDDEN_ROOTS = ("hummingbot",)
 
 # relpath (relative to the package dir) -> issue URL tracking the violation
-_KNOWN_VIOLATIONS: dict[str, str] = {
-    "hb_compat/common.py": "https://github.com/MementoRC/hb-market-connector/issues/194",
-}
+_KNOWN_VIOLATIONS: dict[str, str] = {}
 
 
 def _is_forbidden(name: str) -> bool:

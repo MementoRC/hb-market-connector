@@ -7,9 +7,7 @@ skipped when the package is not installed.
 
 from __future__ import annotations
 
-import sys
 from decimal import Decimal
-from types import ModuleType
 from unittest.mock import MagicMock
 
 import pytest
@@ -101,39 +99,6 @@ class TestConstruction:
 # ---------------------------------------------------------------------------
 # place_order
 # ---------------------------------------------------------------------------
-
-# We need to stub out the hummingbot enums imported inside place_order.
-# Build minimal stub modules so we don't need a full hummingbot installation.
-
-
-def _make_hb_stub() -> None:
-    """Inject minimal hummingbot stubs into sys.modules."""
-    import enum
-
-    hb = ModuleType("hummingbot")
-    hb_core = ModuleType("hummingbot.core")
-    hb_dt = ModuleType("hummingbot.core.data_type")
-    hb_common = ModuleType("hummingbot.core.data_type.common")
-
-    # Use real Python enums so that EnumClass["KEY"] works as expected.
-    class TradeType(enum.Enum):
-        BUY = "buy"
-        SELL = "sell"
-
-    class OrderType(enum.Enum):
-        LIMIT = "limit"
-        MARKET = "market"
-
-    hb_common.TradeType = TradeType
-    hb_common.OrderType = OrderType
-
-    sys.modules.setdefault("hummingbot", hb)
-    sys.modules.setdefault("hummingbot.core", hb_core)
-    sys.modules.setdefault("hummingbot.core.data_type", hb_dt)
-    sys.modules.setdefault("hummingbot.core.data_type.common", hb_common)
-
-
-_make_hb_stub()
 
 
 class TestPlaceOrder:

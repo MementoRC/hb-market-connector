@@ -46,12 +46,14 @@ pytest-cov = ">=7.1.0"
 pytest-timeout = ">=2.4.0"
 ruff = "=0.17.2"
 mypy = ">=1.20.0"
+import-linter = ">=2.0"
 types-pyjwt = "*"
 pre-commit = ">=2.15.0"
 
 [tool.pixi.feature.ci.dependencies]
 ruff = "=0.17.2"
 mypy = ">=1.5.1"
+import-linter = ">=2.0"
 pytest = ">=9.0.3"
 pytest-cov = ">=7.1.0"
 pytest-timeout = ">=2.2.0"
@@ -105,8 +107,21 @@ format-check = "ruff format --check market_connector tests scripts"
 typecheck = "mypy market_connector scripts"
 build = "hatchling build"
 check-conda-first = "python scripts/check_conda_first.py"
-quality = { depends-on = ["check-conda-first", "lint", "format-check", "typecheck"] }
+lint-boundaries = "lint-imports"
+quality = { depends-on = ["check-conda-first", "lint", "format-check", "typecheck", "lint-boundaries"] }
 check = { depends-on = ["check-conda-first", "quality", "typecheck", "coverage"] }
+
+[tool.importlinter]
+root_package = "market_connector"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "market_connector never imports hummingbot (ADR 0001)"
+type = "forbidden"
+source_modules = ["market_connector"]
+forbidden_modules = ["hummingbot"]
+# Known violation, remove when fixed: https://github.com/MementoRC/hb-market-connector/issues/194
+ignore_imports = ["market_connector.hb_compat.common -> hummingbot"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

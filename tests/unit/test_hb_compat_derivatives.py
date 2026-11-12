@@ -14,7 +14,12 @@ from data_type_primitives import PositionSide
 
 from market_connector import primitives as core
 from market_connector.hb_compat.cancellation_result import CancellationResult
-from market_connector.hb_compat.funding_info import FundingInfo, FundingInfoUpdate
+from market_connector.hb_compat.funding_info import (
+    FundingInfo,
+    FundingInfoUpdate,
+    funding_info_from_primitive,
+    funding_info_to_primitive,
+)
 from market_connector.hb_compat.position import Position
 
 
@@ -126,19 +131,19 @@ class TestLegacyFundingInfo:
         assert update.rate is None
 
     def test_to_primitive_returns_core_model(self) -> None:
-        primitive = _legacy_funding_info().to_primitive()
+        primitive = funding_info_to_primitive(_legacy_funding_info())
         assert isinstance(primitive, core.FundingInfo)
         assert primitive == _core_funding_info()
 
     def test_from_primitive_builds_legacy(self) -> None:
-        info = FundingInfo.from_primitive(_core_funding_info())
+        info = funding_info_from_primitive(_core_funding_info())
         assert isinstance(info, FundingInfo)
         assert info.trading_pair == "BTC-USDT"
         assert info.rate == Decimal("0.0001")
 
     def test_round_trip_from_core(self) -> None:
         core_info = _core_funding_info()
-        assert FundingInfo.from_primitive(core_info).to_primitive() == core_info
+        assert funding_info_to_primitive(funding_info_from_primitive(core_info)) == core_info
 
 
 class TestLegacyCancellationResult:

@@ -244,6 +244,20 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         """
         return await self._transport.get_fills(since)
 
+    def managed_accounts(self) -> list[str]:
+        """Delegate to transport: accounts the Gateway session is logged into.
+
+        Raises ManagedAccountsUnavailableError when IB reports none.
+        """
+        return self._transport.managed_accounts()
+
+    async def sync_open_orders(self, timeout: float) -> None:
+        """Delegate to transport: on-demand all-clients open-order sync within *timeout* seconds.
+
+        Raises OpenOrdersSyncTimeoutError or OpenOrdersSyncError on failure.
+        """
+        await self._transport.sync_open_orders(timeout=timeout)
+
     async def get_positions(self) -> list[IbPosition]:
         """Delegate to transport: open positions of the resolved account."""
         return await self._transport.get_positions()

@@ -1,12 +1,11 @@
-"""Re-export of the hummingbot common data-type enums used by market_connector.
+"""Re-export of the common data-type enums used by market_connector.
 
-Isolating the hummingbot import here keeps live_market_access (and the rest of
-market_connector outside hb_compat) import-clean. See ADR 0001 Group A3.
+The enums come from hb-data-type-primitives. Hummingbot's own
+``hummingbot.core.data_type.common`` re-exports the same classes, so they are
+identical to the parent's ``OrderType`` / ``TradeType``. Sourcing them here keeps
+market_connector free of a hummingbot import (#194, ADR 0001).
 """
 
-from hummingbot.core.data_type.common import (  # type: ignore[import-not-found]
-    OrderType,
-    TradeType,
-)
+from data_type_primitives.common import OrderType, TradeType
 
 __all__ = ["OrderType", "TradeType"]

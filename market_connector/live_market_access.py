@@ -9,6 +9,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+from market_connector.hb_compat.common import OrderType, TradeType
+
 
 class LiveMarketAccess:
     """Wraps a hummingbot ConnectorBase to satisfy MarketAccessProtocol + TradingRulesProtocol.
@@ -61,8 +63,6 @@ class LiveMarketAccess:
         Returns:
             The client order ID assigned by the connector.
         """
-        from market_connector.hb_compat.common import OrderType, TradeType
-
         ot = OrderType[order_type.upper()]
         tt = TradeType[side.upper()]
 

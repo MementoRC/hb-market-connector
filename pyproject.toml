@@ -120,8 +120,6 @@ name = "market_connector never imports hummingbot (ADR 0001)"
 type = "forbidden"
 source_modules = ["market_connector"]
 forbidden_modules = ["hummingbot"]
-# Known violation, remove when fixed: https://github.com/MementoRC/hb-market-connector/issues/194
-ignore_imports = ["market_connector.hb_compat.common -> hummingbot"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

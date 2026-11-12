@@ -64,9 +64,16 @@ def test_source_has_no_static_hummingbot_import() -> None:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             violations.extend(
-                f"line {node.lineno}: import {alias.name}" for alias in node.names if _is_hummingbot(alias.name)
+                f"line {node.lineno}: import {alias.name}"
+                for alias in node.names
+                if _is_hummingbot(alias.name)
             )
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module and _is_hummingbot(node.module):
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module
+            and _is_hummingbot(node.module)
+        ):
             violations.append(f"line {node.lineno}: from {node.module} import ...")
 
     assert violations == []
@@ -74,7 +81,9 @@ def test_source_has_no_static_hummingbot_import() -> None:
 
 @pytest.mark.unit
 def test_import_boundary_allowlist_has_no_194_entry() -> None:
-    spec = importlib.util.spec_from_file_location("test_import_boundary_194_probe", _BOUNDARY_TEST_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "test_import_boundary_194_probe", _BOUNDARY_TEST_PATH
+    )
     assert spec is not None
     assert spec.loader is not None
     boundary = importlib.util.module_from_spec(spec)

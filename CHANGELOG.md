@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-12
+
 ### Added
 
 - Interactive Brokers: `IB_READONLY=1` makes the live tests and `ib-gateway-compat` connect with `readonly=True` and skips `ib_orders` tests, so the suite runs against a `READ_ONLY_API=yes` Gateway; the `ib-gateway-latest` compose service is back to `READ_ONLY_API=yes` (#154).
@@ -19,6 +21,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Breaking (hb_compat):** `hb_compat.funding_info.FundingInfo`/`FundingInfoUpdate` now re-export `hb-data-type-primitives` (bumped to v0.4.0); `to_primitive`/`from_primitive` methods replaced by `funding_info_to_primitive`/`funding_info_from_primitive`. Added `hb_compat.primitives.to_canonical`/`from_canonical` name-based enum mapping (#192).
 - Kraken: cancels of orders aged 300s or more reserve the declared per-pair endpoint limit with a zero matching-pool charge, instead of going unkeyed through a lazily created default limit (#131).
 - Kraken: `cancel_orders_batch` charges every pair's matching pool through one ad-hoc multi-pool reserve; no limit is registered per pair combination (#130).
 - Interactive Brokers: connect and reconnect retry warnings log the exception with `repr`, so an empty `TimeoutError()` is no longer a blank message (#142).

@@ -15,6 +15,10 @@ drift in the canonical source is caught immediately instead of silently
 diverging. ``market_connector/primitives.py`` imports its ``OrderType``/
 ``TradeType`` from here rather than redeclaring them.
 
+The adapter is retained because the canonical enums are int-valued plain
+``Enum`` while wire payloads need str values (#192). ``to_canonical`` /
+``from_canonical`` map between the two by member name.
+
 Distinct from ``market_connector/hb_compat/common.py`` (ADR 0001 Group A3),
 which re-exports the *parent hummingbot* ``OrderType``/``TradeType`` for
 ``live_market_access`` — a different consumer with a different canonical
@@ -79,4 +83,42 @@ def _assert_members_match_canonical() -> None:
 
 _assert_members_match_canonical()
 
-__all__ = ["CanonicalOrderType", "CanonicalTradeType", "OrderType", "TradeType"]
+
+def to_canonical(member: OrderType | TradeType) -> CanonicalOrderType | CanonicalTradeType:
+    """Map a local ``OrderType``/``TradeType`` member to the canonical member of the same name."""
+    if isinstance(member, OrderType):
+        return CanonicalOrderType[member.name]
+    if isinstance(member, TradeType):
+        return CanonicalTradeType[member.name]
+    raise TypeError(f"Unsupported member type for to_canonical: {type(member).__name__}")
+
+
+def from_canonical(member: CanonicalOrderType | CanonicalTradeType) -> OrderType | TradeType:
+    """Map a canonical ``OrderType``/``TradeType`` member to the local member of the same name.
+
+    Raises:
+        ValueError: If the local enum has no member with that name (e.g. ``OrderType.AMM_SWAP``).
+        TypeError: If ``member`` is not a canonical ``OrderType`` or ``TradeType``.
+    """
+    if isinstance(member, CanonicalOrderType):
+        local_enum: type[OrderType] | type[TradeType] = OrderType
+    elif isinstance(member, CanonicalTradeType):
+        local_enum = TradeType
+    else:
+        raise TypeError(f"Unsupported member type for from_canonical: {type(member).__name__}")
+    try:
+        return local_enum[member.name]
+    except KeyError:
+        raise ValueError(
+            f"No local {local_enum.__name__} member named {member.name!r} for canonical {member!r}"
+        ) from None
+
+
+__all__ = [
+    "CanonicalOrderType",
+    "CanonicalTradeType",
+    "OrderType",
+    "TradeType",
+    "from_canonical",
+    "to_canonical",
+]

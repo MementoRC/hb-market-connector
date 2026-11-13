@@ -5,6 +5,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-13
+
+### Added
+
+- Interactive Brokers: `OrderHandle` exposes public read-only `perm_id` (`int | None`, None until IB assigns a permId) and `client_order_id` (`int`, the `orderId`) accessors, so consumers can match orders by either IB id (#203, #205).
+
+### Changed
+
+- QA: bandit security gate wired into `quality`, plus a pip-audit `safety-check` task (#202).
+
+### Fixed
+
+- Dev env: the `interactive-brokers` pixi env now includes `cryptography` and `pyjwt`, so whole-repo test runs collect the coinbase tests (#204).
+
 ## [0.6.0] - 2026-11-13
 
 ### Added

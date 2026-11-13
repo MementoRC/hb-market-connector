@@ -85,6 +85,13 @@ def is_synthetic_cancel(trade: Trade) -> bool:
 
 @dataclass(frozen=True)
 class OrderHandle:
+    """Snapshot of an IB order.
+
+    ``symbol``, ``action`` and ``total_quantity`` are the public way to identify
+    foreign or manual-TWS open orders returned by ``sync_open_orders()``; the
+    underlying ib_async ``Trade`` is not exposed.
+    """
+
     order_id: int
     status: IBOrderState
     raw_status: str
@@ -94,6 +101,21 @@ class OrderHandle:
     client_id: int = 0
     owned: bool = True
     manual: bool = False
+
+    @property
+    def symbol(self) -> str:
+        """Contract symbol of the underlying order."""
+        return str(self._trade.contract.symbol)
+
+    @property
+    def action(self) -> str:
+        """Order side as reported by IB (``BUY`` or ``SELL``)."""
+        return str(self._trade.order.action)
+
+    @property
+    def total_quantity(self) -> Decimal:
+        """Total order quantity."""
+        return Decimal(str(self._trade.order.totalQuantity))
 
     @classmethod
     def from_trade(cls, trade: Trade, own_client_id: int | None = None) -> OrderHandle:

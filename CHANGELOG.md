@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-13
+
+### Added
+
+- Interactive Brokers: `OrderHandle` exposes public read-only `symbol`, `action` and `total_quantity` (`Decimal`) accessors, so open orders from other clients or manual TWS entry returned by `sync_open_orders()` can be identified without reading private state (#199, #200).
+
 ## [0.5.0] - 2026-11-12
 
 ### Added

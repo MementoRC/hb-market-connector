@@ -89,7 +89,8 @@ class OrderHandle:
 
     ``symbol``, ``action`` and ``total_quantity`` are the public way to identify
     foreign or manual-TWS open orders returned by ``sync_open_orders()``; the
-    underlying ib_async ``Trade`` is not exposed.
+    underlying ib_async ``Trade`` is not exposed. Consumers can match orders by
+    either id: ``perm_id`` (IB-wide) or ``client_order_id`` (per-client).
     """
 
     order_id: int
@@ -116,6 +117,19 @@ class OrderHandle:
     def total_quantity(self) -> Decimal:
         """Total order quantity."""
         return Decimal(str(self._trade.order.totalQuantity))
+
+    @property
+    def perm_id(self) -> int | None:
+        """IB permId, or None while IB has not assigned one yet."""
+        perm_id = self._trade.order.permId
+        if isinstance(perm_id, int) and perm_id != 0:
+            return perm_id
+        return None
+
+    @property
+    def client_order_id(self) -> int:
+        """Client-assigned order id (``orderId``) of the underlying order."""
+        return int(self._trade.order.orderId)
 
     @classmethod
     def from_trade(cls, trade: Trade, own_client_id: int | None = None) -> OrderHandle:

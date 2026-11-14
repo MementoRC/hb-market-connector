@@ -150,7 +150,7 @@ class TestNoRefundAfterSend:
     @pytest.mark.parametrize(
         ("outcome", "expected"),
         [
-            pytest.param(httpx.ReadTimeout("slow"), httpx.ReadTimeout, id="timeout"),
+            pytest.param(httpx.ReadTimeout("slow"), ExchangeUnavailableError, id="timeout"),
             pytest.param(httpx.Response(503, json={}), ExchangeUnavailableError, id="5xx"),
             pytest.param(httpx.Response(401, json={}), AuthenticationError, id="401"),
         ],

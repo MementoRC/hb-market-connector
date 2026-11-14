@@ -22,7 +22,14 @@ class OrderNotFoundError(GatewayError):
 
 
 class RateLimitError(GatewayError):
-    """REST transport exhausted its rate-limit budget for an endpoint."""
+    """REST transport exhausted its rate-limit budget for an endpoint.
+
+    ``retry_after`` is the exchange's (or a conservative) back-off hint in seconds, if any.
+    """
+
+    def __init__(self, *args: object, retry_after: float | None = None) -> None:
+        super().__init__(*args)
+        self.retry_after = retry_after
 
 
 class RateLimitExceeded(GatewayError):  # noqa: N818
@@ -35,6 +42,10 @@ class SubscriptionLimitError(GatewayError):
 
 class AuthenticationError(GatewayError):
     """Credentials are invalid, expired, or missing required permissions."""
+
+
+class InvalidNonceError(AuthenticationError):
+    """The exchange rejected the request nonce. Never retried automatically."""
 
 
 class ExchangeUnavailableError(GatewayError):

@@ -43,7 +43,7 @@ import httpx
 from data_type_primitives.common import OrderType, PriceType, TradeType
 from data_type_primitives.in_flight_order import InFlightOrder, OrderState, OrderUpdate
 
-from market_connector.exceptions import ExchangeCancelOnlyError
+from market_connector.exceptions import ExchangeCancelOnlyError, ExchangeUnavailableError
 from market_connector.exchanges.kraken.errors import KrakenAPIError
 from market_connector.exchanges.kraken.hb_compat.kraken_core_support import (
     NAN,
@@ -131,6 +131,9 @@ class KrakenConnectorCore:
         cancel_only_backoff: Initial seconds new orders are failed locally after Kraken
             replies cancel-only; doubles on each further reply, reset by a successful AddOrder.
         cancel_only_backoff_max: Cap for the doubling window.
+        unknown_order_grace: Seconds (on ``clock``, from order creation) an UNKNOWN order
+            absent from Kraken's open and closed orders stays tracked before it is failed;
+            a found order is adopted at once.
     """
 
     def __init__(
@@ -143,8 +146,11 @@ class KrakenConnectorCore:
         clock: Callable[[], float] = time.monotonic,
         cancel_only_backoff: float = 10.0,
         cancel_only_backoff_max: float = 300.0,
+        unknown_order_grace: float = 0.0,
     ) -> None:
         self._clock = clock
+        self._unknown_grace = unknown_order_grace
+        self._created_at: dict[str, float] = {}  # cid -> clock() at creation
         self._backoff_initial = cancel_only_backoff
         self._backoff_max = cancel_only_backoff_max
         self._backoff_current = cancel_only_backoff
@@ -292,6 +298,7 @@ class KrakenConnectorCore:
         amount, price = quantize_order(self.trading_rules.get(trading_pair), amount, price)
         client_order_id = f"hbot-{trade_type.name.lower()}-{uuid.uuid4().hex}"
         self._assign_userref(client_order_id)
+        self._created_at[client_order_id] = self._clock()
         order = InFlightOrder(
             client_order_id=client_order_id,
             trading_pair=trading_pair,
@@ -345,7 +352,7 @@ class KrakenConnectorCore:
                 order.client_order_id,
             )
             raise
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except (httpx.TimeoutException, httpx.TransportError, ExchangeUnavailableError) as exc:
             self._mark_unknown(order, exc)
             return
         except ExchangeCancelOnlyError as exc:
@@ -411,7 +418,9 @@ class KrakenConnectorCore:
             return
         if found:
             self._on_placed(order, next(iter(found)))
-        elif cid not in self._submitting:  # a live AddOrder request may still land
+        elif cid in self._submitting:  # a live AddOrder request may still land
+            return
+        elif self._clock() - self._created_at.get(cid, float("-inf")) >= self._unknown_grace:
             self._fail(order, LostOrderError(f"order {cid} (userref {userref}) not on Kraken"))
 
     async def _cancel_order(self, order: InFlightOrder) -> None:
@@ -497,6 +506,7 @@ class KrakenConnectorCore:
             return False
         self._cancel_requested.discard(cid)
         self._userref_to_cid.pop(self._userrefs.pop(cid, 0), None)
+        self._created_at.pop(cid, None)
         self._set_state(order, state, time.time())
         self._finished[cid] = order
         while len(self._finished) > _MAX_FINISHED_ORDERS:

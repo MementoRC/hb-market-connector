@@ -41,10 +41,10 @@ ENDPOINT_REGISTRY: dict[str, Endpoint] = {
     # ------------------------------------------------------------------
     # Matching / trading endpoints  (rate_limit_pool="matching")
     # ------------------------------------------------------------------
-    "add_order": Endpoint(path="/0/private/AddOrder", method="POST"),
+    "add_order": Endpoint(path="/0/private/AddOrder", method="POST", idempotent=False),
     "cancel_order": Endpoint(path="/0/private/CancelOrder", method="POST"),
     "amend_order": Endpoint(path="/0/private/AmendOrder", method="POST"),
-    "edit_order": Endpoint(path="/0/private/EditOrder", method="POST"),
-    "add_order_batch": Endpoint(path="/0/private/AddOrderBatch", method="POST"),
+    "edit_order": Endpoint(path="/0/private/EditOrder", method="POST", idempotent=False),
+    "add_order_batch": Endpoint(path="/0/private/AddOrderBatch", method="POST", idempotent=False),
     "cancel_order_batch": Endpoint(path="/0/private/CancelOrderBatch", method="POST"),
 }

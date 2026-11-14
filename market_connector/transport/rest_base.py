@@ -64,6 +64,18 @@ def _decode_body(raw_response: httpx.Response) -> dict | list | None:
     return raw_response.json()  # type: ignore[no-any-return]
 
 
+def _is_transient(raw_response: httpx.Response) -> bool:
+    """5xx, or a non-JSON HTML body (Cloudflare block/challenge page) of any status."""
+    if raw_response.status_code >= 500:
+        return True
+    if not raw_response.content:
+        return False
+    base_type = raw_response.headers.get("content-type", "").split(";")[0].strip().lower()
+    if base_type == "application/json":
+        return False
+    return base_type == "text/html" or raw_response.content.lstrip().startswith(b"<")
+
+
 class RestConnectorBase:
     """Rate-limited REST client with retry and optional Signer-based auth.
 
@@ -200,9 +212,72 @@ class RestConnectorBase:
 
         url = f"{self._base_url}{resolved_path}"
         active_signer = signer if signer is not None else self._signer
-        content: str | None = None
-        json_body: dict[str, Any] | None = None
-        content_type = "application/json"
+        last_error: Exception | None = None
+
+        for attempt in range(self._max_retries + 1):
+            # Built and signed per attempt: a retry needs a fresh nonce and signature.
+            try:
+                req, content, json_body, send_headers = await self._build_call(
+                    endpoint, url, params, data, headers, active_signer
+                )
+            except Exception:
+                if attempt == 0:
+                    charge.refund()  # nothing was sent
+                raise
+            try:
+                response = await self._client.request(
+                    method=req.method,
+                    url=url,
+                    params=req.qs_params or None,
+                    json=json_body,
+                    content=content,
+                    headers=send_headers,
+                )
+            except httpx.TransportError as exc:
+                if not endpoint.idempotent:
+                    raise
+                last_error = ExchangeUnavailableError(f"transport error on {endpoint_name}: {exc}")
+                last_error.__cause__ = exc
+            else:
+                if response.status_code == 401:
+                    raise AuthenticationError(f"401 from {endpoint_name}: {response.text}")
+
+                if response.status_code == 429:
+                    self._rate_limiter.report_throttled(limit_id, _parse_retry_after(response))
+                    raise RateLimitError(
+                        f"429 from {endpoint_name}: exchange-side rate limit",
+                        retry_after=_parse_retry_after(response),
+                    )
+
+                if not _is_transient(response):
+                    return Response(
+                        raw=_decode_body(response),
+                        status_code=response.status_code,
+                        headers=response.headers,
+                        _endpoint=endpoint_name,
+                        _response_type=endpoint.response_type,
+                    )
+                last_error = ExchangeUnavailableError(
+                    f"{response.status_code} from {endpoint_name}: {response.text[:200]}"
+                )
+                if not endpoint.idempotent:
+                    raise last_error  # never re-send an order-placing call blindly
+
+            if attempt < self._max_retries:
+                await asyncio.sleep(self._retry_delay * (2**attempt))
+
+        raise last_error or ExchangeUnavailableError("request failed")
+
+    async def _build_call(
+        self,
+        endpoint: Endpoint,
+        url: str,
+        params: dict[str, Any] | None,
+        data: dict[str, Any] | None,
+        headers: dict[str, str] | None,
+        active_signer: Signer | None,
+    ) -> tuple[Request, str | None, dict[str, Any] | None, dict[str, str]]:
+        """Build (and sign, when a signer is active) one send attempt."""
         req = Request(
             method=endpoint.method,
             url=url,
@@ -211,66 +286,21 @@ class RestConnectorBase:
             body=None,
             qs_params=dict(params or {}),
         )
-        if active_signer is not None:
-            body_format = getattr(active_signer, "body_format", BodyFormat.JSON)
-            is_body_call = endpoint.method.upper() != "GET"
-            if is_body_call and body_format is BodyFormat.FORM_URLENCODED:
-                req = replace(req, body=urlencode(data or {}))
-                content_type = "application/x-www-form-urlencoded"
-            elif is_body_call and data:
-                req = replace(req, body=json.dumps(data))
-            try:
-                req = await active_signer.sign(req)
-            except Exception:
-                charge.refund()
-                raise
-            if is_body_call and req.body is not None:
-                content = req.body if isinstance(req.body, str) else req.body.decode("utf-8")
-                send_headers = {"Content-Type": content_type, **req.headers}
-            else:
-                send_headers = req.headers
-        else:
-            send_headers = req.headers
-            json_body = data
-
-        last_error: Exception | None = None
-
-        for attempt in range(self._max_retries + 1):
-            response = await self._client.request(
-                method=req.method,
-                url=url,
-                params=req.qs_params or None,
-                json=json_body,
-                content=content,
-                headers=send_headers,
-            )
-
-            if response.status_code == 401:
-                raise AuthenticationError(f"401 from {endpoint_name}: {response.text}")
-
-            if response.status_code == 429:
-                self._rate_limiter.report_throttled(limit_id, _parse_retry_after(response))
-                raise RateLimitError(f"429 from {endpoint_name}: exchange-side rate limit")
-
-            if response.status_code >= 500:
-                last_error = ExchangeUnavailableError(
-                    f"{response.status_code} from {endpoint_name}: {response.text}"
-                )
-                if attempt < self._max_retries:
-                    await asyncio.sleep(self._retry_delay * (2**attempt))
-                    continue
-                raise last_error
-
-            body = _decode_body(response)
-            return Response(
-                raw=body,
-                status_code=response.status_code,
-                headers=response.headers,
-                _endpoint=endpoint_name,
-                _response_type=endpoint.response_type,
-            )
-
-        raise last_error or ExchangeUnavailableError("request failed")
+        if active_signer is None:
+            return req, None, data, req.headers
+        content_type = "application/json"
+        body_format = getattr(active_signer, "body_format", BodyFormat.JSON)
+        is_body_call = endpoint.method.upper() != "GET"
+        if is_body_call and body_format is BodyFormat.FORM_URLENCODED:
+            req = replace(req, body=urlencode(data or {}))
+            content_type = "application/x-www-form-urlencoded"
+        elif is_body_call and data:
+            req = replace(req, body=json.dumps(data))
+        req = await active_signer.sign(req)
+        if is_body_call and req.body is not None:
+            content = req.body if isinstance(req.body, str) else req.body.decode("utf-8")
+            return req, content, None, {"Content-Type": content_type, **req.headers}
+        return req, None, None, req.headers
 
     async def close(self) -> None:
         await self._client.aclose()

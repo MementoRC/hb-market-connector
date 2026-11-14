@@ -18,6 +18,7 @@ from market_connector.exceptions import (
     ExchangeCancelOnlyError,
     ExchangePermissionError,
     ExchangePostOnlyError,
+    InvalidNonceError,
     OrderNotFoundError,
     OrderRejectedError,
     RateLimitError,
@@ -58,8 +59,9 @@ ERROR_CODE_MAPPING: dict[str, type[Exception]] = {
     # API / authentication errors
     "EAPI:Invalid key": AuthenticationError,
     "EAPI:Invalid signature": AuthenticationError,
-    "EAPI:Invalid nonce": AuthenticationError,
+    "EAPI:Invalid nonce": InvalidNonceError,
     "EAPI:Rate limit exceeded": RateLimitError,
+    "EGeneral:Temporary lockout": RateLimitError,
     # Permission errors
     "EGeneral:Permission denied": ExchangePermissionError,
     # Service availability errors
@@ -67,6 +69,20 @@ ERROR_CODE_MAPPING: dict[str, type[Exception]] = {
     "EService:Market in cancel_only mode": ExchangeCancelOnlyError,
     "EService:Market in post_only mode": ExchangePostOnlyError,
     "EService:Busy": ServiceUnavailableError,
+}
+
+
+_NONCE_GUIDANCE = (
+    "set the nonce window of the API key to 10 or more (Kraken key settings), "
+    "or regenerate the API key if another client shares it"
+)
+
+# Conservative back-off hints (seconds); Kraken's lockout lasts about 15 minutes at most
+# but a minute is the shortest sensible wait.
+_RETRY_AFTER_HINT: dict[str, float] = {
+    "EAPI:Rate limit exceeded": 5.0,
+    "EOrder:Rate limit exceeded": 5.0,
+    "EGeneral:Temporary lockout": 60.0,
 }
 
 
@@ -96,7 +112,12 @@ def raise_on_kraken_error(error_codes: list[str]) -> None:
 
     first_code = error_codes[0]
     exc_type = ERROR_CODE_MAPPING.get(first_code)
+    message = first_code if len(error_codes) == 1 else str(error_codes)
+    if exc_type is InvalidNonceError:
+        raise InvalidNonceError(f"{message}: {_NONCE_GUIDANCE}")
+    if exc_type is RateLimitError:
+        raise RateLimitError(message, retry_after=_RETRY_AFTER_HINT.get(first_code, 5.0))
     if exc_type is not None:
-        raise exc_type(first_code if len(error_codes) == 1 else str(error_codes))
+        raise exc_type(message)
 
     raise KrakenAPIError(error_codes)

@@ -19,3 +19,6 @@ class Endpoint:
     limit: int = 10
     window: float = 1.0
     response_type: type[BaseModel] | None = None
+    # False for calls that create or modify an order: the REST loop sends them once and
+    # never retries (a lost reply may hide an accepted order).
+    idempotent: bool = True

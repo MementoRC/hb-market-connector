@@ -143,7 +143,7 @@ class TestBridgeInstantiation:
 
 
 class TestOrdertypeTranslationE2E:
-    """Full path: bridge.place_order → kraken_ordertype_from_hb → gateway.place_order."""
+    """Full path: bridge.place_order passes the order type through to gateway.place_order."""
 
     async def test_limit_order_translates_correctly(self) -> None:
         bridge = KrakenConnectorBridge(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET)
@@ -159,10 +159,12 @@ class TestOrdertypeTranslationE2E:
         assert txid == "TXID-LIMIT"
         bridge._gateway.place_order.assert_awaited_once_with(
             trading_pair="XBTUSD",
-            order_type="limit",
+            order_type=OrderType.LIMIT,
             side="buy",
             amount=Decimal("0.001"),
             price=Decimal("50000"),
+            limit_price=None,
+            price_in_percent=False,
         )
 
     async def test_market_order_translates_correctly(self) -> None:
@@ -177,10 +179,12 @@ class TestOrdertypeTranslationE2E:
         )
         bridge._gateway.place_order.assert_awaited_once_with(
             trading_pair="XBTUSD",
-            order_type="market",
+            order_type="MARKET",
             side="sell",
             amount=Decimal("0.05"),
             price=None,
+            limit_price=None,
+            price_in_percent=False,
         )
 
     def test_all_known_types_produce_valid_kraken_strings(self) -> None:

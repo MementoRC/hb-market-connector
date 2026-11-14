@@ -59,6 +59,10 @@ def kraken_ordertype_from_hb(
     - plain strings (case-insensitive; returned normalised to lowercase)
     - any Enum-like object exposing a ``.name`` attribute
 
+    Note:
+        ``LIMIT_MAKER`` maps to ``"limit"`` here; the post-only behaviour is
+        applied by the gateway (``OrdersMixin.place_order``) via ``oflags="post"``.
+
     Args:
         order_type: Order type to translate.
         trigger_kind: Reserved for future use (secondary qualifier for conditional

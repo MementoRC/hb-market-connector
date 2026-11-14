@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Kraken conditional orders (STOP_LOSS, TAKE_PROFIT and `*_LIMIT` variants) via `place_order`, with `limit_price` and `price_in_percent`; trailing types deferred (#209).
+
 ## [0.7.0] - 2026-11-13
 
 ### Added

@@ -45,28 +45,70 @@ if TYPE_CHECKING:
 _ORDER_TYPE_MAP: dict[str, str] = {
     "MARKET": "market",
     "LIMIT": "limit",
+    "LIMIT_MAKER": "limit",  # sent with oflags="post" (post-only)
+    "STOP_LOSS": "stop-loss",
+    "TAKE_PROFIT": "take-profit",
+    "STOP_LOSS_LIMIT": "stop-loss-limit",
+    "TAKE_PROFIT_LIMIT": "take-profit-limit",
 }
 
+# Conditional types whose ``price`` is the trigger.
+_CONDITIONAL_KEYS = frozenset(_ORDER_TYPE_MAP) - {"MARKET", "LIMIT", "LIMIT_MAKER"}
+# Conditional types that also carry a limit price (sent as ``price2``).
+_LIMIT_KEYS = frozenset({"STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"})
 
-def _to_kraken_ordertype(order_type: OrderType | str) -> str:
-    """Translate an OrderType enum or string to a Kraken ``ordertype`` string.
+
+def _order_type_key(order_type: object) -> str:
+    """Name-based key for any OrderType enum (hummingbot or local) or string."""
+    name = getattr(order_type, "name", None)
+    return name.upper() if isinstance(name, str) else str(order_type).upper().replace("-", "_")
+
+
+def _to_kraken_ordertype(order_type: object) -> str:
+    """Translate an OrderType (any enum with a matching ``name``) or string to Kraken's.
 
     Args:
-        order_type: ``OrderType.MARKET``, ``OrderType.LIMIT``, or their
-            string equivalents (case-insensitive).
+        order_type: An OrderType member from ``data_type_primitives`` or the local
+            mirror (matched by name), or a case-insensitive string.
 
     Raises:
-        ValueError: For order types not supported at Stage 4 (conditional
-            types are deferred to Stage 5 hb_compat).
+        ValueError: For unsupported types, including the trailing-stop types
+            (deferred, see #209).
     """
-    key = order_type.name if isinstance(order_type, OrderType) else str(order_type).upper()
+    key = _order_type_key(order_type)
     if key not in _ORDER_TYPE_MAP:
         raise ValueError(
-            f"Unsupported order type at Stage 4: {order_type!r}. "
-            "Conditional order types (STOP_LOSS, TAKE_PROFIT, TRAILING_STOP) "
-            "are mapped in Stage 5 hb_compat."
+            f"Unsupported order type: {order_type!r}. "
+            "Trailing-stop order types are not yet supported (see #209)."
         )
     return _ORDER_TYPE_MAP[key]
+
+
+def _build_price_fields(
+    key: str,
+    price: Decimal | None,
+    limit_price: Decimal | None,
+    price_in_percent: bool,
+) -> dict[str, object]:
+    """Validate price arguments for ``key`` and return the ``price``/``price2`` body fields."""
+    conditional = key in _CONDITIONAL_KEYS
+    if key in {"LIMIT", "LIMIT_MAKER"} and price is None:
+        raise ValueError(f"price is required for {key} orders")
+    if conditional and price is None:
+        raise ValueError(f"price (trigger) is required for {key} orders")
+    if key in _LIMIT_KEYS and limit_price is None:
+        raise ValueError(f"limit_price is required for {key} orders")
+    if limit_price is not None and key not in _LIMIT_KEYS:
+        raise ValueError(f"limit_price is only valid for *_LIMIT conditional orders, not {key}")
+    if price_in_percent and not conditional:
+        raise ValueError(f"price_in_percent is only valid for conditional orders, not {key}")
+
+    fields: dict[str, object] = {}
+    if price is not None:
+        fields["price"] = f"#{price}%" if price_in_percent else str(price)
+    if limit_price is not None:
+        fields["price2"] = str(limit_price)
+    return fields
 
 
 def _to_kraken_side(side: TradeType | str) -> str:
@@ -179,38 +221,47 @@ class OrdersMixin:
         side: TradeType | str,
         amount: Decimal,
         price: Decimal | None = None,
+        *,
+        limit_price: Decimal | None = None,
+        price_in_percent: bool = False,
     ) -> str:
         """Place an order on Kraken and return the first txid.
 
         Args:
             trading_pair: Exchange-native pair string (e.g. ``"XBTUSD"``).
-            order_type: ``OrderType.MARKET`` or ``OrderType.LIMIT`` (Stage 4).
+            order_type: MARKET, LIMIT, STOP_LOSS, TAKE_PROFIT, STOP_LOSS_LIMIT or
+                TAKE_PROFIT_LIMIT, as an enum (matched by name) or string.
             side: ``TradeType.BUY`` / ``TradeType.SELL`` or lowercase strings.
             amount: Order volume as a ``Decimal``.
-            price: Limit price; required when ``order_type`` is ``LIMIT``.
+            price: Limit price for LIMIT; the trigger (Kraken ``price``) for
+                conditional types.
+            limit_price: Kraken ``price2``; required for ``*_LIMIT`` types only.
+            price_in_percent: Send the trigger as ``#<price>%`` (conditional only).
 
         Returns:
             The first txid string from ``result.txid``.
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.
-            ValueError: For unsupported order types or missing price on LIMIT.
+            ValueError: For unsupported (e.g. trailing, deferred per #209) order
+                types or inconsistent price arguments; raised before any request.
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
         kraken_ordertype = _to_kraken_ordertype(order_type)
-        if kraken_ordertype == "limit" and price is None:
-            raise ValueError("price is required for LIMIT orders")
+        key = _order_type_key(order_type)
+        price_fields = _build_price_fields(key, price, limit_price, price_in_percent)
+        if key == "LIMIT_MAKER":
+            price_fields["oflags"] = "post"
 
         body: dict[str, object] = {
             "pair": trading_pair,
             "type": _to_kraken_side(side),
             "ordertype": kraken_ordertype,
             "volume": str(amount),
+            **price_fields,
         }
-        if price is not None:
-            body["price"] = str(price)
 
         await _ensure_room(self, trading_pair, 1)
         response = await _request_keyed(self._rest, "add_order", trading_pair, body)

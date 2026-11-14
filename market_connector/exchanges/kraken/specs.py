@@ -151,6 +151,7 @@ KRAKEN_RATE_LIMIT_SPEC: TieredRateLimitSpec = TieredRateLimitSpec(
         "ticker": [("public", 1)],
         "depth": [("public", 1)],
         "balance": [("private", 1)],
+        "balance_ex": [("private", 1)],
         "open_orders": [("private", 1)],
         "query_orders": [("private", 1)],
         "query_trades": [("private", 2)],

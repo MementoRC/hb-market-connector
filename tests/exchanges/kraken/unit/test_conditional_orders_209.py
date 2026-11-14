@@ -86,10 +86,6 @@ _LOCAL_TRIGGER_ONLY = [pytest.param(LocalOrderType.STOP_LOSS, "stop-loss", id="l
 _LOCAL_WITH_LIMIT = [
     pytest.param(LocalOrderType.STOP_LOSS_LIMIT, "stop-loss-limit", id="local_stop_loss_limit")
 ]
-_DEFERRED = [
-    pytest.param(OrderType.TRAILING_STOP, id="trailing_stop"),
-    pytest.param(OrderType.TRAILING_STOP_LIMIT, id="trailing_stop_limit"),
-]
 
 
 # ---------------------------------------------------------------------------
@@ -160,14 +156,6 @@ class TestGatewayBodies:
         assert body["ordertype"] == expected
         assert body["price"] == "#2.5%"
         assert body["price2"] == "26950"
-
-    @pytest.mark.parametrize("order_type", _DEFERRED)
-    async def test_trailing_deferred(
-        self, gateway: KrakenGateway, rest: _RecordingRest, order_type: Any
-    ) -> None:
-        with pytest.raises(ValueError):  # noqa: PT011
-            await gateway.place_order(_PAIR, order_type, TradeType.SELL, _AMOUNT, Decimal("100"))
-        assert rest.calls == []
 
 
 class TestRegression:
@@ -358,8 +346,6 @@ _BAD_ARGS = [
     pytest.param(OrderType.MARKET, None, _L, False, id="market_with_limit_price"),
     pytest.param(OrderType.MARKET, None, None, True, id="market_percent"),
     pytest.param(OrderType.LIMIT, Decimal("2.5"), None, True, id="limit_percent"),
-    pytest.param(OrderType.TRAILING_STOP, _P, None, False, id="trailing_stop_deferred"),
-    pytest.param(OrderType.TRAILING_STOP_LIMIT, _P, _L, False, id="trailing_stop_limit_deferred"),
 ]
 
 

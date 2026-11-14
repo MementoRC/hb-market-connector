@@ -51,10 +51,14 @@ _ORDER_TYPE_MAP: dict[str, str] = {
     "TAKE_PROFIT": "take-profit",
     "STOP_LOSS_LIMIT": "stop-loss-limit",
     "TAKE_PROFIT_LIMIT": "take-profit-limit",
+    "TRAILING_STOP": "trailing-stop",
+    "TRAILING_STOP_LIMIT": "trailing-stop-limit",
 }
 
+# Trailing types: ``price`` is the trail distance, ``price2`` (limit) a signed offset.
+_TRAILING_KEYS = frozenset({"TRAILING_STOP", "TRAILING_STOP_LIMIT"})
 # Conditional types whose ``price`` is the trigger.
-_CONDITIONAL_KEYS = frozenset(_ORDER_TYPE_MAP) - {"MARKET", "LIMIT", "LIMIT_MAKER"}
+_CONDITIONAL_KEYS = frozenset(_ORDER_TYPE_MAP) - {"MARKET", "LIMIT", "LIMIT_MAKER"} - _TRAILING_KEYS
 # Conditional types that also carry a limit price (sent as ``price2``).
 _LIMIT_KEYS = frozenset({"STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"})
 
@@ -73,16 +77,33 @@ def _to_kraken_ordertype(order_type: object) -> str:
             mirror (matched by name), or a case-insensitive string.
 
     Raises:
-        ValueError: For unsupported types, including the trailing-stop types
-            (deferred, see #209).
+        ValueError: For unsupported types.
     """
     key = _order_type_key(order_type)
     if key not in _ORDER_TYPE_MAP:
-        raise ValueError(
-            f"Unsupported order type: {order_type!r}. "
-            "Trailing-stop order types are not yet supported (see #209)."
-        )
+        raise ValueError(f"Unsupported order type: {order_type!r}.")
     return _ORDER_TYPE_MAP[key]
+
+
+def _trailing_fields(
+    key: str,
+    price: Decimal | None,
+    limit_price: Decimal | None,
+    price_in_percent: bool,
+) -> dict[str, object]:
+    """Validate trailing arguments and return the relative ``price``/``price2`` fields."""
+    if price is None or price <= 0:
+        raise ValueError(f"price (trail distance) must be > 0 for {key} orders")
+    if key == "TRAILING_STOP" and limit_price is not None:
+        raise ValueError("limit_price is not valid for TRAILING_STOP orders")
+    if key == "TRAILING_STOP_LIMIT" and limit_price is None:
+        raise ValueError("limit_price (offset from trigger) is required for TRAILING_STOP_LIMIT")
+    suffix = "%" if price_in_percent else ""
+    fields: dict[str, object] = {"price": f"+{price:f}{suffix}"}
+    if limit_price is not None:
+        sign = "-" if limit_price < 0 else "+"
+        fields["price2"] = f"{sign}{abs(limit_price):f}{suffix}"
+    return fields
 
 
 def _build_price_fields(
@@ -92,6 +113,8 @@ def _build_price_fields(
     price_in_percent: bool,
 ) -> dict[str, object]:
     """Validate price arguments for ``key`` and return the ``price``/``price2`` body fields."""
+    if key in _TRAILING_KEYS:
+        return _trailing_fields(key, price, limit_price, price_in_percent)
     conditional = key in _CONDITIONAL_KEYS
     if key in {"LIMIT", "LIMIT_MAKER"} and price is None:
         raise ValueError(f"price is required for {key} orders")
@@ -245,14 +268,17 @@ class OrdersMixin:
         Args:
             trading_pair: Exchange-native pair (``"XBTUSD"``, passed through) or a
                 hb pair (``"BTC-USD"``, converted to the AssetPairs ``altname``).
-            order_type: MARKET, LIMIT, STOP_LOSS, TAKE_PROFIT, STOP_LOSS_LIMIT or
-                TAKE_PROFIT_LIMIT, as an enum (matched by name) or string.
+            order_type: MARKET, LIMIT, STOP_LOSS, TAKE_PROFIT, STOP_LOSS_LIMIT,
+                TAKE_PROFIT_LIMIT, TRAILING_STOP or TRAILING_STOP_LIMIT, as an enum
+                (matched by name) or string.
             side: ``TradeType.BUY`` / ``TradeType.SELL`` or lowercase strings.
             amount: Order volume as a ``Decimal``.
             price: Limit price for LIMIT; the trigger (Kraken ``price``) for
                 conditional types.
-            limit_price: Kraken ``price2``; required for ``*_LIMIT`` types only.
-            price_in_percent: Send the trigger as ``#<price>%`` (conditional only).
+            limit_price: Kraken ``price2``; required for ``*_LIMIT`` types only. For
+                TRAILING_STOP_LIMIT it is a signed offset from the trigger.
+            price_in_percent: Send the trigger as ``#<price>%`` (conditional), or the
+                trail distance/offset as ``+<d>%`` (trailing).
             userref: Optional int32 client tag (Kraken ``userref``); lets the order be
                 found again via ``get_open_orders`` / ``get_closed_orders`` when the
                 AddOrder response is lost.
@@ -262,9 +288,8 @@ class OrdersMixin:
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.
-            ValueError: For an unknown dashed pair, unsupported (e.g. trailing,
-                deferred per #209) order types or inconsistent price arguments;
-                raised before any request.
+            ValueError: For an unknown dashed pair, unsupported order types or
+                inconsistent price arguments; raised before any request.
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")

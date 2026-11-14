@@ -144,12 +144,12 @@ async def test_place_order_missing_price_for_limit_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_place_order_unsupported_type_raises() -> None:
-    # STOP_LOSS is supported since #209; TRAILING_STOP remains deferred.
+    # Conditional (#209) and trailing (#223) types are supported; unknown names are not.
     rest = MockRestClient()
     mixin = _TestableOrders(rest)
     with pytest.raises(ValueError, match="Unsupported order type"):
         await mixin.place_order(
-            "XBTUSD", "TRAILING_STOP", TradeType.BUY, Decimal("0.5"), Decimal("27000")
+            "XBTUSD", "ICEBERG", TradeType.BUY, Decimal("0.5"), Decimal("27000")
         )
 
 

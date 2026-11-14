@@ -230,7 +230,9 @@ class PendingTrades:
 
     def add(self, trade_id: str, detail: OwnTradeDetail, now: float) -> None:
         self._expire(now)
-        self._items[(detail.ordertxid, trade_id)] = (now, detail)
+        key = (detail.ordertxid, trade_id)
+        self._items.pop(key, None)  # re-insert so insertion order matches timestamp order
+        self._items[key] = (now, detail)
         while len(self._items) > self._max:
             self._items.popitem(last=False)
 

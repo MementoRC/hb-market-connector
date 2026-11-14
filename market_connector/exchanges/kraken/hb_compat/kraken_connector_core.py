@@ -87,6 +87,7 @@ KRAKEN_ORDER_STATE_MAP: Mapping[KrakenOrderState, OrderState] = {
 }
 
 _MAX_FINISHED_ORDERS = 1000
+_QUERY_ORDERS_BATCH = 50  # txids per QueryOrders request
 _TRIGGERED_ORDER_ERROR = "EOrder:Invalid Order ID"
 
 # Outcome of syncing an order's fills over REST.
@@ -123,7 +124,9 @@ class KrakenConnectorCore:
         self.in_flight_orders: dict[str, InFlightOrder] = {}
         self._finished: dict[str, InFlightOrder] = {}
         self._txid_to_cid: dict[str, str] = {}
-        self._cancel_requested: set[str] = set()
+        self._cancel_requested: set[str] = set()  # cancel asked before the txid was known
+        self._cancelling: set[str] = set()  # CancelOrder in flight
+        self._syncing_fills: set[str] = set()  # QueryTrades in flight
         self._pending_trades = PendingTrades()
         self.trading_rules: dict[str, TradingRule] = {}
         self._wire_pairs: dict[str, str] = {}
@@ -171,13 +174,9 @@ class KrakenConnectorCore:
             await asyncio.sleep(self._poll_interval)
 
     async def _poll_once(self) -> None:
-        for client_order_id in list(self.in_flight_orders):
-            try:
-                await self.update_order_status(client_order_id)
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001
-                logger.warning("status poll failed for %s", client_order_id, exc_info=True)
+        orders = [o for o in self.in_flight_orders.values() if o.exchange_order_id]
+        for start in range(0, len(orders), _QUERY_ORDERS_BATCH):
+            await self._poll_batch(orders[start : start + _QUERY_ORDERS_BATCH])
 
     # ------------------------------------------------------------------
     # Order API (sync, background REST)
@@ -214,15 +213,21 @@ class KrakenConnectorCore:
 
         Before the txid is known the request is remembered and sent once AddOrder returns.
         """
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()  # fail fast outside a running loop
         order = self.in_flight_orders.get(client_order_id)
         if order is None:
             logger.warning("cancel: unknown or finished order %s", client_order_id)
+        elif client_order_id in self._cancel_requested | self._cancelling:
+            logger.debug("cancel: already requested for %s", client_order_id)
         elif order.exchange_order_id is None:
             self._cancel_requested.add(client_order_id)
         else:
-            self._track(loop.create_task(self._cancel_order(order)))
+            self._start_cancel(order)
         return client_order_id
+
+    def _start_cancel(self, order: InFlightOrder) -> None:
+        self._cancelling.add(order.client_order_id)
+        self._track(asyncio.get_running_loop().create_task(self._cancel_order(order)))
 
     def fetch_order(self, client_order_id: str) -> InFlightOrder | None:
         """The order, in flight or finished (finished ones have ``is_open`` False)."""
@@ -300,13 +305,31 @@ class KrakenConnectorCore:
             cancelled = await self._gateway.cancel_order(
                 trading_pair=self._wire_pair(order.trading_pair), txid=txid
             )
+            if cancelled:
+                await self._sync_before_cancel(order, txid)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
             logger.warning("cancel failed for %s", order.client_order_id, exc_info=True)
             return
+        finally:
+            self._cancelling.discard(order.client_order_id)
         if cancelled:
             self._cancelled(order)
+
+    async def _sync_before_cancel(self, order: InFlightOrder, txid: str) -> None:
+        """Book fills the cancel ack raced with, so they precede the 106.
+
+        Skipped while a status poll is already fetching this order's trades: that poll
+        books them (as late fills).
+        """
+        if order.client_order_id in self._syncing_fills:
+            return
+        info = (await self._gateway.query_orders([txid])).get(txid)
+        if info is None:
+            return
+        if await self._sync_fills(order, info) == _FILLS_TRIGGERED:
+            self._synthesize_missing_fill(order, info)
 
     def _on_placed(self, order: InFlightOrder, txid: str) -> None:
         cid = order.client_order_id
@@ -318,7 +341,7 @@ class KrakenConnectorCore:
             self._apply_ws_trade(order, trade_id, detail)
         if cid in self._cancel_requested and cid in self.in_flight_orders:
             self._cancel_requested.discard(cid)
-            self._track(asyncio.get_running_loop().create_task(self._cancel_order(order)))
+            self._start_cancel(order)
 
     def _wire_pair(self, trading_pair: str) -> str:
         try:
@@ -393,7 +416,15 @@ class KrakenConnectorCore:
             self._emit(completed_event(order, time.time()))
 
     def _record_fill(self, order: InFlightOrder, update: TradeUpdate) -> None:
-        """Apply a fill once (deduplicated by trade id) and publish ``OrderFilledEvent``."""
+        """Apply a fill once (deduplicated by trade id) and publish ``OrderFilledEvent``.
+
+        Once the executed volume was booked from the order status (``<txid>:status``),
+        the real trades describe the same execution and are ignored.
+        """
+        status_id = f"{order.exchange_order_id}:status"
+        if status_id in order.order_fills and update.trade_id != status_id:
+            logger.debug("ignoring trade %s after status-derived fill", update.trade_id)
+            return
         if order.update_with_trade_update(update):
             self._emit(filled_event(order, update))
 
@@ -415,6 +446,8 @@ class KrakenConnectorCore:
         self._record_fill(order, update_from_ws(order, trade_id, detail))
         if order.executed_amount_base >= order.amount:  # Decimal; no-op once finished
             self._complete(order)
+        elif order.client_order_id in self.in_flight_orders and order.executed_amount_base > 0:
+            self._set_state(order, OrderState.PARTIALLY_FILLED, time.time())
 
     async def update_order_status(self, client_order_id: str) -> None:
         """REST QueryOrders then QueryTrades; the order status drives completion."""
@@ -423,16 +456,41 @@ class KrakenConnectorCore:
         if order is None or txid is None:
             return
         info = (await self._gateway.query_orders([txid])).get(txid)
-        if info is None or client_order_id not in self.in_flight_orders:
+        if info is not None:
+            await self._process_info(order, info)
+
+    async def _process_info(self, order: InFlightOrder, info: OrderInfo) -> None:
+        if order.client_order_id not in self.in_flight_orders:
             return
         outcome = await self._sync_fills(order, info)
-        if outcome != _FILLS_ERROR and client_order_id in self.in_flight_orders:
+        if outcome != _FILLS_ERROR and order.client_order_id in self.in_flight_orders:
             self._apply_status(order, info, triggered=outcome == _FILLS_TRIGGERED)
+
+    async def _poll_batch(self, orders: list[InFlightOrder]) -> None:
+        txids = [o.exchange_order_id for o in orders if o.exchange_order_id]
+        try:
+            infos = await self._gateway.query_orders(txids)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.warning("batched status poll failed", exc_info=True)
+            return
+        for order in orders:
+            info = infos.get(order.exchange_order_id or "")
+            if info is None:
+                continue
+            try:
+                await self._process_info(order, info)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.warning("status poll failed for %s", order.client_order_id, exc_info=True)
 
     async def _sync_fills(self, order: InFlightOrder, info: OrderInfo) -> str:
         trade_ids = [t for t in info.trades if t not in order.order_fills]
         if not trade_ids:
             return _FILLS_OK
+        self._syncing_fills.add(order.client_order_id)
         try:
             trades = await self._gateway.query_trades(trade_ids)
         except asyncio.CancelledError:
@@ -442,6 +500,8 @@ class KrakenConnectorCore:
                 return _FILLS_TRIGGERED
             logger.warning("query_trades failed for %s: %s", order.client_order_id, exc)
             return _FILLS_ERROR
+        finally:
+            self._syncing_fills.discard(order.client_order_id)
         for trade_id, trade in trades.items():
             self._record_fill(order, update_from_rest(order, trade_id, trade))
         return _FILLS_OK
@@ -454,9 +514,11 @@ class KrakenConnectorCore:
             return
         if triggered and state in {OrderState.FILLED, OrderState.CANCELED}:
             self._synthesize_missing_fill(order, info)
-        if state is OrderState.FILLED:
+        if state is OrderState.FILLED and (
+            Decimal(info.vol_exec) >= order.amount or order.executed_amount_base >= order.amount
+        ):
             self._complete(order)
-        elif state is OrderState.CANCELED:
+        elif state in {OrderState.FILLED, OrderState.CANCELED}:  # closed under-filled = cancelled
             self._cancelled(order)
         elif state is OrderState.OPEN:
             partial = order.executed_amount_base > 0

@@ -36,7 +36,6 @@ import contextlib
 import time
 import uuid
 from decimal import Decimal
-from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -90,17 +89,7 @@ KRAKEN_ORDER_STATE_MAP: Mapping[KrakenOrderState, OrderState] = {
 }
 
 
-class _ExtraOrderState(Enum):
-    """States ``data_type_primitives.OrderState`` lacks (``.value`` above its highest, 10)."""
-
-    # TODO(#214): replace with data_type_primitives OrderState.UNKNOWN once released (requested
-    # from hb-data-type-primitives); with the local value InFlightOrder.is_open is False for
-    # UNKNOWN orders.
-    UNKNOWN = 11  # AddOrder response lost: the order may or may not be on the exchange
-
-
-UNKNOWN_STATE = _ExtraOrderState.UNKNOWN
-_UNRESOLVED: frozenset[Any] = frozenset({OrderState.PENDING_CREATE, UNKNOWN_STATE})
+_UNRESOLVED: frozenset[OrderState] = frozenset({OrderState.PENDING_CREATE, OrderState.UNKNOWN})
 _USERREF_MAX = 2**31 - 1  # Kraken userref is a signed int32
 
 
@@ -424,7 +413,7 @@ class KrakenConnectorCore:
             order.client_order_id,
             exc,
         )
-        order.current_state = UNKNOWN_STATE  # type: ignore[assignment]
+        order.current_state = OrderState.UNKNOWN
 
     async def _resolve_unknown_orders(self) -> None:
         """Adopt or fail every UNKNOWN / txid-less PENDING_CREATE order via its userref."""

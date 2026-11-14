@@ -157,7 +157,7 @@ class KrakenConnectorBridge:
         *order_type* is passed through unchanged; the gateway maps it by name
         (hummingbot, local mirror, or string), so conditional types
         (STOP_LOSS, TAKE_PROFIT and their ``*_LIMIT`` variants) work end to
-        end. Trailing types are deferred (see #209) and raise ``ValueError``.
+        end, as do TRAILING_STOP / TRAILING_STOP_LIMIT (#223).
 
         Args:
             trading_pair: Exchange-native pair string (e.g. ``"XBTUSD"``).

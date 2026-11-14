@@ -179,6 +179,39 @@ class KrakenConnectorCore:
         self._books: dict[str, OrderBookSnapshot] = {}
         self._balances: dict[str, Decimal] = {}
         self._available: dict[str, Decimal] = {}
+        self._rules_loaded = False
+        self._balances_loaded = False
+
+    # ------------------------------------------------------------------
+    # Readiness
+    # ------------------------------------------------------------------
+
+    @property
+    def status_dict(self) -> dict[str, bool]:
+        """Fresh readiness map; keys and triggers:
+
+        * ``symbols_mapping_initialized``: True after a successful ``update_trading_rules``.
+        * ``trading_rule_initialized``: same trigger.
+        * ``account_balance``: True after a successful ``update_balances``.
+        * ``status_polling_initialized``: True only while the ``start()`` poller is live.
+
+        Rules and balances flags survive ``stop()`` and failed refreshes (the cache stays).
+        The adapter maps these keys onto its own status dict. There is deliberately no
+        user-stream or order-book key: the core does not own the WebSocket, and order
+        books are cached on demand per pair.
+        """
+        polling = self._poll_task is not None and not self._poll_task.done()
+        return {
+            "symbols_mapping_initialized": self._rules_loaded,
+            "trading_rule_initialized": self._rules_loaded,
+            "account_balance": self._balances_loaded,
+            "status_polling_initialized": polling,
+        }
+
+    @property
+    def ready(self) -> bool:
+        """``True`` when every :attr:`status_dict` entry is ``True``."""
+        return all(self.status_dict.values())
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -724,6 +757,7 @@ class KrakenConnectorCore:
         self.trading_rules, self._wire_pairs = build_pair_tables(
             await self._gateway.get_asset_pairs()
         )
+        self._rules_loaded = True
 
     def quantize_order_amount(self, trading_pair: str, amount: Decimal) -> Decimal:
         """Round down to the lot size; 0 if NaN, below the minimum order size or pair unknown."""
@@ -739,6 +773,7 @@ class KrakenConnectorCore:
             balances[asset] = balances.get(asset, Decimal(0)) + total
             available[asset] = available.get(asset, Decimal(0)) + total - Decimal(entry.hold_trade)
         self._balances, self._available = balances, available
+        self._balances_loaded = True
 
     def get_balance(self, asset: str) -> Decimal:
         return self._balances.get(asset, Decimal(0))

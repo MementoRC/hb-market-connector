@@ -116,7 +116,10 @@ build = "hatchling build"
 check-conda-first = "python scripts/check_conda_first.py"
 lint-boundaries = "lint-imports"
 bandit-security = "bandit -c pyproject.toml -r market_connector --severity-level medium --confidence-level medium"
-safety-check = "pip-audit --skip-editable"
+# TODO(remove when conda-forge dnspython>=2.9.2): CVE-2026-128089
+# dnspython is a transitive dependency (via email-validator), not a direct dependency
+# of market_connector; no fixed build on conda-forge yet.
+safety-check = "pip-audit --skip-editable --ignore-vuln CVE-2026-128089"
 quality = { depends-on = ["check-conda-first", "lint", "format-check", "typecheck", "lint-boundaries", "bandit-security"] }
 check = { depends-on = ["check-conda-first", "quality", "typecheck", "coverage"] }
 

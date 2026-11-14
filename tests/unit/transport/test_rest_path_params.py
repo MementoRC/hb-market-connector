@@ -51,7 +51,8 @@ class TestRestBasePathParams:
             mock_client.request = AsyncMock(return_value=_ok())
             await client.request("order", path_params={"order_id": "abc"})
 
-        assert signer.calls[0].path == "/api/orders/abc"
+        # #215: signed path = full request path (Coinbase requestPath)
+        assert signer.calls[0].path == "/v3/api/orders/abc"
         assert signer.calls[0].url == f"{BASE}/api/orders/abc"
         assert mock_client.request.call_args.kwargs["url"] == f"{BASE}/api/orders/abc"
 
@@ -129,8 +130,9 @@ class TestCoinbaseResolvedUrl:
         assert sent_path == "/v3/api/orders/abc"
         assert kwargs["params"] == {"limit": 3}
         assert urlsplit(signer.calls[0].url).path == sent_path
-        assert signer.calls[0].path == "/api/orders/abc"
-        assert signer.calls[0].path == sent_path.removeprefix("/v3")
+        # #215: signed path = full request path (Coinbase requestPath)
+        assert signer.calls[0].path == "/v3/api/orders/abc"
+        assert signer.calls[0].path == sent_path
 
     async def test_rate_limit_shared_across_order_ids(self, endpoints: dict[str, Endpoint]) -> None:
         client = CoinbaseRestClient(base_url=BASE, endpoints=endpoints, signer=_RecordingSigner())

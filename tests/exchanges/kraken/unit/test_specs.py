@@ -41,8 +41,9 @@ class TestKrakenHmacSpec:
     def test_timestamp_unit_is_milliseconds(self) -> None:
         assert KRAKEN_HMAC_SPEC.timestamp.unit == TimestampUnit.MILLISECONDS
 
-    def test_nonce_source_is_counter(self) -> None:
-        assert KRAKEN_HMAC_SPEC.nonce.source == NonceSource.COUNTER
+    def test_nonce_source_is_timestamp(self) -> None:
+        # #215: time-based monotonic nonce replaces the restart-prone counter
+        assert KRAKEN_HMAC_SPEC.nonce.source == NonceSource.TIMESTAMP
 
     def test_nonce_is_monotonic(self) -> None:
         assert KRAKEN_HMAC_SPEC.nonce.monotonic is True

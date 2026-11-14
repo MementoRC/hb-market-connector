@@ -57,7 +57,8 @@ class TestCoinbaseRestClient:
         assert len(signer.calls) == 1
         req = signer.calls[0]
         assert req.method == "POST"
-        assert req.path == "/brokerage/accounts"
+        # #215: signed path = full request path (Coinbase requestPath)
+        assert req.path == "/api/v3/brokerage/accounts"
         assert req.qs_params == {"limit": 3}
         assert req.body == json.dumps({"a": 1})
         sent = send.call_args.kwargs
@@ -95,10 +96,11 @@ class TestCoinbaseRestClient:
 
         assert len(signer.calls) == 1
         signed = signer.calls[0]
-        assert signed.path == "/brokerage/orders/historical/abc123"
+        # #215: signed path = full request path (Coinbase requestPath)
+        assert signed.path == "/api/v3/brokerage/orders/historical/abc123"
         assert "{" not in signed.path
         sent = send.call_args.kwargs
-        assert urlsplit(sent["url"]).path == f"/api/v3{signed.path}"
+        assert urlsplit(sent["url"]).path == signed.path
         assert sent["params"] is None  # order_id is a path param, not a query param
         await client.close()
 

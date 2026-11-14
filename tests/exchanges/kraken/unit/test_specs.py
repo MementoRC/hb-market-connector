@@ -227,17 +227,17 @@ class TestKrakenSymbolMapper:
         assert result == "ETH-EUR"
 
     def test_to_exchange_pair_btc_usd(self) -> None:
-        # BTC-USD → XBTZUSD (preferred short form)
+        # BTC-USD → XBTZUSD: per-asset concatenation, NOT a valid Kraken wire pair (#213)
         result = KRAKEN_SYMBOL_MAPPER.to_exchange_pair("BTC-USD")
         assert result == "XBTZUSD"
 
     def test_to_exchange_pair_eth_usd(self) -> None:
-        # ETH-USD → XETHZUSD
+        # ETH-USD → XETHZUSD: per-asset concatenation, NOT a valid Kraken wire pair (#213)
         result = KRAKEN_SYMBOL_MAPPER.to_exchange_pair("ETH-USD")
         assert result == "XETHZUSD"
 
     def test_to_exchange_pair_eth_eur(self) -> None:
-        # ETH-EUR → XETHZEUR
+        # ETH-EUR → XETHZEUR: per-asset concatenation, NOT a valid Kraken wire pair (#213)
         result = KRAKEN_SYMBOL_MAPPER.to_exchange_pair("ETH-EUR")
         assert result == "XETHZEUR"
 

@@ -123,9 +123,10 @@ TickerResult = dict[str, TickerInfo]
 class DepthResult(_Base):
     """Order-book depth result for a single pair."""
 
-    # Each entry is [price, volume, timestamp]
-    asks: list[list[str]] = Field(default_factory=list)
-    bids: list[list[str]] = Field(default_factory=list)
+    # Each entry is [price, volume, timestamp]; price/volume are strings, the
+    # timestamp is an integer on the live API (#213).
+    asks: list[list[str | int]] = Field(default_factory=list)
+    bids: list[list[str | int]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

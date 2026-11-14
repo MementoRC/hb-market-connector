@@ -57,6 +57,11 @@ _TICKER_RESPONSE = {
     },
 }
 
+_ASSET_PAIRS_RESPONSE = {
+    "error": [],
+    "result": {"XXBTZUSD": {"altname": "XBTUSD", "wsname": "XBT/USD"}},
+}
+
 _DEPTH_RESPONSE = {
     "error": [],
     "result": {
@@ -124,8 +129,9 @@ async def test_get_ticker_returns_first_pair_info():
 
 @pytest.mark.asyncio
 async def test_get_ticker_accepts_canonical_pair():
-    """get_ticker accepts BTC-USD canonical form and resolves via mapper."""
+    """get_ticker accepts BTC-USD canonical form and resolves via the AssetPairs map."""
     rest = MockRestClient()
+    rest.register("asset_pairs", _ASSET_PAIRS_RESPONSE)
     rest.register("ticker", _TICKER_RESPONSE)
     mixin = _TestableMarketData(rest)
 
@@ -153,8 +159,9 @@ async def test_get_orderbook_returns_snapshot_with_depth():
 
 @pytest.mark.asyncio
 async def test_get_orderbook_accepts_canonical_pair():
-    """get_orderbook accepts BTC-USD canonical form."""
+    """get_orderbook accepts BTC-USD canonical form (resolved via the AssetPairs map)."""
     rest = MockRestClient()
+    rest.register("asset_pairs", _ASSET_PAIRS_RESPONSE)
     rest.register("depth", _DEPTH_RESPONSE)
     mixin = _TestableMarketData(rest)
 

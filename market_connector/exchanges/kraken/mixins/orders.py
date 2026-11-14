@@ -13,6 +13,7 @@ from market_connector.exchanges.kraken.age_penalties import (
     edit_penalty,
 )
 from market_connector.exchanges.kraken.errors import OpenOrdersLimitError, raise_on_kraken_error
+from market_connector.exchanges.kraken.pairs import resolve_wire_pair
 from market_connector.exchanges.kraken.schemas.rest import (
     AddOrderBatchResult,
     AddOrderResult,
@@ -242,7 +243,8 @@ class OrdersMixin:
         """Place an order on Kraken and return the first txid.
 
         Args:
-            trading_pair: Exchange-native pair string (e.g. ``"XBTUSD"``).
+            trading_pair: Exchange-native pair (``"XBTUSD"``, passed through) or a
+                hb pair (``"BTC-USD"``, converted to the AssetPairs ``altname``).
             order_type: MARKET, LIMIT, STOP_LOSS, TAKE_PROFIT, STOP_LOSS_LIMIT or
                 TAKE_PROFIT_LIMIT, as an enum (matched by name) or string.
             side: ``TradeType.BUY`` / ``TradeType.SELL`` or lowercase strings.
@@ -260,8 +262,9 @@ class OrdersMixin:
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.
-            ValueError: For unsupported (e.g. trailing, deferred per #209) order
-                types or inconsistent price arguments; raised before any request.
+            ValueError: For an unknown dashed pair, unsupported (e.g. trailing,
+                deferred per #209) order types or inconsistent price arguments;
+                raised before any request.
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
@@ -271,6 +274,7 @@ class OrdersMixin:
         price_fields = _build_price_fields(key, price, limit_price, price_in_percent)
         if key == "LIMIT_MAKER":
             price_fields["oflags"] = "post"
+        trading_pair = await resolve_wire_pair(self, trading_pair)
 
         body: dict[str, object] = {
             "pair": trading_pair,

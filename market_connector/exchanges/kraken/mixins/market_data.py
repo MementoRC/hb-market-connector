@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.kraken.errors import raise_on_kraken_error
+from market_connector.exchanges.kraken.pairs import resolve_wire_pair
 from market_connector.exchanges.kraken.schemas.rest import (
     AssetPairInfo,
     DepthResult,
@@ -16,7 +17,6 @@ from market_connector.exchanges.kraken.schemas.rest import (
     TickerResult,
     TimeResult,
 )
-from market_connector.exchanges.kraken.specs import KRAKEN_SYMBOL_MAPPER
 from market_connector.primitives import OrderBookSnapshot
 
 if TYPE_CHECKING:
@@ -32,16 +32,13 @@ class MarketDataMixin:
         """Order book snapshot for *trading_pair*.
 
         *trading_pair* may be either a Hummingbot canonical pair (``BTC-USD``)
-        or an exchange-native pair (``XXBTZUSD``).  When a dash is present the
-        mapper normalises it to the exchange format before sending the request.
+        or an exchange-native pair (``XXBTZUSD``).  A dashed pair is converted to
+        the Kraken ``altname`` through the cached ``AssetPairs`` map (``ValueError``
+        if unknown).
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
-        raw_pair = (
-            KRAKEN_SYMBOL_MAPPER.to_exchange_pair(trading_pair)
-            if "-" in trading_pair
-            else trading_pair
-        )
+        raw_pair = await resolve_wire_pair(self, trading_pair)
         response = await self._rest.request(
             "depth",
             params={"pair": raw_pair, "count": depth},
@@ -70,11 +67,7 @@ class MarketDataMixin:
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
-        raw_pair = (
-            KRAKEN_SYMBOL_MAPPER.to_exchange_pair(trading_pair)
-            if "-" in trading_pair
-            else trading_pair
-        )
+        raw_pair = await resolve_wire_pair(self, trading_pair)
         response = await self._rest.request("ticker", params={"pair": raw_pair})
         envelope = KrakenResponse[TickerResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)
@@ -89,11 +82,7 @@ class MarketDataMixin:
         """Computed ``(bid + ask) / 2`` from the live ticker."""
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
-        raw_pair = (
-            KRAKEN_SYMBOL_MAPPER.to_exchange_pair(trading_pair)
-            if "-" in trading_pair
-            else trading_pair
-        )
+        raw_pair = await resolve_wire_pair(self, trading_pair)
         response = await self._rest.request("ticker", params={"pair": raw_pair})
         envelope = KrakenResponse[TickerResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)

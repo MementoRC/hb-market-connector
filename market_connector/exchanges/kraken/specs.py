@@ -230,6 +230,9 @@ _KNOWN_QUOTE_ASSETS: tuple[str, ...] = (
     "ETH",
 )
 
+# Per-asset aliasing (balances, wsname parts). Its ``to_exchange_pair`` output is a
+# per-asset concatenation (e.g. "XBTZUSD") and is NOT a valid Kraken wire pair; use
+# the AssetPairs map (``kraken.pairs.resolve_wire_pair``) for wire names (#213).
 KRAKEN_SYMBOL_MAPPER: RuleBasedMapper = RuleBasedMapper(
     separator=None,
     known_quote_assets=_KNOWN_QUOTE_ASSETS,

@@ -43,6 +43,7 @@ import httpx
 from data_type_primitives.common import OrderType, PriceType, TradeType
 from data_type_primitives.in_flight_order import InFlightOrder, OrderState, OrderUpdate
 
+from market_connector.exceptions import ExchangeCancelOnlyError
 from market_connector.exchanges.kraken.errors import KrakenAPIError
 from market_connector.exchanges.kraken.hb_compat.kraken_core_support import (
     NAN,
@@ -68,7 +69,7 @@ from market_connector.hb_compat.order_events import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Callable, Iterable, Mapping
 
     from data_type_primitives.in_flight_order import TradeUpdate
 
@@ -126,6 +127,10 @@ class KrakenConnectorCore:
         status_poll_interval: Seconds between status polls while :meth:`start` is active.
         stop_grace: Seconds :meth:`stop` lets in-flight create/cancel tasks finish before
             cancelling them.
+        clock: Monotonic seconds source for the cancel-only backoff window.
+        cancel_only_backoff: Initial seconds new orders are failed locally after Kraken
+            replies cancel-only; doubles on each further reply, reset by a successful AddOrder.
+        cancel_only_backoff_max: Cap for the doubling window.
     """
 
     def __init__(
@@ -135,7 +140,15 @@ class KrakenConnectorCore:
         event_bus: EventBus,
         status_poll_interval: float = 10.0,
         stop_grace: float = 5.0,
+        clock: Callable[[], float] = time.monotonic,
+        cancel_only_backoff: float = 10.0,
+        cancel_only_backoff_max: float = 300.0,
     ) -> None:
+        self._clock = clock
+        self._backoff_initial = cancel_only_backoff
+        self._backoff_max = cancel_only_backoff_max
+        self._backoff_current = cancel_only_backoff
+        self._cancel_only_until = 0.0
         self._gateway = gateway
         self._bus = event_bus
         self._poll_interval = status_poll_interval
@@ -309,6 +322,9 @@ class KrakenConnectorCore:
 
     async def _submit_order(self, order: InFlightOrder) -> None:
         cid = order.client_order_id
+        if self._clock() < self._cancel_only_until:
+            self._fail(order, ExchangeCancelOnlyError("cancel_only backoff window open"))
+            return
         self._submitting.add(cid)
         try:
             wire_pair = self._wire_pair(order.trading_pair)
@@ -332,6 +348,10 @@ class KrakenConnectorCore:
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             self._mark_unknown(order, exc)
             return
+        except ExchangeCancelOnlyError as exc:
+            self._open_cancel_only_window()
+            self._fail(order, exc)
+            return
         except Exception as exc:  # noqa: BLE001
             if order.exchange_order_id is not None:
                 logger.warning(
@@ -346,7 +366,13 @@ class KrakenConnectorCore:
             return
         finally:
             self._submitting.discard(cid)
+        self._backoff_current = self._backoff_initial
         self._on_placed(order, txid)
+
+    def _open_cancel_only_window(self) -> None:
+        """Fail new orders locally for the current window, then double it up to the cap."""
+        self._cancel_only_until = self._clock() + self._backoff_current
+        self._backoff_current = min(self._backoff_current * 2, self._backoff_max)
 
     def _mark_unknown(self, order: InFlightOrder, exc: Exception) -> None:
         """AddOrder's outcome is unknown (lost response): keep tracking, resolve by userref."""

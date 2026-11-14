@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from market_connector.exceptions import (
     AuthenticationError,
+    ExchangeCancelOnlyError,
     ExchangePermissionError,
+    ExchangePostOnlyError,
     OrderNotFoundError,
     OrderRejectedError,
     RateLimitError,
@@ -62,7 +64,8 @@ ERROR_CODE_MAPPING: dict[str, type[Exception]] = {
     "EGeneral:Permission denied": ExchangePermissionError,
     # Service availability errors
     "EService:Unavailable": ServiceUnavailableError,
-    "EService:Market in cancel_only mode": ServiceUnavailableError,
+    "EService:Market in cancel_only mode": ExchangeCancelOnlyError,
+    "EService:Market in post_only mode": ExchangePostOnlyError,
     "EService:Busy": ServiceUnavailableError,
 }
 

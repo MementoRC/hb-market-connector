@@ -45,6 +45,14 @@ class ServiceUnavailableError(GatewayError):
     """The exchange service is temporarily unavailable (maintenance, cancel-only mode, etc.)."""
 
 
+class ExchangeCancelOnlyError(ServiceUnavailableError):
+    """The market accepts cancellations only; new orders are rejected."""
+
+
+class ExchangePostOnlyError(ServiceUnavailableError):
+    """The market accepts post-only (maker) orders only."""
+
+
 class ExchangePermissionError(GatewayError):
     """The request was denied due to insufficient permissions or account restrictions."""
 

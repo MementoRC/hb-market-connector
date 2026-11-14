@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kraken `KrakenConnectorCore` (hummingbot-free `ExchangePyBase`-style core: sync `buy`/`sell`/`cancel`, in-flight tracking, REST/WS fill handling, status polling, price/order-book/balance caches, trading rules) and `hb_compat.order_events` (7 `MarketEvent` payload dataclasses plus `MARKET_EVENT_IDS`); gateway gains `get_balances_ex` (BalanceEx), `AssetPairInfo.costmin` and `OrderInfo.trades` (#211).
 
 - Kraken: an order whose AddOrder response is lost (timeout / transport error) is no longer failed; it is tagged with a unique int32 `userref`, kept as UNKNOWN, and adopted or failed by looking it up in OpenOrders then ClosedOrders. Gateway gains `place_order(userref=)`, `get_open_orders(userref=)` and `get_closed_orders` (#214).
+- Kraken: `EService:Market in cancel_only mode` / `post_only mode` now map to the new `ExchangeCancelOnlyError` / `ExchangePostOnlyError` (both `ServiceUnavailableError` subclasses). `KrakenConnectorCore` fails such an order definitively and, after a cancel-only reply, fails new orders locally for an exponentially growing window (`cancel_only_backoff`, `cancel_only_backoff_max`, injectable `clock`) until an AddOrder succeeds; cancels are never blocked (#214).
 
 ## [0.7.0] - 2026-11-13
 

@@ -67,6 +67,7 @@ class AssetPairInfo(_Base):
     pair_decimals: int = 0
     lot_decimals: int = 8
     ordermin: str = "0"
+    costmin: str = "0"
 
 
 # AssetPairs result is a dict mapping pair name → AssetPairInfo
@@ -133,6 +134,22 @@ class DepthResult(_Base):
 
 # Balance result: {asset_code: balance_str}
 BalanceResult = dict[str, str]
+
+
+# ---------------------------------------------------------------------------
+# /0/private/BalanceEx
+# ---------------------------------------------------------------------------
+
+
+class BalanceExInfo(_Base):
+    balance: str = "0"
+    credit: str = "0"
+    credit_used: str = "0"
+    hold_trade: str = "0"
+
+
+# BalanceEx result: {asset_code: BalanceExInfo}
+BalanceExResult = dict[str, BalanceExInfo]
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +237,7 @@ class OrderInfo(_Base):
     fee: str = "0"
     price: str = "0"
     misc: str = ""
+    trades: list[str] = Field(default_factory=list)
 
 
 # OpenOrders / QueryOrders result: {order_id: OrderInfo}

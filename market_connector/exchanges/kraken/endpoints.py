@@ -29,6 +29,7 @@ ENDPOINT_REGISTRY: dict[str, Endpoint] = {
     # Private endpoints  (rate_limit_pool="private")
     # ------------------------------------------------------------------
     "balance": Endpoint(path="/0/private/Balance", method="POST"),
+    "balance_ex": Endpoint(path="/0/private/BalanceEx", method="POST"),
     "get_websockets_token": Endpoint(
         path="/0/private/GetWebSocketsToken",
         method="POST",

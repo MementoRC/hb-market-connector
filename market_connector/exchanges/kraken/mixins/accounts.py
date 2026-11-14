@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.kraken.errors import raise_on_kraken_error
 from market_connector.exchanges.kraken.schemas.rest import (
+    BalanceExInfo,
+    BalanceExResult,
     BalanceResult,
     KrakenResponse,
     WebSocketsTokenResult,
@@ -60,6 +62,22 @@ class AccountsMixin:
         raise_on_kraken_error(parsed.error)
         result = parsed.result or {}
         return {asset: Decimal(amount) for asset, amount in result.items()}
+
+    async def get_balances_ex(self: HasRest & HasReady) -> dict[str, BalanceExInfo]:  # type: ignore[valid-type]
+        """Return extended balances (balance, credit, hold_trade) keyed by Kraken asset code.
+
+        Raises:
+            GatewayNotStartedError: If the gateway has not been started.
+        """
+        if not self.ready:
+            raise GatewayNotStartedError("Gateway not started")
+
+        response = await self._rest.request("balance_ex")
+        parsed: KrakenResponse[BalanceExResult] = KrakenResponse[BalanceExResult].model_validate(
+            response.raw
+        )
+        raise_on_kraken_error(parsed.error)
+        return parsed.result or {}
 
     async def get_websockets_token(self: HasRest & HasReady) -> tuple[str, int]:  # type: ignore[valid-type]
         """Fetch a short-lived WebSocket authentication token from Kraken.

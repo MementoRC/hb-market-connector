@@ -38,7 +38,7 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e # v0.11.3
         with:
-          environments: interactive-brokers
+          environments: ib-async-next
           # advisory; pip-installs ib_async from next-protobuf on top of the env, so the lock is not enforced here
           locked: false
 
@@ -52,19 +52,18 @@ jobs:
 
       - name: Build ib_async v3 with generated protobuf bindings
         run: |
-          pixi run -e interactive-brokers python -m ensurepip --upgrade
-          pixi run -e interactive-brokers python -m pip install grpcio-tools  # pip-policy: allow (#157 advisory job: grpcio-tools only to generate ib_async next-protobuf bindings; not in any locked env)
+          pixi run -e ib-async-next python -m ensurepip --upgrade
           git clone --depth 1 --branch "$IB_ASYNC_REF" "$IB_ASYNC_REPO" "$RUNNER_TEMP/ib_async"
-          (cd "$RUNNER_TEMP/ib_async" && pixi run --manifest-path "$GITHUB_WORKSPACE/pyproject.toml" -e interactive-brokers python scripts/generate_protos.py)
-          pixi run -e interactive-brokers python -m pip install --upgrade "$RUNNER_TEMP/ib_async"  # pip-policy: allow (#157 advisory job: ib_async v3 from unreleased next-protobuf source; no conda-forge build exists)
-          pixi run -e interactive-brokers python -m pip install -e . --no-deps
-          pixi run -e interactive-brokers python -c "import ib_async; print(ib_async.__version__)"
+          (cd "$RUNNER_TEMP/ib_async" && pixi run --manifest-path "$GITHUB_WORKSPACE/pyproject.toml" -e ib-async-next python scripts/generate_protos.py)
+          pixi run -e ib-async-next python -m pip install --upgrade "$RUNNER_TEMP/ib_async"  # pip-policy: allow (#157 advisory job: ib_async v3 from unreleased next-protobuf source; no conda-forge build exists)
+          pixi run -e ib-async-next python -m pip install -e . --no-deps
+          pixi run -e ib-async-next python -c "import ib_async; print(ib_async.__version__)"
 
       - name: IB unit tests
         run: >-
-          pixi run -e interactive-brokers python -m pytest
+          pixi run -e ib-async-next python -m pytest
           tests/exchanges/interactive_brokers -q --no-cov -p no:cacheprovider
           -W error::DeprecationWarning:market_connector
 
       - name: mypy
-        run: pixi run -e interactive-brokers python -m mypy market_connector/exchanges/interactive_brokers
+        run: pixi run -e ib-async-next python -m mypy market_connector/exchanges/interactive_brokers

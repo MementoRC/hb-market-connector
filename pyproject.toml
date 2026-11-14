@@ -79,6 +79,9 @@ ib_async = ">=2.1.0,<3.0.0"
 cryptography = ">=41"
 pyjwt = ">=2.8"
 
+[tool.pixi.feature.ib-async-next.dependencies]
+grpcio-tools = ">=1.84,<2"
+
 [tool.pixi.feature.py312.dependencies]
 python = "3.12.*"
 
@@ -89,6 +92,7 @@ quality-ci = { features = ["py312", "ci", "coinbase", "interactive-brokers", "de
 coinbase = { features = ["py312", "coinbase", "dev"], solve-group = "default" }
 kraken = { features = ["py312", "kraken", "dev"], solve-group = "default" }
 interactive-brokers = { features = ["py312", "interactive-brokers", "dev"], solve-group = "default" }
+ib-async-next = { features = ["py312", "interactive-brokers", "ib-async-next", "dev"], solve-group = "ib-async-next" }
 py312 = { features = ["py312", "coinbase", "dev"], solve-group = "py312" }
 
 [tool.pixi.tasks]

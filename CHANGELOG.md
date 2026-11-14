@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Bump `hb-data-type-primitives` to v0.8.0; Kraken `KrakenConnectorCore` uses upstream `OrderState.UNKNOWN` (so `InFlightOrder.is_open` is True for UNKNOWN orders) instead of a local enum (Refs #214). v0.8.0 compares fills exactly (`executed >= amount`), no dust tolerance.
+- Kraken: the gateway now converts hb pairs (`BTC-USD`) to the AssetPairs `altname` (`XBTUSD`) via a lazily fetched, cached pair map in `get_orderbook`/`get_ticker`/`get_mid_price`/`place_order`; unknown dashed pairs raise `ValueError` before any request, native pairs pass through. `build_pair_tables` moved to `kraken.pairs` (re-exported from `kraken_core_support`) (#213).
 - Kraken: `KrakenConnectorCore.status_dict` (symbols_mapping_initialized, trading_rule_initialized, account_balance, status_polling_initialized) and derived read-only `ready` (#214).
 - Kraken conditional orders (STOP_LOSS, TAKE_PROFIT and `*_LIMIT` variants) via `place_order`, with `limit_price` and `price_in_percent`; trailing types deferred (#209).
 - Kraken `KrakenConnectorCore` (hummingbot-free `ExchangePyBase`-style core: sync `buy`/`sell`/`cancel`, in-flight tracking, REST/WS fill handling, status polling, price/order-book/balance caches, trading rules) and `hb_compat.order_events` (7 `MarketEvent` payload dataclasses plus `MARKET_EVENT_IDS`); gateway gains `get_balances_ex` (BalanceEx), `AssetPairInfo.costmin` and `OrderInfo.trades` (#211).

@@ -235,10 +235,9 @@ class TestKrakenContractConformance:
         #   LTC-USD  ↔ XLTCZUSD  (LTC→XLTC, USD→ZUSD)
         #   XRP-USD  ↔ XXRPZUSD  (XRP→XXRP, USD→ZUSD)
         #
-        # Known gap: BTC-USD ↔ XBTZUSD / XXBTZUSD asymmetry.
-        # to_exchange_pair("BTC-USD") = "XBTZUSD" (preferred short form)
-        # from_exchange_pair("XBTZUSD") would need "XBT" in known quote assets
-        # or aliases to map back — not currently guaranteed.
+        # BTC-USD ↔ XBTZUSD / XXBTZUSD asymmetry: the mapper's pair output is a
+        # per-asset concatenation, not a wire name. Resolved for the gateway via the
+        # AssetPairs map (BTC-USD -> altname XBTUSD, #213); the mapper stays as is.
         fixture_pairs = [
             ("ETH-USD", "XETHZUSD"),
             ("ETH-EUR", "XETHZEUR"),

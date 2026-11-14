@@ -36,8 +36,10 @@ import contextlib
 import time
 import uuid
 from decimal import Decimal
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from data_type_primitives.common import OrderType, PriceType, TradeType
 from data_type_primitives.in_flight_order import InFlightOrder, OrderState, OrderUpdate
 
@@ -86,6 +88,22 @@ KRAKEN_ORDER_STATE_MAP: Mapping[KrakenOrderState, OrderState] = {
     KrakenOrderState.EXPIRED: OrderState.CANCELED,
 }
 
+
+class _ExtraOrderState(Enum):
+    """States ``data_type_primitives.OrderState`` lacks (``.value`` above its highest, 10)."""
+
+    UNKNOWN = 11  # AddOrder response lost: the order may or may not be on the exchange
+
+
+UNKNOWN_STATE = _ExtraOrderState.UNKNOWN
+_UNRESOLVED: frozenset[Any] = frozenset({OrderState.PENDING_CREATE, UNKNOWN_STATE})
+_USERREF_MAX = 2**31 - 1  # Kraken userref is a signed int32
+
+
+class LostOrderError(Exception):
+    """An order whose AddOrder response was lost is on neither OpenOrders nor ClosedOrders."""
+
+
 _MAX_FINISHED_ORDERS = 1000
 _QUERY_ORDERS_BATCH = 50  # txids per QueryOrders request
 _TRIGGERED_ORDER_ERROR = "EOrder:Invalid Order ID"
@@ -124,6 +142,11 @@ class KrakenConnectorCore:
         self.in_flight_orders: dict[str, InFlightOrder] = {}
         self._finished: dict[str, InFlightOrder] = {}
         self._txid_to_cid: dict[str, str] = {}
+        # Seeded from the clock (ms) so a restart does not reuse userrefs of still-open orders.
+        self._userref_counter = int(time.time() * 1000) % _USERREF_MAX
+        self._userrefs: dict[str, int] = {}  # cid -> userref
+        self._userref_to_cid: dict[int, str] = {}
+        self._submitting: set[str] = set()  # AddOrder request in flight
         self._cancel_requested: set[str] = set()  # cancel asked before the txid was known
         self._cancelling: set[str] = set()  # CancelOrder in flight
         self._syncing_fills: set[str] = set()  # QueryTrades in flight
@@ -174,6 +197,7 @@ class KrakenConnectorCore:
             await asyncio.sleep(self._poll_interval)
 
     async def _poll_once(self) -> None:
+        await self._resolve_unknown_orders()
         orders = [o for o in self.in_flight_orders.values() if o.exchange_order_id]
         for start in range(0, len(orders), _QUERY_ORDERS_BATCH):
             await self._poll_batch(orders[start : start + _QUERY_ORDERS_BATCH])
@@ -251,6 +275,7 @@ class KrakenConnectorCore:
         loop = asyncio.get_running_loop()
         amount, price = quantize_order(self.trading_rules.get(trading_pair), amount, price)
         client_order_id = f"hbot-{trade_type.name.lower()}-{uuid.uuid4().hex}"
+        self._assign_userref(client_order_id)
         order = InFlightOrder(
             client_order_id=client_order_id,
             trading_pair=trading_pair,
@@ -264,6 +289,12 @@ class KrakenConnectorCore:
         self._track(loop.create_task(self._submit_order(order)))
         return client_order_id
 
+    def _assign_userref(self, client_order_id: str) -> None:
+        """Give the order the next int32 ``userref`` (1..2**31-1, wrapping)."""
+        self._userref_counter = self._userref_counter % _USERREF_MAX + 1
+        self._userrefs[client_order_id] = self._userref_counter
+        self._userref_to_cid[self._userref_counter] = client_order_id
+
     def _track(self, task: asyncio.Task[Any]) -> None:
         self._tasks.add(task)
         task.add_done_callback(self._task_done)
@@ -274,6 +305,8 @@ class KrakenConnectorCore:
             logger.error("background order task failed", exc_info=exc)
 
     async def _submit_order(self, order: InFlightOrder) -> None:
+        cid = order.client_order_id
+        self._submitting.add(cid)
         try:
             wire_pair = self._wire_pair(order.trading_pair)
             price = None if order.order_type is OrderType.MARKET else order.price
@@ -285,6 +318,7 @@ class KrakenConnectorCore:
                 side=order.trade_type.name.lower(),
                 amount=order.amount,
                 price=price,
+                userref=self._userrefs.get(cid),
             )
         except asyncio.CancelledError:
             logger.warning(
@@ -292,10 +326,55 @@ class KrakenConnectorCore:
                 order.client_order_id,
             )
             raise
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            self._mark_unknown(order, exc)
+            return
         except Exception as exc:  # noqa: BLE001
             self._fail(order, exc)
             return
+        finally:
+            self._submitting.discard(cid)
         self._on_placed(order, txid)
+
+    def _mark_unknown(self, order: InFlightOrder, exc: Exception) -> None:
+        """AddOrder's outcome is unknown (lost response): keep tracking, resolve by userref."""
+        cid = order.client_order_id
+        if order.exchange_order_id is not None or cid not in self.in_flight_orders:
+            return  # already adopted by the resolver, or finished
+        logger.warning(
+            "AddOrder for %s got no response (%s); outcome unknown, will resolve by userref",
+            order.client_order_id,
+            exc,
+        )
+        order.current_state = UNKNOWN_STATE  # type: ignore[assignment]
+
+    async def _resolve_unknown_orders(self) -> None:
+        """Adopt or fail every UNKNOWN / txid-less PENDING_CREATE order via its userref."""
+        for order in list(self.in_flight_orders.values()):
+            if order.exchange_order_id is not None or order.current_state not in _UNRESOLVED:
+                continue
+            try:
+                await self._resolve_one(order)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.warning("userref lookup failed for %s", order.client_order_id, exc_info=True)
+
+    async def _resolve_one(self, order: InFlightOrder) -> None:
+        cid = order.client_order_id
+        userref = self._userrefs.get(cid)
+        if userref is None:
+            return
+        found = await self._gateway.get_open_orders(userref=userref)
+        if not found:
+            found = await self._gateway.get_closed_orders(userref=userref)
+        # The lookups awaited: AddOrder may have completed or the order been finished meanwhile.
+        if order.exchange_order_id is not None or cid not in self.in_flight_orders:
+            return
+        if found:
+            self._on_placed(order, next(iter(found)))
+        elif cid not in self._submitting:  # a live AddOrder request may still land
+            self._fail(order, LostOrderError(f"order {cid} (userref {userref}) not on Kraken"))
 
     async def _cancel_order(self, order: InFlightOrder) -> None:
         txid = order.exchange_order_id
@@ -333,6 +412,8 @@ class KrakenConnectorCore:
 
     def _on_placed(self, order: InFlightOrder, txid: str) -> None:
         cid = order.client_order_id
+        if order.exchange_order_id is not None:
+            return  # already adopted by the userref resolver
         now = time.time()
         self._txid_to_cid[txid] = cid
         self._set_state(order, OrderState.OPEN, now, txid)
@@ -377,6 +458,7 @@ class KrakenConnectorCore:
         if self.in_flight_orders.pop(cid, None) is None:
             return False
         self._cancel_requested.discard(cid)
+        self._userref_to_cid.pop(self._userrefs.pop(cid, 0), None)
         self._set_state(order, state, time.time())
         self._finished[cid] = order
         while len(self._finished) > _MAX_FINISHED_ORDERS:

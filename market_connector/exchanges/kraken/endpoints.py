@@ -35,6 +35,7 @@ ENDPOINT_REGISTRY: dict[str, Endpoint] = {
         method="POST",
     ),
     "open_orders": Endpoint(path="/0/private/OpenOrders", method="POST"),
+    "closed_orders": Endpoint(path="/0/private/ClosedOrders", method="POST"),
     "query_orders": Endpoint(path="/0/private/QueryOrders", method="POST"),
     "query_trades": Endpoint(path="/0/private/QueryTrades", method="POST"),
     # ------------------------------------------------------------------

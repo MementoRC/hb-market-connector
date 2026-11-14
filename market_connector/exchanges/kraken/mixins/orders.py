@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.kraken.age_penalties import (
@@ -164,6 +164,19 @@ async def _request_multi_keyed(
     return await rest.request(endpoint_name, data=body, limit_id=limit_ids[0], pools=pools)
 
 
+async def _orders_by_userref(
+    rest: RestConnectorBase, endpoint_name: str, userref: int | None
+) -> dict[str, Any]:
+    """POST ``endpoint_name`` (filtered by ``userref`` when given); return the checked raw reply."""
+    if userref is None:
+        response = await rest.request(endpoint_name)
+    else:
+        response = await rest.request(endpoint_name, data={"userref": userref})
+    raw: dict[str, Any] = response.raw  # type: ignore[assignment]
+    raise_on_kraken_error(raw.get("error", []))
+    return raw
+
+
 def _placed_at(owner: object) -> dict[str, float]:
     """The owner's txid -> placement-time map, created on first use (mixins are stateless)."""
     return vars(owner).setdefault("_order_placed_at", {})  # type: ignore[no-any-return]
@@ -224,6 +237,7 @@ class OrdersMixin:
         *,
         limit_price: Decimal | None = None,
         price_in_percent: bool = False,
+        userref: int | None = None,
     ) -> str:
         """Place an order on Kraken and return the first txid.
 
@@ -237,6 +251,9 @@ class OrdersMixin:
                 conditional types.
             limit_price: Kraken ``price2``; required for ``*_LIMIT`` types only.
             price_in_percent: Send the trigger as ``#<price>%`` (conditional only).
+            userref: Optional int32 client tag (Kraken ``userref``); lets the order be
+                found again via ``get_open_orders`` / ``get_closed_orders`` when the
+                AddOrder response is lost.
 
         Returns:
             The first txid string from ``result.txid``.
@@ -262,6 +279,8 @@ class OrdersMixin:
             "volume": str(amount),
             **price_fields,
         }
+        if userref is not None:
+            body["userref"] = userref
 
         await _ensure_room(self, trading_pair, 1)
         response = await _request_keyed(self._rest, "add_order", trading_pair, body)
@@ -447,8 +466,9 @@ class OrdersMixin:
 
     async def get_open_orders(
         self: HasRest & HasReady,  # type: ignore[valid-type]
+        userref: int | None = None,
     ) -> dict[str, OrderInfo]:
-        """Return all open orders keyed by txid.
+        """Return open orders keyed by txid, optionally only those tagged ``userref``.
 
         Kraken's ``/0/private/OpenOrders`` response wraps the order map under
         the ``"open"`` key: ``{"result": {"open": {<txid>: {...}}}}``.  This
@@ -460,11 +480,27 @@ class OrdersMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        response = await self._rest.request("open_orders")
-        raw = response.raw
-        raise_on_kraken_error(raw.get("error", []))
+        raw = await _orders_by_userref(self._rest, "open_orders", userref)
         open_dict: dict[str, object] = raw.get("result", {}).get("open", {})
         return {txid: OrderInfo.model_validate(info) for txid, info in open_dict.items()}
+
+    async def get_closed_orders(
+        self: HasRest & HasReady,  # type: ignore[valid-type]
+        userref: int | None = None,
+    ) -> dict[str, OrderInfo]:
+        """Return closed orders keyed by txid, optionally only those tagged ``userref``.
+
+        Unwraps ``result.closed`` of ``/0/private/ClosedOrders`` (first page only).
+
+        Raises:
+            GatewayNotStartedError: If the gateway is not ready.
+        """
+        if not self.ready:
+            raise GatewayNotStartedError("Gateway not started")
+
+        raw = await _orders_by_userref(self._rest, "closed_orders", userref)
+        closed_dict: dict[str, object] = raw.get("result", {}).get("closed", {})
+        return {txid: OrderInfo.model_validate(info) for txid, info in closed_dict.items()}
 
     async def query_orders(
         self: HasRest & HasReady,  # type: ignore[valid-type]

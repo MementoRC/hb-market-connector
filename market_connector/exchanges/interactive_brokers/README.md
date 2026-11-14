@@ -199,12 +199,15 @@ latest-vs-stable difference should first be checked on the same account.
 <!-- ib-compat-matrix:start -->
 | Date | Channel | Gateway build | Server version | ib_async max | At ceiling | Read-only suite | Commit |
 |---|---|---|---|---|---|---|---|
+| 2026-11-05 | stable | 10.50.1f | 226 | 226 | yes | 8 passed, 2 skipped | 7567740 |
 | 2026-10-30 | latest | 10.51.1e | 226 | 226 | yes | 6 passed, 4 skipped | e660a56 |
 | 2026-10-29 | latest | 10.51.1e | 178 | 178 | yes | 6 passed, 4 skipped | 4f95635 |
 | 2026-10-28 | stable | 10.50.1f | 178 | 178 | yes | 9 passed, 1 skipped | eff6e53 |
 <!-- ib-compat-matrix:end -->
 
 2026-10-30 latest row: ib_async 3.0 (next-protobuf preview, not yet on PyPI) with IB_READONLY; skips: what-if (read-only), crypto quotes (no permission, IB 10090), L2 depth (no permission).
+
+2026-11-05 stable row: ib_async 3.0.0 (next-protobuf preview, not yet on PyPI) with IB_READONLY; skips: what-if (read-only), L2 depth (no permission at the time; L2 later confirmed live on 3.0 via BX TotalView, #179). The `ib_orders` suite on 3.0 against the writable stable Gateway: 5 passed. The commit column predates development; re-run at the release commit when the #157 pin bump lands.
 
 ## Stage roadmap
 

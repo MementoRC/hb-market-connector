@@ -213,6 +213,72 @@ class TestRegression:
         ]
 
 
+_MAKERS = [
+    pytest.param(OrderType.LIMIT_MAKER, id="dtp"),
+    pytest.param(LocalOrderType.LIMIT_MAKER, id="local"),
+]
+
+
+class TestLimitMakerPostOnly:
+    @pytest.mark.parametrize("order_type", _MAKERS)
+    async def test_gateway_sends_post_flag(
+        self, gateway: KrakenGateway, rest: _RecordingRest, order_type: Any
+    ) -> None:
+        await gateway.place_order(_PAIR, order_type, TradeType.BUY, _AMOUNT, Decimal("30000.5"))
+        (body,) = rest.bodies
+        assert body["ordertype"] == "limit"
+        assert body["price"] == "30000.5"
+        assert body["oflags"] == "post"
+        assert "price2" not in body
+
+    @pytest.mark.parametrize("order_type", _MAKERS)
+    async def test_bridge_sends_post_flag(
+        self, bridge: KrakenConnectorBridge, rest: _RecordingRest, order_type: Any
+    ) -> None:
+        await bridge.place_order(_PAIR, order_type, TradeType.BUY, _AMOUNT, Decimal("30000.5"))
+        (body,) = rest.bodies
+        assert body["ordertype"] == "limit"
+        assert body["price"] == "30000.5"
+        assert body["oflags"] == "post"
+        assert "price2" not in body
+
+    @pytest.mark.parametrize("order_type", _MAKERS)
+    async def test_gateway_requires_price(
+        self, gateway: KrakenGateway, rest: _RecordingRest, order_type: Any
+    ) -> None:
+        with pytest.raises(ValueError):  # noqa: PT011
+            await gateway.place_order(_PAIR, order_type, TradeType.BUY, _AMOUNT)
+        assert rest.calls == []
+
+    @pytest.mark.parametrize("order_type", _MAKERS)
+    async def test_bridge_requires_price(
+        self, bridge: KrakenConnectorBridge, rest: _RecordingRest, order_type: Any
+    ) -> None:
+        with pytest.raises(ValueError):  # noqa: PT011
+            await bridge.place_order(_PAIR, order_type, TradeType.BUY, _AMOUNT)
+        assert rest.calls == []
+
+    @pytest.mark.parametrize("order_type", [OrderType.LIMIT, LocalOrderType.LIMIT])
+    async def test_plain_limit_has_no_oflags(
+        self, gateway: KrakenGateway, rest: _RecordingRest, order_type: Any
+    ) -> None:
+        await gateway.place_order(_PAIR, order_type, TradeType.BUY, _AMOUNT, Decimal("30000"))
+        assert "oflags" not in rest.bodies[0]
+
+    @pytest.mark.parametrize("order_type", [OrderType.MARKET, LocalOrderType.MARKET])
+    async def test_market_has_no_oflags(
+        self, gateway: KrakenGateway, rest: _RecordingRest, order_type: Any
+    ) -> None:
+        await gateway.place_order(_PAIR, order_type, TradeType.BUY, _AMOUNT)
+        assert "oflags" not in rest.bodies[0]
+
+    async def test_bridge_plain_limit_has_no_oflags(
+        self, bridge: KrakenConnectorBridge, rest: _RecordingRest
+    ) -> None:
+        await bridge.place_order(_PAIR, OrderType.LIMIT, TradeType.BUY, _AMOUNT, Decimal("30000"))
+        assert "oflags" not in rest.bodies[0]
+
+
 # ---------------------------------------------------------------------------
 # Bridge end-to-end (bridge -> converter -> real mixin -> recording transport)
 # ---------------------------------------------------------------------------

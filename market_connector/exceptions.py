@@ -52,6 +52,22 @@ class ExchangeUnavailableError(GatewayError):
     """The exchange is down, returning 5xx, or otherwise unreachable."""
 
 
+class OrderOutcomeUnknownError(ExchangeUnavailableError):
+    """The order POST was sent but its outcome is unknown (5xx, Cloudflare, transport error).
+
+    The order may or may not exist on the exchange. It was never re-sent; resolve it by
+    looking it up with ``client_order_id``.
+    """
+
+    def __init__(self, message: str | None = None, *, client_order_id: str) -> None:
+        super().__init__(
+            message
+            or f"Order outcome unknown for client_order_id={client_order_id!r}: "
+            "the response was lost; look the order up by client_order_id before retrying"
+        )
+        self.client_order_id = client_order_id
+
+
 class ServiceUnavailableError(GatewayError):
     """The exchange service is temporarily unavailable (maintenance, cancel-only mode, etc.)."""
 

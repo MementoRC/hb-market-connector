@@ -5,7 +5,14 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from market_connector.exceptions import GatewayNotStartedError, OrderRejectedError
+import httpx
+
+from market_connector.exceptions import (
+    ExchangeUnavailableError,
+    GatewayNotStartedError,
+    OrderOutcomeUnknownError,
+    OrderRejectedError,
+)
 from market_connector.exchanges.coinbase.converters import to_exchange_pair, to_open_order
 from market_connector.exchanges.coinbase.schemas.rest import (
     CancelOrdersResponse,
@@ -53,11 +60,13 @@ class OrdersMixin:
         side: TradeType | str,
         amount: Decimal,
         price: Decimal | None,
+        *,
+        client_order_id: str | None = None,
     ) -> str:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        client_id = f"coinbase-{uuid.uuid4()}"
+        client_id = client_order_id or f"coinbase-{uuid.uuid4()}"
         cfg = _build_order_config(OrderType(order_type), amount, price)
         body: dict[str, object] = {
             "client_order_id": client_id,
@@ -65,7 +74,11 @@ class OrdersMixin:
             "side": side if isinstance(side, str) else side.value,
             "order_configuration": cfg,
         }
-        response = await self._rest.request("place_order", data=body)
+        try:
+            response = await self._rest.request("place_order", data=body)
+        except (ExchangeUnavailableError, httpx.TransportError) as exc:
+            # The POST may have reached the exchange; never re-send, let the caller resolve it.
+            raise OrderOutcomeUnknownError(client_order_id=client_id) from exc
         parsed = CreateOrderResponse.model_validate(response.raw)
         if not parsed.success:
             raise OrderRejectedError(parsed.failure_reason or "order rejected")
@@ -99,3 +112,21 @@ class OrdersMixin:
         )
         parsed = ListOrdersResponse.model_validate(response.raw)
         return [to_open_order(o) for o in parsed.orders]
+
+    async def get_order_by_client_order_id(
+        self: HasRest & HasReady,  # type: ignore[valid-type]
+        client_order_id: str,
+    ) -> OpenOrder | None:
+        """Find an order (any status) by ``client_order_id`` via the order listing, or None."""
+        if not self.ready:
+            raise GatewayNotStartedError("Gateway not started")
+        params: dict[str, str] = {}
+        while True:
+            response = await self._rest.request("list_orders", params=dict(params))
+            parsed = ListOrdersResponse.model_validate(response.raw)
+            for order in parsed.orders:
+                if order.client_order_id == client_order_id:
+                    return to_open_order(order)
+            if not (parsed.has_next and parsed.cursor) or parsed.cursor == params.get("cursor"):
+                return None
+            params["cursor"] = parsed.cursor

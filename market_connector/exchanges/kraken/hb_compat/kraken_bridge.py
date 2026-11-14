@@ -10,9 +10,8 @@ Design choices:
       can be subclassed when used within the hummingbot process.
     - Stale-order reconciliation is called from :meth:`start`, NOT from
       ``__init__``, so that object construction is always safe.
-    - ``place_order`` delegates order-type translation to
-      :func:`~..converters.kraken_ordertype_from_hb`, which is the
-      integration point for ``_for_bleed/kraken-new-order-types``.
+    - ``place_order`` passes the order type straight to the gateway, which maps
+      it by enum name (conditional orders supported, trailing deferred; #209).
     - Tier configuration defaults to ``STARTER``; callers using ``INTERMEDIATE``
       or ``PRO`` accounts should pass the appropriate
       :class:`~..schemas.enums.KrakenAPITier` value.
@@ -35,7 +34,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from market_connector.exchanges.kraken.converters import kraken_ordertype_from_hb
 from market_connector.exchanges.kraken.hb_compat.kraken_startup_cleanup import (
     reconcile_stale_orders,
 )
@@ -149,30 +147,37 @@ class KrakenConnectorBridge:
         side: Any,
         amount: Decimal,
         price: Decimal | None = None,
+        *,
+        limit_price: Decimal | None = None,
+        price_in_percent: bool = False,
     ) -> str:
-        """Place an order via the gateway with order-type translation.
+        """Place an order via the gateway.
 
-        *order_type* is translated to a Kraken-native string via
-        :func:`~..converters.kraken_ordertype_from_hb`.  This is the
-        integration point for ``_for_bleed/kraken-new-order-types``.
+        *order_type* is passed through unchanged; the gateway maps it by name
+        (hummingbot, local mirror, or string), so conditional types
+        (STOP_LOSS, TAKE_PROFIT and their ``*_LIMIT`` variants) work end to
+        end. Trailing types are deferred (see #209) and raise ``ValueError``.
 
         Args:
             trading_pair: Exchange-native pair string (e.g. ``"XBTUSD"``).
             order_type:   ``OrderType`` enum, conditional type, or string.
             side:         ``TradeType`` enum or string (``"buy"`` / ``"sell"``).
             amount:       Order volume as a ``Decimal``.
-            price:        Limit price; required for limit orders.
+            price:        Limit price, or the trigger for conditional orders.
+            limit_price:  Limit price (Kraken ``price2``) for ``*_LIMIT`` types.
+            price_in_percent: Send the trigger as a percentage offset.
 
         Returns:
             The first txid string from the Kraken API response.
         """
-        kraken_ot = kraken_ordertype_from_hb(order_type)
         return await self._gateway.place_order(
             trading_pair=trading_pair,
-            order_type=kraken_ot,
+            order_type=order_type,
             side=side,
             amount=amount,
             price=price,
+            limit_price=limit_price,
+            price_in_percent=price_in_percent,
         )
 
     async def cancel_order(self, trading_pair: str, txid: str) -> bool:

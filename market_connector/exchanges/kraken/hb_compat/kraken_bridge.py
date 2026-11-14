@@ -150,6 +150,7 @@ class KrakenConnectorBridge:
         *,
         limit_price: Decimal | None = None,
         price_in_percent: bool = False,
+        userref: int | None = None,
     ) -> str:
         """Place an order via the gateway.
 
@@ -166,10 +167,12 @@ class KrakenConnectorBridge:
             price:        Limit price, or the trigger for conditional orders.
             limit_price:  Limit price (Kraken ``price2``) for ``*_LIMIT`` types.
             price_in_percent: Send the trigger as a percentage offset.
+            userref:      Optional int32 tag for finding the order after a lost response.
 
         Returns:
             The first txid string from the Kraken API response.
         """
+        extra = {} if userref is None else {"userref": userref}
         return await self._gateway.place_order(
             trading_pair=trading_pair,
             order_type=order_type,
@@ -178,6 +181,7 @@ class KrakenConnectorBridge:
             price=price,
             limit_price=limit_price,
             price_in_percent=price_in_percent,
+            **extra,
         )
 
     async def cancel_order(self, trading_pair: str, txid: str) -> bool:

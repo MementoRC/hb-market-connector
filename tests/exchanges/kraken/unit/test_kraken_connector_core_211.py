@@ -42,6 +42,7 @@ import importlib
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from unittest.mock import ANY
 
 import httpx
 import pytest
@@ -399,6 +400,7 @@ class TestPlacement:
                 "ordertype": "limit",
                 "volume": "0.5",
                 "price": "27000",
+                "userref": ANY,
             }
         ]
         order = connector.fetch_order(client_id)
@@ -483,6 +485,7 @@ class TestPlacement:
                 "ordertype": "limit",
                 "volume": "0.5",
                 "price": "27000",
+                "userref": ANY,
             }
         ]
 
@@ -496,7 +499,13 @@ class TestPlacement:
             connector.buy(_PAIR, _AMOUNT, OrderType.MARKET, price)
         await seen.wait(BUY_CREATED)
         assert rest.bodies("add_order") == [
-            {"pair": _WIRE_PAIR, "type": "buy", "ordertype": "market", "volume": "0.5"}
+            {
+                "pair": _WIRE_PAIR,
+                "type": "buy",
+                "ordertype": "market",
+                "volume": "0.5",
+                "userref": ANY,
+            }
         ]
 
 

@@ -92,6 +92,9 @@ KRAKEN_ORDER_STATE_MAP: Mapping[KrakenOrderState, OrderState] = {
 class _ExtraOrderState(Enum):
     """States ``data_type_primitives.OrderState`` lacks (``.value`` above its highest, 10)."""
 
+    # TODO(#214): replace with data_type_primitives OrderState.UNKNOWN once released (requested
+    # from hb-data-type-primitives); with the local value InFlightOrder.is_open is False for
+    # UNKNOWN orders.
     UNKNOWN = 11  # AddOrder response lost: the order may or may not be on the exchange
 
 
@@ -145,7 +148,7 @@ class KrakenConnectorCore:
         # Seeded from the clock (ms) so a restart does not reuse userrefs of still-open orders.
         self._userref_counter = int(time.time() * 1000) % _USERREF_MAX
         self._userrefs: dict[str, int] = {}  # cid -> userref
-        self._userref_to_cid: dict[int, str] = {}
+        self._userref_to_cid: dict[int, str] = {}  # write-only; kept for diagnostics
         self._submitting: set[str] = set()  # AddOrder request in flight
         self._cancel_requested: set[str] = set()  # cancel asked before the txid was known
         self._cancelling: set[str] = set()  # CancelOrder in flight
@@ -330,6 +333,15 @@ class KrakenConnectorCore:
             self._mark_unknown(order, exc)
             return
         except Exception as exc:  # noqa: BLE001
+            if order.exchange_order_id is not None:
+                logger.warning(
+                    "AddOrder for %s raised (%s) but the order was already adopted as %s; "
+                    "not failing it",
+                    cid,
+                    exc,
+                    order.exchange_order_id,
+                )
+                return
             self._fail(order, exc)
             return
         finally:

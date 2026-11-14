@@ -18,7 +18,7 @@ ENDPOINT_REGISTRY: dict[str, Endpoint] = {
     ),
     # Private endpoints
     "accounts": Endpoint(path="/brokerage/accounts", method="GET"),
-    "place_order": Endpoint(path="/brokerage/orders", method="POST"),
+    "place_order": Endpoint(path="/brokerage/orders", method="POST", idempotent=False),
     "cancel_orders": Endpoint(
         path="/brokerage/orders/batch_cancel",
         method="POST",

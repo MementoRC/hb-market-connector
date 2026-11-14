@@ -63,7 +63,7 @@ KRAKEN_HMAC_SPEC: HmacSigningSpec = HmacSigningSpec(
     key_material=KeyMaterialSpec(encoding=KeyEncoding.BASE64),
     timestamp=TimestampSpec(unit=TimestampUnit.MILLISECONDS, format=TimestampFormat.INTEGER),
     nonce=NonceSpec(
-        source=NonceSource.COUNTER,
+        source=NonceSource.TIMESTAMP,  # strictly increasing microseconds, survives restarts (#215)
         monotonic=True,
         placement=NoncePlacement.BODY_FIELD,
         field_name="nonce",

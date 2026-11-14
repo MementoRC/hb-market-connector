@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+from dataclasses import replace
 from string import Formatter
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from rate_limit import RateLimit, RateLimiter
 
 from market_connector.auth.protocols import Request, Signer
+from market_connector.auth.spec import BodyFormat
 from market_connector.exceptions import (
     AuthenticationError,
     ExchangeUnavailableError,
@@ -197,25 +199,39 @@ class RestConnectorBase:
         )
 
         url = f"{self._base_url}{resolved_path}"
-        body_str = json.dumps(data) if signer is not None and data else None
+        active_signer = signer if signer is not None else self._signer
+        content: str | None = None
+        json_body: dict[str, Any] | None = None
+        content_type = "application/json"
         req = Request(
             method=endpoint.method,
             url=url,
-            path=resolved_path,
+            path=urlparse(url).path,
             headers=dict(headers or {}),
-            body=body_str,
+            body=None,
             qs_params=dict(params or {}),
         )
-        active_signer = signer if signer is not None else self._signer
         if active_signer is not None:
+            body_format = getattr(active_signer, "body_format", BodyFormat.JSON)
+            is_body_call = endpoint.method.upper() != "GET"
+            if is_body_call and body_format is BodyFormat.FORM_URLENCODED:
+                req = replace(req, body=urlencode(data or {}))
+                content_type = "application/x-www-form-urlencoded"
+            elif is_body_call and data:
+                req = replace(req, body=json.dumps(data))
             try:
                 req = await active_signer.sign(req)
             except Exception:
                 charge.refund()
                 raise
-        send_headers = req.headers
-        if body_str is not None:
-            send_headers = {"Content-Type": "application/json", **send_headers}
+            if is_body_call and req.body is not None:
+                content = req.body if isinstance(req.body, str) else req.body.decode("utf-8")
+                send_headers = {"Content-Type": content_type, **req.headers}
+            else:
+                send_headers = req.headers
+        else:
+            send_headers = req.headers
+            json_body = data
 
         last_error: Exception | None = None
 
@@ -224,8 +240,8 @@ class RestConnectorBase:
                 method=req.method,
                 url=url,
                 params=req.qs_params or None,
-                json=data if body_str is None else None,
-                content=body_str,
+                json=json_body,
+                content=content,
                 headers=send_headers,
             )
 

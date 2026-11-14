@@ -30,6 +30,7 @@ import base64
 import hashlib
 import hmac
 import os
+import threading
 import time
 import urllib.parse
 import uuid
@@ -135,6 +136,18 @@ def _serialise_body(body: str | bytes | None, fmt: BodyFormat) -> str:
     if isinstance(body, bytes):
         body = body.decode("utf-8")
     return body  # caller is responsible for format; just return as-is
+
+
+_time_nonce_lock = threading.Lock()
+_last_time_nonce = 0
+
+
+def _next_time_nonce() -> int:
+    """Strictly increasing microsecond nonce, shared across signers in this process."""
+    global _last_time_nonce  # noqa: PLW0603
+    with _time_nonce_lock:
+        _last_time_nonce = max(_last_time_nonce + 1, time.time_ns() // 1000)
+        return _last_time_nonce
 
 
 def _qs_sorted(qs_params: dict) -> str:
@@ -386,8 +399,9 @@ class DeclarativeRestSigner:
         # 2. Resolve nonce
         nonce = await self._resolve_nonce(spec)
 
-        # 3. Serialise body
+        # 3. Serialise body; a BODY_FIELD nonce is part of the signed (and sent) body
         body_str = _serialise_body(request.body, spec.recipe.body_format)
+        body_str = self._with_body_nonce(spec, nonce, body_str)
 
         # 4. Build base context (variables available for sig-input template)
         ctx: dict[str, str] = {
@@ -449,9 +463,9 @@ class DeclarativeRestSigner:
             for param_name, template in spec.output.qs_inject.items():
                 new_qs[param_name] = _expand_output_template(template, out_ctx)
 
-        # 14. Reassemble body
+        # 14. Reassemble body (the exact string that was signed)
         new_body: str | bytes | None = request.body
-        if new_body_str != body_str:
+        if new_body_str != _serialise_body(request.body, spec.recipe.body_format):
             new_body = new_body_str
 
         return replace(
@@ -476,6 +490,8 @@ class DeclarativeRestSigner:
         if src is NonceSource.UUID:
             return str(uuid.uuid4())
         if src is NonceSource.TIMESTAMP:
+            if spec.nonce.monotonic:
+                return str(_next_time_nonce())
             return _make_timestamp(spec.timestamp.unit, spec.timestamp.format)
         # COUNTER
         return await self._next_counter_nonce()
@@ -495,6 +511,23 @@ class DeclarativeRestSigner:
     # Nonce placement injection
     # ------------------------------------------------------------------
 
+    @property
+    def body_format(self) -> BodyFormat:
+        """How callers must serialise the request body before ``sign()``."""
+        if isinstance(self._spec, HmacSigningSpec):
+            return self._spec.recipe.body_format
+        return BodyFormat.JSON
+
+    @staticmethod
+    def _with_body_nonce(spec: HmacSigningSpec, nonce: str, body_str: str) -> str:
+        """Prepend ``<field>=<nonce>`` to a BODY_FIELD form body unless already present."""
+        field = spec.nonce.field_name
+        if spec.nonce.placement is not NoncePlacement.BODY_FIELD or not field:
+            return body_str
+        if field in urllib.parse.parse_qs(body_str, keep_blank_values=True):
+            return body_str
+        return f"{field}={nonce}&{body_str}" if body_str else f"{field}={nonce}"
+
     def _inject_nonce(
         self,
         spec: HmacSigningSpec,
@@ -510,8 +543,7 @@ class DeclarativeRestSigner:
         if placement is NoncePlacement.HEADER and field:
             headers[field] = nonce
         elif placement is NoncePlacement.BODY_FIELD and field:
-            # Prepend nonce=<value>& to form body (simplified for FORM_URLENCODED)
-            body_str = f"{field}={nonce}&{body_str}" if body_str else f"{field}={nonce}"
+            body_str = self._with_body_nonce(spec, nonce, body_str)
         elif placement is NoncePlacement.QS_FIELD and field:
             qs_params[field] = nonce
         # SIG_ONLY and NONE: nonce used in template only, not injected

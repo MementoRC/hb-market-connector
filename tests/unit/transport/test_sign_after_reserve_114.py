@@ -163,7 +163,8 @@ class TestSignedPathEqualsSentPath:
         sent_url = send.call_args.kwargs["url"]
         assert len(signer.calls) == 1
         assert "{" not in sent_url
-        assert signer.calls[0].path == "/api/orders/a%20b"
+        # #215: signed path = full request path (Coinbase requestPath)
+        assert signer.calls[0].path == "/v3/api/orders/a%20b"
         assert urlsplit(signer.calls[0].url).path == urlsplit(sent_url).path
         assert send.call_args.kwargs["params"] == {"limit": 3}
         await client.close()

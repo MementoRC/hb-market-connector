@@ -28,7 +28,6 @@ from market_connector.exchanges.kraken.specs import (
     KRAKEN_MAX_OPEN_ORDERS_PER_PAIR,
     KRAKEN_RATE_LIMIT_SPEC,
 )
-from market_connector.primitives import OrderType, TradeType
 from market_connector.rate_limits.limiter import ensure_keyed_limit
 
 if TYPE_CHECKING:
@@ -36,6 +35,7 @@ if TYPE_CHECKING:
     from decimal import Decimal
 
     from market_connector.exchanges.kraken.mixins.protocols import HasReady, HasRest
+    from market_connector.primitives import OrderType, TradeType
     from market_connector.transport.response import Response
     from market_connector.transport.rest_base import RestConnectorBase
 
@@ -140,7 +140,8 @@ def _to_kraken_side(side: TradeType | str) -> str:
 
     Kraken expects ``"buy"`` or ``"sell"`` (lowercase).
     """
-    return side.name.lower() if isinstance(side, TradeType) else str(side).lower()
+    name = getattr(side, "name", None)
+    return name.lower() if isinstance(name, str) else str(side).lower()
 
 
 async def _request_keyed(

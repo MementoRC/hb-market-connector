@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `hb-data-type-primitives` to v0.11.0 (LinkedOrderSpec/LegSpec/LinkKind/LegRole for #239).
+
 ## [0.9.0] - 2026-11-15
 
 ### Added

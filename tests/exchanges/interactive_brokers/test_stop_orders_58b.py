@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from data_type_primitives import TriggerKind, TriggerSpec
 
 from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.interactive_brokers.transport import _hb_to_ib_order
@@ -22,13 +23,17 @@ def _ot(name: str) -> OrderType:
     return OrderType[name]
 
 
+def _trigger() -> TriggerSpec:
+    return TriggerSpec(kind=TriggerKind.ABSOLUTE, value=STOP)
+
+
 def _stop_loss(side: TradeType = TradeType.BUY, **extra: Any) -> HBOrder:
-    fields: dict[str, Any] = {"stop_price": STOP, **extra}
+    fields: dict[str, Any] = {"trigger": _trigger(), **extra}
     return HBOrder(order_type=_ot("STOP_LOSS"), side=side, amount=Decimal("10"), **fields)
 
 
 def _stop_limit(**extra: Any) -> HBOrder:
-    fields: dict[str, Any] = {"stop_price": STOP, "price": LIMIT_PRICE, **extra}
+    fields: dict[str, Any] = {"trigger": _trigger(), "price": LIMIT_PRICE, **extra}
     return HBOrder(
         order_type=_ot("STOP_LOSS_LIMIT"), side=TradeType.SELL, amount=Decimal("10"), **fields
     )
@@ -100,48 +105,48 @@ class TestStopLossLimitMapping:
 
 
 class TestValidation:
-    def test_stop_loss_requires_stop_price(self):
-        order = HBOrder(order_type=_ot("STOP_LOSS"), side=TradeType.BUY, amount=Decimal("10"))
-        with pytest.raises(ValueError, match="stop_price"):
-            _hb_to_ib_order(order)
+    """Validation now happens at HBOrder construction (#237)."""
 
-    def test_stop_limit_requires_stop_price(self):
-        order = HBOrder(
-            order_type=_ot("STOP_LOSS_LIMIT"),
-            side=TradeType.BUY,
-            amount=Decimal("10"),
-            price=LIMIT_PRICE,
-        )
-        with pytest.raises(ValueError, match="stop_price"):
-            _hb_to_ib_order(order)
+    def test_stop_loss_requires_trigger(self):
+        with pytest.raises(ValueError, match="trigger"):
+            HBOrder(order_type=_ot("STOP_LOSS"), side=TradeType.BUY, amount=Decimal("10"))
+
+    def test_stop_limit_requires_trigger(self):
+        with pytest.raises(ValueError, match="trigger"):
+            HBOrder(
+                order_type=_ot("STOP_LOSS_LIMIT"),
+                side=TradeType.BUY,
+                amount=Decimal("10"),
+                price=LIMIT_PRICE,
+            )
 
     def test_stop_limit_requires_price(self):
-        order = HBOrder(
-            order_type=_ot("STOP_LOSS_LIMIT"),
-            side=TradeType.BUY,
-            amount=Decimal("10"),
-            stop_price=STOP,
-        )
         with pytest.raises(ValueError, match="price"):
-            _hb_to_ib_order(order)
+            HBOrder(
+                order_type=_ot("STOP_LOSS_LIMIT"),
+                side=TradeType.BUY,
+                amount=Decimal("10"),
+                trigger=_trigger(),
+            )
 
     def test_market_with_stop_price_rejected(self):
-        order = HBOrder(
-            order_type=OrderType.MARKET, side=TradeType.BUY, amount=Decimal("10"), stop_price=STOP
-        )
-        with pytest.raises(ValueError, match="stop_price"):
-            _hb_to_ib_order(order)
+        with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="trigger"):
+            HBOrder(
+                order_type=OrderType.MARKET,
+                side=TradeType.BUY,
+                amount=Decimal("10"),
+                stop_price=STOP,
+            )
 
     def test_limit_with_stop_price_rejected(self):
-        order = HBOrder(
-            order_type=OrderType.LIMIT,
-            side=TradeType.BUY,
-            amount=Decimal("10"),
-            price=Decimal("100.5"),
-            stop_price=STOP,
-        )
-        with pytest.raises(ValueError, match="stop_price"):
-            _hb_to_ib_order(order)
+        with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="trigger"):
+            HBOrder(
+                order_type=OrderType.LIMIT,
+                side=TradeType.BUY,
+                amount=Decimal("10"),
+                price=Decimal("100.5"),
+                stop_price=STOP,
+            )
 
 
 class TestLimitMakerRejected:

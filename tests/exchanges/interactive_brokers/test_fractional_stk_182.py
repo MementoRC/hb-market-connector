@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from data_type_primitives import TriggerKind, TriggerSpec
 
 from market_connector.exchanges.interactive_brokers.exceptions import OrderRejectedError
 from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayGateway
@@ -50,7 +51,9 @@ def _order(order_type: OrderType, amount: str, side: TradeType = TradeType.BUY) 
         side=side,
         amount=Decimal(amount),
         price=Decimal("100.5") if needs_price else None,
-        stop_price=Decimal("99.5") if needs_stop else None,
+        trigger=(
+            TriggerSpec(kind=TriggerKind.ABSOLUTE, value=Decimal("99.5")) if needs_stop else None
+        ),
     )
 
 
@@ -123,7 +126,7 @@ class TestFractionalPassThrough:
             order_type=OrderType.STOP_LOSS,
             side=TradeType.SELL,
             amount=Decimal(amount),
-            stop_price=Decimal("95"),
+            trigger=TriggerSpec(kind=TriggerKind.ABSOLUTE, value=Decimal("95")),
         )
         await asyncio.gather(
             _ack(ib, 3), gateway.place_bracket(MagicMock(), entry, take_profit, stop_loss)

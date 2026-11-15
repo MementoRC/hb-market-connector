@@ -46,19 +46,17 @@ class TestMalformedInputStaysValueError:
             _hb_to_ib_order(order)
 
     def test_market_with_stop_price(self) -> None:
-        order = HBOrder(
-            order_type=OrderType.MARKET,
-            side=TradeType.BUY,
-            amount=Decimal(1),
-            stop_price=Decimal(5),
-        )
-        with pytest.raises(ValueError, match="stop_price"):
-            _hb_to_ib_order(order)
+        with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="trigger"):
+            HBOrder(
+                order_type=OrderType.MARKET,
+                side=TradeType.BUY,
+                amount=Decimal(1),
+                stop_price=Decimal(5),
+            )
 
-    def test_stop_loss_without_stop_price(self) -> None:
-        order = HBOrder(order_type=OrderType.STOP_LOSS, side=TradeType.BUY, amount=Decimal(1))
-        with pytest.raises(ValueError, match="stop_price"):
-            _hb_to_ib_order(order)
+    def test_stop_loss_without_trigger(self) -> None:
+        with pytest.raises(ValueError, match="trigger"):
+            HBOrder(order_type=OrderType.STOP_LOSS, side=TradeType.BUY, amount=Decimal(1))
 
 
 class TestGatewayWithoutResolver:

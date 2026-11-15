@@ -5,19 +5,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Fixed: Coinbase `place_order` and IB `HBOrder` accept canonical `data_type_primitives` `OrderType`/`TradeType` members (and case-insensitive strings), normalised by member name via `hb_compat.primitives.coerce_order_type`/`coerce_trade_type`; Kraken `side` accepts canonical `TradeType` (#231).
+## [0.8.0] - 2026-11-14
+
+### Added
 
 - Coinbase: `place_order` accepts an optional keyword `client_order_id` (else generates `coinbase-<uuid4>`), fixed before the single POST. A lost response (5xx/Cloudflare/transport error) now raises the new `OrderOutcomeUnknownError(ExchangeUnavailableError)` carrying `.client_order_id` instead of a bare error; the POST is never re-sent. New `get_order_by_client_order_id` resolves such an order via `list_orders` (paginated), returning the `OpenOrder` or None; the UNKNOWN/grace policy is left to the order tracker (#221).
-- Bump `hb-data-type-primitives` to v0.8.0; Kraken `KrakenConnectorCore` uses upstream `OrderState.UNKNOWN` (so `InFlightOrder.is_open` is True for UNKNOWN orders) instead of a local enum (Refs #214). v0.8.0 compares fills exactly (`executed >= amount`), no dust tolerance.
 - Kraken: the gateway now converts hb pairs (`BTC-USD`) to the AssetPairs `altname` (`XBTUSD`) via a lazily fetched, cached pair map in `get_orderbook`/`get_ticker`/`get_mid_price`/`place_order`; unknown dashed pairs raise `ValueError` before any request, native pairs pass through. `build_pair_tables` moved to `kraken.pairs` (re-exported from `kraken_core_support`) (#213).
 - Kraken: `KrakenConnectorCore.status_dict` (symbols_mapping_initialized, trading_rule_initialized, account_balance, status_polling_initialized) and derived read-only `ready` (#214).
 - Kraken conditional orders (STOP_LOSS, TAKE_PROFIT and `*_LIMIT` variants) via `place_order`, with `limit_price` and `price_in_percent`; trailing types deferred (#209).
 - Kraken `TRAILING_STOP` / `TRAILING_STOP_LIMIT` orders via `place_order`: `price` is the trail distance (`+<d>`, `%` with `price_in_percent`), `limit_price` the signed offset from the trigger (`price2`); validated before any request (#223).
 - Kraken `KrakenConnectorCore` (hummingbot-free `ExchangePyBase`-style core: sync `buy`/`sell`/`cancel`, in-flight tracking, REST/WS fill handling, status polling, price/order-book/balance caches, trading rules) and `hb_compat.order_events` (7 `MarketEvent` payload dataclasses plus `MARKET_EVENT_IDS`); gateway gains `get_balances_ex` (BalanceEx), `AssetPairInfo.costmin` and `OrderInfo.trades` (#211).
 
+### Changed
+
+- Bump `hb-data-type-primitives` to v0.8.0; Kraken `KrakenConnectorCore` uses upstream `OrderState.UNKNOWN` (so `InFlightOrder.is_open` is True for UNKNOWN orders) instead of a local enum (Refs #214). v0.8.0 compares fills exactly (`executed >= amount`), no dust tolerance.
+- Coinbase place_order now rejects an unknown side with ValueError before HTTP (#231)
 - Kraken: an order whose AddOrder response is lost (timeout / transport error) is no longer failed; it is tagged with a unique int32 `userref`, kept as UNKNOWN, and adopted or failed by looking it up in OpenOrders then ClosedOrders. Gateway gains `place_order(userref=)`, `get_open_orders(userref=)` and `get_closed_orders` (#214).
 - Kraken: `EService:Market in cancel_only mode` / `post_only mode` now map to the new `ExchangeCancelOnlyError` / `ExchangePostOnlyError` (both `ServiceUnavailableError` subclasses). `KrakenConnectorCore` fails such an order definitively and, after a cancel-only reply, fails new orders locally for an exponentially growing window (`cancel_only_backoff`, `cancel_only_backoff_max`, injectable `clock`) until an AddOrder succeeds; cancels are never blocked (#214).
 - Kraken REST retry hardening (#214 item 6): `Endpoint.idempotent` (False for Kraken `add_order`/`add_order_batch`/`edit_order` and Coinbase `place_order`) makes the REST loop send such calls once (5xx/Cloudflare raises `ExchangeUnavailableError`, which `KrakenConnectorCore` treats as UNKNOWN). Idempotent calls now also retry Cloudflare/HTML bodies and httpx transport errors, re-signing each attempt with a fresh nonce, and raise `ExchangeUnavailableError` on exhaustion. `RateLimitError.retry_after`; `EGeneral:Temporary lockout` maps to it (>= 60 s); new `InvalidNonceError` (never retried) with nonce-window / API-key guidance; new `KrakenConnectorCore(unknown_order_grace=)`.
+
+### Fixed
+
+- Coinbase `place_order` and IB `HBOrder` accept canonical `data_type_primitives` `OrderType`/`TradeType` members (and case-insensitive strings), normalised by member name via `hb_compat.primitives.coerce_order_type`/`coerce_trade_type`; Kraken `side` accepts canonical `TradeType` (#231).
 
 ## [0.7.0] - 2026-11-13
 

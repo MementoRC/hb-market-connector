@@ -1,11 +1,18 @@
 """SupportsBracket / SupportsOco protocols, BracketHandle / OcoHandle, linked contract (#239).
 
-Assumed shape (the issue fixes the names, not the field names):
+Approved API (option B):
 
-    BracketHandle(entry_client_id, take_profit_client_id, stop_loss_client_id, emulated)
-    OcoHandle(leg_client_ids: tuple[...], emulated)
+    SupportsBracket.place_bracket(target, spec: LinkedOrderSpec, *, options=None) -> BracketHandle
+    SupportsOco.place_oco(target, spec: LinkedOrderSpec, *, options=None) -> OcoHandle
 
-Both are frozen dataclasses exported from ``market_connector`` and holding ids only.
+    BracketHandle: group_id, entry_client_id, take_profit_client_id | None,
+                   stop_loss_client_id | None, emulated
+    OcoHandle: group_id, leg_client_ids, emulated   # ids in spec.ordered_legs() order
+
+Both handles are runtime_checkable typing.Protocol classes exported from ``market_connector``
+whose members are read-only ``@property`` declarations (covariant, so a frozen dataclass with
+``group_id: str`` matches ``str | int``). They are not concrete classes. ``cancel_linked`` is
+deferred to issue #251 and must not appear on either Protocol.
 Contract helper (market_connector.testing.contract):
 
     check_linked_protocol_capabilities(gateway) -> list[str]   # empty == consistent
@@ -14,9 +21,19 @@ Contract helper (market_connector.testing.contract):
 from __future__ import annotations
 
 import dataclasses
+import inspect
+from decimal import Decimal
 from typing import Any
 
 import pytest
+from data_type_primitives import (
+    LegRole,
+    LegSpec,
+    LinkedOrderSpec,
+    LinkKind,
+    OrderType,
+    TradeType,
+)
 
 from market_connector.capabilities import LinkedMode, OrderCapabilities
 
@@ -32,73 +49,130 @@ def _caps(linked: frozenset[LinkedMode]) -> OrderCapabilities:
     )
 
 
-def _bracket(**overrides: Any) -> Any:
-    from market_connector import BracketHandle
-
-    base: dict[str, Any] = {
-        "entry_client_id": "e1",
-        "take_profit_client_id": "tp1",
-        "stop_loss_client_id": "sl1",
-        "emulated": False,
-    }
-    return BracketHandle(**{**base, **overrides})
+def _leg(role: LegRole, side: TradeType, price: str, order_type: OrderType) -> LegSpec:
+    return LegSpec(
+        role=role, order_type=order_type, trade_type=side, amount=Decimal(1), price=Decimal(price)
+    )
 
 
-def _oco(**overrides: Any) -> Any:
-    from market_connector import OcoHandle
+def _oco_spec() -> LinkedOrderSpec:
+    return LinkedOrderSpec(
+        kind=LinkKind.OCO,
+        legs=(
+            _leg(LegRole.OCO_LEG, TradeType.SELL, "110", OrderType.LIMIT),
+            _leg(LegRole.OCO_LEG, TradeType.SELL, "120", OrderType.LIMIT),
+        ),
+    )
 
-    base: dict[str, Any] = {"leg_client_ids": ("a", "b"), "emulated": True}
-    return OcoHandle(**{**base, **overrides})
+
+@dataclasses.dataclass(frozen=True)
+class _BracketImpl:
+    """Test-local stand-in for a downstream frozen handle (note ``group_id: str``)."""
+
+    group_id: str = "g1"
+    entry_client_id: str = "e1"
+    take_profit_client_id: str | None = "tp1"
+    stop_loss_client_id: str | None = "sl1"
+    emulated: bool = False
 
 
-class TestHandles:
-    def test_bracket_handle_carries_client_id_per_leg(self) -> None:
-        h = _bracket()
-        assert (h.entry_client_id, h.take_profit_client_id, h.stop_loss_client_id) == (
-            "e1",
-            "tp1",
-            "sl1",
-        )
-        assert h.emulated is False
+@dataclasses.dataclass(frozen=True)
+class _OcoImpl:
+    group_id: str = "g2"
+    leg_client_ids: tuple[str, ...] = ("a", "b")
+    emulated: bool = True
 
-    def test_oco_handle_carries_client_id_per_leg(self) -> None:
-        h = _oco(leg_client_ids=("a", "b", "c"))
-        assert tuple(h.leg_client_ids) == ("a", "b", "c")
-        assert h.emulated is True
 
-    @pytest.mark.parametrize("factory", [_bracket, _oco])
-    def test_handles_are_frozen_dataclasses(self, factory: Any) -> None:
-        h = factory()
-        assert dataclasses.is_dataclass(h)
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            h.emulated = not h.emulated
+def _bracket(**overrides: Any) -> _BracketImpl:
+    return _BracketImpl(**overrides)
 
-    @pytest.mark.parametrize("factory", [_bracket, _oco])
-    def test_handles_are_value_equal_and_hashable(self, factory: Any) -> None:
-        assert factory() == factory()
-        assert hash(factory()) == hash(factory())
 
-    @pytest.mark.parametrize("factory", [_bracket, _oco])
-    def test_handles_hold_ids_only(self, factory: Any) -> None:
-        for f in dataclasses.fields(factory()):
-            value = getattr(factory(), f.name)
-            flat = value if isinstance(value, tuple) else (value,)
-            assert all(isinstance(v, str | int | bool) for v in flat), f.name
+def _oco(**overrides: Any) -> _OcoImpl:
+    return _OcoImpl(**overrides)
 
-    def test_handles_live_in_market_connector_and_export_top_level(self) -> None:
+
+_BRACKET_MEMBERS = (
+    "group_id",
+    "entry_client_id",
+    "take_profit_client_id",
+    "stop_loss_client_id",
+    "emulated",
+)
+_OCO_MEMBERS = ("group_id", "leg_client_ids", "emulated")
+
+
+class TestHandleProtocols:
+    @pytest.mark.parametrize("name", ["BracketHandle", "OcoHandle"])
+    def test_handle_is_runtime_checkable_protocol(self, name: str) -> None:
         import market_connector
 
-        assert market_connector.BracketHandle.__module__.startswith("market_connector")
-        assert market_connector.OcoHandle.__module__.startswith("market_connector")
+        proto = getattr(market_connector, name)
+        assert getattr(proto, "_is_protocol", False) is True
+        assert getattr(proto, "_is_runtime_protocol", False) is True
+        assert proto.__module__.startswith("market_connector")
+
+    @pytest.mark.parametrize(
+        ("name", "members"), [("BracketHandle", _BRACKET_MEMBERS), ("OcoHandle", _OCO_MEMBERS)]
+    )
+    def test_members_are_read_only_properties(self, name: str, members: tuple[str, ...]) -> None:
+        import market_connector
+
+        proto = getattr(market_connector, name)
+        for member in members:
+            attr = proto.__dict__.get(member)
+            assert isinstance(attr, property), member
+            assert attr.fset is None, member
+        declared = {n for n in vars(proto) if not n.startswith("_")}
+        assert declared == set(members)
+
+    @pytest.mark.parametrize("name", ["BracketHandle", "OcoHandle"])
+    def test_handle_protocol_is_not_instantiable(self, name: str) -> None:
+        import market_connector
+
+        with pytest.raises(TypeError):
+            getattr(market_connector, name)()
+
+    def test_frozen_str_group_id_dataclass_satisfies_bracket_handle(self) -> None:
+        from market_connector import BracketHandle
+
+        assert isinstance(_bracket(), BracketHandle)
+        assert not isinstance(object(), BracketHandle)
+        assert not isinstance(_oco(), BracketHandle)
+
+    def test_frozen_str_group_id_dataclass_satisfies_oco_handle(self) -> None:
+        from market_connector import OcoHandle
+
+        assert isinstance(_oco(), OcoHandle)
+        assert not isinstance(object(), OcoHandle)
+        assert not isinstance(_bracket(), OcoHandle)
+
+    @pytest.mark.parametrize(
+        ("tp", "sl"), [("tp1", None), (None, "sl1"), ("tp1", "sl1")], ids=["tp", "sl", "both"]
+    )
+    def test_bracket_with_optional_exits_satisfies_protocol(
+        self, tp: str | None, sl: str | None
+    ) -> None:
+        from market_connector import BracketHandle
+
+        h = _bracket(take_profit_client_id=tp, stop_loss_client_id=sl)
+        assert isinstance(h, BracketHandle)
+        assert (h.take_profit_client_id, h.stop_loss_client_id) == (tp, sl)
+
+    def test_exported_from_top_level_and_in_all(self) -> None:
+        import market_connector
+
+        assert {"BracketHandle", "OcoHandle"} <= set(market_connector.__all__)
 
 
 class _Bracketer:
-    async def place_bracket(self, target: Any, entry: Any, take_profit: Any, stop_loss: Any) -> Any:
+    async def place_bracket(
+        self, target: Any, spec: LinkedOrderSpec, *, options: Any = None
+    ) -> Any:
         return _bracket()
 
 
 class _Ocoer:
-    async def place_oco(self, target: Any, orders: Any) -> Any:
+    async def place_oco(self, target: Any, spec: LinkedOrderSpec, *, options: Any = None) -> Any:
         return _oco()
 
 
@@ -117,6 +191,35 @@ class TestProtocols:
         assert not isinstance(object(), SupportsOco)
         assert not isinstance(_Bracketer(), SupportsOco)
 
+    @pytest.mark.parametrize(
+        ("proto", "method"), [("SupportsBracket", "place_bracket"), ("SupportsOco", "place_oco")]
+    )
+    def test_protocol_signature_is_target_spec_keyword_options(
+        self, proto: str, method: str
+    ) -> None:
+        from market_connector import protocols
+
+        sig = inspect.signature(getattr(getattr(protocols, proto), method))
+        params = list(sig.parameters.values())
+        assert [p.name for p in params] == ["self", "target", "spec", "options"]
+        assert params[3].kind is inspect.Parameter.KEYWORD_ONLY
+        assert params[3].default is None
+
+    @pytest.mark.parametrize(
+        ("proto", "method"), [("SupportsBracket", "place_bracket"), ("SupportsOco", "place_oco")]
+    )
+    def test_protocol_method_is_coroutine(self, proto: str, method: str) -> None:
+        from market_connector import protocols
+
+        assert inspect.iscoroutinefunction(getattr(getattr(protocols, proto), method))
+
+    @pytest.mark.parametrize("proto", ["SupportsBracket", "SupportsOco"])
+    def test_cancel_linked_is_deferred_to_251(self, proto: str) -> None:
+        from market_connector import protocols
+
+        assert not hasattr(getattr(protocols, proto), "cancel_linked")
+        assert "cancel_linked" not in dir(protocols.ExecutionGateway)
+
     def test_exported_from_package_top_level(self) -> None:
         import market_connector
         from market_connector import protocols
@@ -129,6 +232,19 @@ class TestProtocols:
 
         for name in ("place_bracket", "place_oco", "place_oca"):
             assert name not in dir(ExecutionGateway)
+
+
+class TestSpecOrdering:
+    """The contract OcoHandle.leg_client_ids follows: LinkedOrderSpec.ordered_legs()."""
+
+    def test_oco_leg_order_is_spec_order(self) -> None:
+        spec = _oco_spec()
+        assert [leg.price for leg in spec.ordered_legs()] == [Decimal(110), Decimal(120)]
+
+    def test_oco_handle_leg_ids_align_with_ordered_legs(self) -> None:
+        spec = _oco_spec()
+        h = _oco(leg_client_ids=("x", "y"))
+        assert len(h.leg_client_ids) == len(spec.ordered_legs())
 
 
 class _Both(_Bracketer, _Ocoer):

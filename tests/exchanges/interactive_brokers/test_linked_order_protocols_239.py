@@ -316,7 +316,8 @@ class TestPlaceOcaUnchanged:
         assert isinstance(result, IbOcaGroup)
 
 
-class TestNoCancelLinked:
-    def test_protocols_do_not_declare_cancel_linked(self) -> None:
-        assert not hasattr(protocols.SupportsBracket, "cancel_linked")
-        assert not hasattr(protocols.SupportsOco, "cancel_linked")
+class TestCancelLinkedDeclared:
+    def test_protocols_declare_cancel_linked(self) -> None:
+        # #251 supersedes the #239 deferral.
+        assert hasattr(protocols.SupportsBracket, "cancel_linked")
+        assert hasattr(protocols.SupportsOco, "cancel_linked")

@@ -38,6 +38,10 @@ if TYPE_CHECKING:
         StreamTransport,
     )
 
+from data_type_primitives import TriggerKind, TriggerReference
+from data_type_primitives.common import OrderType
+
+from market_connector.capabilities import LinkedMode, OrderCapabilities
 from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.interactive_brokers.linked_orders import OcaType
 from market_connector.exchanges.interactive_brokers.mixins import (
@@ -45,6 +49,19 @@ from market_connector.exchanges.interactive_brokers.mixins import (
     SubscriptionsMixin,
 )
 from market_connector.exchanges.interactive_brokers.trading_rules import IbTradingRules
+
+# Must match the types ``_hb_to_ib_order`` (transport.py) accepts; enforced by the capability
+# contract test.
+IB_ORDER_CAPABILITIES = OrderCapabilities(
+    order_types=frozenset(
+        {OrderType.MARKET, OrderType.LIMIT, OrderType.STOP_LOSS, OrderType.STOP_LOSS_LIMIT}
+    ),
+    trigger_kinds=frozenset({TriggerKind.ABSOLUTE}),
+    trigger_references=frozenset({TriggerReference.LAST}),
+    supports_trailing=False,
+    linked=frozenset({LinkedMode.BRACKET, LinkedMode.OCO}),
+    native_linked=True,
+)
 
 
 class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
@@ -71,6 +88,11 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         self.stream_transport: StreamTransport | None = None
         self.contract_resolver: ContractResolver | None = contract_resolver
         self._tick_counter: dict[tuple[int, int], int] = {}
+
+    @property
+    def order_capabilities(self) -> OrderCapabilities:
+        """Order features this gateway supports (see ``HasCapabilities``)."""
+        return IB_ORDER_CAPABILITIES
 
     @property
     def unified_transport(self) -> IbGatewayTransport | None:

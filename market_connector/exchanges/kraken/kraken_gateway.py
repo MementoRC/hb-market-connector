@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from market_connector.exchanges.kraken.endpoints import ENDPOINT_REGISTRY
 from market_connector.exchanges.kraken.factory import (
@@ -11,7 +12,7 @@ from market_connector.exchanges.kraken.factory import (
 )
 from market_connector.exchanges.kraken.mixins.accounts import AccountsMixin
 from market_connector.exchanges.kraken.mixins.market_data import MarketDataMixin
-from market_connector.exchanges.kraken.mixins.orders import OrdersMixin
+from market_connector.exchanges.kraken.mixins.orders import KRAKEN_ORDER_CAPABILITIES, OrdersMixin
 from market_connector.exchanges.kraken.mixins.subscriptions import SubscriptionsMixin
 from market_connector.exchanges.kraken.schemas.enums import KrakenAPITier
 from market_connector.exchanges.kraken.specs import (
@@ -22,6 +23,9 @@ from market_connector.exchanges.kraken.specs import (
 from market_connector.exchanges.kraken.transport import KrakenTransport
 from market_connector.rate_limits.limiter import limiter_from_tiered_spec
 from market_connector.transport.ws_base import WsConnectorBase
+
+if TYPE_CHECKING:
+    from market_connector.capabilities import OrderCapabilities
 
 # ---------------------------------------------------------------------------
 # URL constants
@@ -91,6 +95,11 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         tier:       Rate-limit tier profile (default ``STARTER``).
         sandbox:    Use sandbox REST URL when ``True``.
     """
+
+    @property
+    def order_capabilities(self) -> OrderCapabilities:
+        """Order features this gateway supports (see ``HasCapabilities``)."""
+        return KRAKEN_ORDER_CAPABILITIES
 
     def __init__(
         self,

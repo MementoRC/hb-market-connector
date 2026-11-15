@@ -10,6 +10,7 @@ import pytest
 from data_type_primitives.common import OrderType as DtpOrderType
 from data_type_primitives.common import TradeType as DtpTradeType
 
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
 from market_connector.primitives import OrderType, TradeType
 from market_connector.transport.response import Response
@@ -142,10 +143,19 @@ async def test_dtp_limit_maker_is_post_only(gateway: KrakenGateway, rest: _Recor
     assert body["oflags"] == "post"
 
 
-@pytest.mark.parametrize("bad", [DtpOrderType.AMM_SWAP, "bogus"])
-async def test_unsupported_raises_before_http(
-    gateway: KrakenGateway, rest: _RecordingRest, bad: Any
+async def test_valid_but_unmapped_raises_unsupported_before_http(
+    gateway: KrakenGateway, rest: _RecordingRest
+) -> None:
+    with pytest.raises(UnsupportedOrderError):
+        await gateway.place_order(
+            _PAIR, DtpOrderType.AMM_SWAP, TradeType.BUY, _AMOUNT, Decimal("1")
+        )
+    assert rest.calls == []
+
+
+async def test_garbage_string_raises_value_error_before_http(
+    gateway: KrakenGateway, rest: _RecordingRest
 ) -> None:
     with pytest.raises(ValueError, match="Unsupported order type"):
-        await gateway.place_order(_PAIR, bad, TradeType.BUY, _AMOUNT, Decimal("1"))
+        await gateway.place_order(_PAIR, "bogus", TradeType.BUY, _AMOUNT, Decimal("1"))
     assert rest.calls == []

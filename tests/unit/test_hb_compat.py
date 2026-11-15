@@ -9,6 +9,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
+from data_type_primitives.common import OrderType, TradeType
 from logger import HummingbotLogger
 
 from market_connector.hb_compat.bridge import LiveMarketAccess
@@ -53,7 +54,7 @@ class TestLiveMarketAccess:
             trading_pair="BTC-USDT",
             loop=event_loop_in_thread,
         )
-        result = bridge.place_order("LIMIT", "BUY", Decimal("1"), Decimal("50000"))
+        result = bridge.place_order(OrderType.LIMIT, TradeType.BUY, Decimal("1"), Decimal("50000"))
         assert result == "order-1"
 
     def test_cancel_order(self, mock_gateway, event_loop_in_thread) -> None:

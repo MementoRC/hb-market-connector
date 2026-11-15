@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from market_connector.hb_compat.common import OrderType, TradeType
+from market_connector.hb_compat.primitives import normalise_place_order_args
 
 
 class LiveMarketAccess:
@@ -24,7 +25,9 @@ class LiveMarketAccess:
         connector = ...  # a hummingbot ConnectorBase instance
         market = LiveMarketAccess(connector, trading_pair="BTC-USDT")
 
-        order_id = market.place_order("LIMIT", "BUY", Decimal("0.001"), Decimal("50000"))
+        order_id = market.place_order(
+            OrderType.LIMIT, TradeType.BUY, Decimal("0.001"), Decimal("50000")
+        )
         market.cancel_order(order_id)
         mid = market.get_mid_price()
         balance = market.get_available_balance("USDT")
@@ -47,24 +50,28 @@ class LiveMarketAccess:
 
     def place_order(
         self,
-        order_type: str,
-        side: str,
+        order_type: OrderType | str,
+        side: TradeType | str,
         amount: Decimal,
         price: Decimal,
     ) -> str:
         """Place a limit or market order; return the client order ID.
 
         Args:
-            order_type: ``"LIMIT"`` or ``"MARKET"`` (case-insensitive).
-            side: ``"BUY"`` or ``"SELL"`` (case-insensitive).
+            order_type: ``OrderType`` member. A case-insensitive ``str`` is
+                deprecated and emits ``DeprecationWarning``.
+            side: ``TradeType`` member. A case-insensitive ``str`` is
+                deprecated and emits ``DeprecationWarning``.
             amount: Order quantity in base asset.
             price: Order price in quote asset.
 
         Returns:
             The client order ID assigned by the connector.
+
+        Raises:
+            ValueError: If ``order_type`` or ``side`` is not a supported member name.
         """
-        ot = OrderType[order_type.upper()]
-        tt = TradeType[side.upper()]
+        ot, tt = normalise_place_order_args(order_type, side)
 
         if tt == TradeType.BUY:
             return str(self._connector.buy(self._trading_pair, amount, ot, price))

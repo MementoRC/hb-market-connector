@@ -5,6 +5,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `SupportsBracket` / `SupportsOco` protocols and read-only `BracketHandle` / `OcoHandle` handle protocols (#239); `check_linked_protocol_capabilities` contract helper.
+- IB: `place_oco`, and `place_bracket(target, spec)` taking a `LinkedOrderSpec` (single-exit brackets supported). `IbBracket` / `IbOcaGroup` expose the handle members.
+
+### Deprecated
+
+- IB `place_bracket(ref, entry, take_profit, stop_loss)` per-leg form; pass a `LinkedOrderSpec`.
+
+### Changed
+
+- Bump `hb-data-type-primitives` to v0.11.0 (LinkedOrderSpec/LegSpec/LinkKind/LegRole for #239).
+
 ## [0.9.0] - 2026-11-15
 
 ### Added

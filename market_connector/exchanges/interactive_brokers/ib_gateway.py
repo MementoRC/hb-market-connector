@@ -7,10 +7,11 @@ MarketData, Subscriptions) and the contract_resolver.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import warnings
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from datetime import datetime
     from decimal import Decimal
 
@@ -32,13 +33,18 @@ if TYPE_CHECKING:
         SubscriptionHandle,
     )
     from market_connector.exchanges.interactive_brokers.what_if import IbWhatIfResult
-    from market_connector.orders import HBOrder
     from market_connector.transport.protocols import (
         RequestTransport,
         StreamTransport,
     )
 
-from data_type_primitives import TriggerKind, TriggerReference
+from data_type_primitives import (
+    LegRole,
+    LegSpec,
+    LinkedOrderSpec,
+    TriggerKind,
+    TriggerReference,
+)
 from data_type_primitives.common import OrderType
 
 from market_connector.capabilities import LinkedMode, OrderCapabilities
@@ -49,6 +55,20 @@ from market_connector.exchanges.interactive_brokers.mixins import (
     SubscriptionsMixin,
 )
 from market_connector.exchanges.interactive_brokers.trading_rules import IbTradingRules
+from market_connector.hb_compat.primitives import coerce_order_type, coerce_trade_type
+from market_connector.orders import HBOrder
+
+
+def _leg_to_order(leg: LegSpec) -> HBOrder:
+    """Map a venue-neutral ``LegSpec`` to the HBOrder the IB transport consumes."""
+    return HBOrder(
+        order_type=coerce_order_type(leg.order_type),
+        side=coerce_trade_type(leg.trade_type),
+        amount=leg.amount,
+        price=leg.price,
+        trigger=leg.trigger,
+    )
+
 
 # Must match the types ``_hb_to_ib_order`` (transport.py) accepts; enforced by the capability
 # contract test.
@@ -170,20 +190,72 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         resolved = await self.contract_resolver.resolve(ref)
         return await self._transport.place_order(resolved.native, hb_order, options=options)
 
-    async def place_bracket(
-        self, ref: InstrumentRef, entry: HBOrder, take_profit: HBOrder, stop_loss: HBOrder
-    ) -> IbBracket:
-        """Resolve contract once then place an entry with take-profit and stop-loss children.
-
-        Raises GatewayNotStartedError if no contract_resolver has been wired.
-        """
+    async def _resolve_native(self, target: str | InstrumentRef) -> Any:
+        """Resolve a pair string or InstrumentRef to the native contract (see dispatch.py)."""
         if self.contract_resolver is None:
             raise GatewayNotStartedError(
                 "Gateway has no contract_resolver; cannot place orders. "
                 "Use build_ib_gateway() to construct a fully-wired gateway."
             )
-        resolved = await self.contract_resolver.resolve(ref)
-        return await self._transport.place_bracket(resolved.native, entry, take_profit, stop_loss)
+        if isinstance(target, str):
+            return (await self.contract_resolver.resolve_from_pair(target)).native
+        return (await self.contract_resolver.resolve(target)).native
+
+    async def place_bracket(
+        self,
+        target: str | InstrumentRef,
+        spec: LinkedOrderSpec | HBOrder | None = None,
+        take_profit: HBOrder | None = None,
+        stop_loss: HBOrder | None = None,
+        *,
+        options: Mapping[str, Any] | None = None,  # noqa: ARG002  (SupportsBracket signature)
+        entry: HBOrder | None = None,
+    ) -> IbBracket:
+        """Resolve contract once then place an entry with take-profit and/or stop-loss children.
+
+        Preferred form: ``place_bracket(target, spec)`` with a BRACKET ``LinkedOrderSpec``; one
+        or two exits. The legacy per-leg form ``(ref, entry, take_profit, stop_loss)`` still
+        works but emits a DeprecationWarning.
+
+        Raises GatewayNotStartedError if no contract_resolver has been wired.
+        """
+        if isinstance(spec, LinkedOrderSpec):
+            entry_leg = spec.entry
+            entry_order = None if entry_leg is None else _leg_to_order(entry_leg)
+            exits = {leg.role: _leg_to_order(leg) for leg in spec.exits}
+            take_profit = exits.get(LegRole.TAKE_PROFIT)
+            stop_loss = exits.get(LegRole.STOP_LOSS)
+        else:
+            warnings.warn(
+                "place_bracket(ref, entry, take_profit, stop_loss) is deprecated; "
+                "pass a LinkedOrderSpec: place_bracket(target, spec)",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            entry_order = spec if spec is not None else entry
+        if entry_order is None:
+            raise TypeError("place_bracket requires a LinkedOrderSpec or an entry order")
+        native = await self._resolve_native(target)
+        return await self._transport.place_bracket(native, entry_order, take_profit, stop_loss)
+
+    async def place_oco(
+        self,
+        target: str | InstrumentRef,
+        spec: LinkedOrderSpec,
+        *,
+        options: Mapping[str, Any] | None = None,
+    ) -> IbOcaGroup:
+        """Place an OCO ``LinkedOrderSpec`` as one IB OCA group, legs in ``ordered_legs()`` order.
+
+        ``options={"oca_type": OcaType.X}`` selects IB's OCA behaviour (default
+        CANCEL_WITH_BLOCK).
+
+        Raises GatewayNotStartedError if no contract_resolver has been wired.
+        """
+        oca_type = (options or {}).get("oca_type", OcaType.CANCEL_WITH_BLOCK)
+        native = await self._resolve_native(target)
+        orders = [_leg_to_order(leg) for leg in spec.ordered_legs()]
+        return await self._transport.place_oca(native, orders, oca_type)
 
     async def place_oca(
         self,

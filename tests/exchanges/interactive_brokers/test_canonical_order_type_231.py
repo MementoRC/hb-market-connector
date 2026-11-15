@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from data_type_primitives import TriggerKind, TriggerSpec
 from data_type_primitives.common import OrderType as DtpOrderType
 from data_type_primitives.common import TradeType as DtpTradeType
 
@@ -20,7 +21,15 @@ _IB_TYPES = ["MARKET", "LIMIT", "LIMIT_MAKER", "STOP_LOSS", "STOP_LOSS_LIMIT"]
 
 
 def _order(order_type: Any, side: Any = TradeType.BUY) -> HBOrder:
-    return HBOrder(order_type=order_type, side=side, amount=Decimal(1), price=Decimal(10))
+    name = str(getattr(order_type, "name", order_type)).upper()
+    trigger = (
+        TriggerSpec(kind=TriggerKind.ABSOLUTE, value=Decimal(9))
+        if name in ("STOP_LOSS", "STOP_LOSS_LIMIT")
+        else None
+    )
+    return HBOrder(
+        order_type=order_type, side=side, amount=Decimal(1), price=Decimal(10), trigger=trigger
+    )
 
 
 @pytest.mark.parametrize("name", _IB_TYPES)

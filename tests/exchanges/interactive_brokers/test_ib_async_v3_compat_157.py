@@ -20,6 +20,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from data_type_primitives import TriggerKind, TriggerSpec
 
 from market_connector.exchanges.interactive_brokers.exceptions import (
     MarketDataLinesExhaustedError,
@@ -282,15 +283,19 @@ def test_limit_order_carries_exact_decimal_quantity_and_price() -> None:
     assert _exact(order.lmtPrice) == _PRICE
 
 
+def _abs(value: Decimal) -> TriggerSpec:
+    return TriggerSpec(kind=TriggerKind.ABSOLUTE, value=value)
+
+
 def test_stop_order_carries_exact_decimal_quantity_and_stop_price() -> None:
-    order = _hb_to_ib_order(_hb(OrderType.STOP_LOSS, stop_price=_STOP))
+    order = _hb_to_ib_order(_hb(OrderType.STOP_LOSS, trigger=_abs(_STOP)))
 
     assert _exact(order.totalQuantity) == _QTY
     assert _exact(order.auxPrice) == _STOP
 
 
 def test_stop_limit_order_carries_exact_decimal_prices() -> None:
-    order = _hb_to_ib_order(_hb(OrderType.STOP_LOSS_LIMIT, price=_PRICE, stop_price=_STOP))
+    order = _hb_to_ib_order(_hb(OrderType.STOP_LOSS_LIMIT, price=_PRICE, trigger=_abs(_STOP)))
 
     assert _exact(order.totalQuantity) == _QTY
     assert _exact(order.lmtPrice) == _PRICE
@@ -327,7 +332,7 @@ def test_stop_order_decimal_serialises_in_plain_notation() -> None:
             order_type=OrderType.STOP_LOSS,
             side=TradeType.SELL,
             amount=Decimal("1E+2"),
-            stop_price=Decimal("1E-7"),
+            trigger=_abs(Decimal("1E-7")),
         )
     )
 

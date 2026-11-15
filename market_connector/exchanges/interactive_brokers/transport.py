@@ -34,6 +34,8 @@ else:
     except ImportError:  # pragma: no cover - optional dep
         IB = None  # noqa: F841
 
+from data_type_primitives import TriggerKind, TriggerReference
+
 from market_connector.contracts.protocols import ResolvedContract
 from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
@@ -394,46 +396,58 @@ def _apply_order_options(
     order.algoParams = [TagValue("adaptivePriority", options.adaptive_priority.value)]
 
 
+def _ib_stop_trigger_price(hb_order: HBOrder) -> Decimal:
+    """Return the IB ``auxPrice`` for a stop order's trigger, or raise UnsupportedOrderError."""
+    trigger = hb_order.trigger
+    if trigger is None:  # unreachable via HBOrder validation; guards model_construct bypass
+        raise ValueError(f"{hb_order.order_type.name} order requires a trigger")
+    if trigger.kind != TriggerKind.ABSOLUTE:
+        raise UnsupportedOrderError(
+            exchange="interactive_brokers",
+            feature=f"trigger.kind={trigger.kind.name}",
+            reason="IB STP/STP LMT only supports ABSOLUTE price triggers",
+        )
+    if trigger.reference != TriggerReference.LAST:
+        raise UnsupportedOrderError(
+            exchange="interactive_brokers",
+            feature=f"trigger.reference={trigger.reference.name}",
+            reason="IB STP/STP LMT only supports LAST price triggers",
+        )
+    return trigger.value
+
+
 def _hb_to_ib_order(hb_order: HBOrder) -> Any:
     """Map an HBOrder to an ib_async Order.
 
     Supported types:
         MARKET: ``MKT`` order.
         LIMIT: ``LMT`` order at ``price``.
-        STOP_LOSS: ``STP`` order triggered at ``stop_price`` (``auxPrice``).
-        STOP_LOSS_LIMIT: ``STP LMT`` order triggered at ``stop_price`` (``auxPrice``)
+        STOP_LOSS: ``STP`` order triggered at ``trigger.value`` (``auxPrice``).
+        STOP_LOSS_LIMIT: ``STP LMT`` order triggered at ``trigger.value`` (``auxPrice``)
             and placed at ``price`` (``lmtPrice``).
 
-    ``stop_price`` is only valid for STOP_LOSS/STOP_LOSS_LIMIT. LIMIT_MAKER (post-only)
+    Only ABSOLUTE/LAST triggers are expressible. LIMIT_MAKER (post-only)
     is rejected because IB has no post-only equivalent. Other types are unsupported.
+    Trigger/type consistency is enforced by ``HBOrder`` at construction.
 
     Args:
         hb_order: Immutable order placement request with order_type, side,
-            amount, optional price, optional stop_price, time_in_force (-> ``tif``)
+            amount, optional price, optional trigger, time_in_force (-> ``tif``)
             and outside_rth (-> ``outsideRth``, set only when True).
 
     Returns:
         An ``ib_async.Order`` instance ready to pass to ``IB.placeOrder``.
 
     Raises:
-        ValueError: When a required price/stop_price is missing, or a stop_price is
-            supplied for a non-stop order type.
-        UnsupportedOrderError: For LIMIT_MAKER or any other unsupported order type.
+        ValueError: When a required price is missing.
+        UnsupportedOrderError: For LIMIT_MAKER, any other unsupported order type, or a
+            trigger kind/reference IB STP cannot express.
     """
     from ib_async import Order  # noqa: PLC0415 — lazy, ib_async is optional
 
     from market_connector.orders import OrderType, TradeType  # noqa: PLC0415
 
     action = "BUY" if hb_order.side == TradeType.BUY else "SELL"
-
-    if hb_order.stop_price is not None and hb_order.order_type in (
-        OrderType.MARKET,
-        OrderType.LIMIT,
-    ):
-        raise ValueError(
-            "stop_price is only valid for STOP_LOSS/STOP_LOSS_LIMIT orders, "
-            f"not {hb_order.order_type}"
-        )
 
     if hb_order.order_type == OrderType.MARKET:
         market = Order(action=action, orderType="MKT", totalQuantity=_exact(hb_order.amount))
@@ -458,13 +472,11 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
         return limit
 
     if hb_order.order_type == OrderType.STOP_LOSS:
-        if hb_order.stop_price is None:
-            raise ValueError("STOP_LOSS order requires non-None stop_price")
         stop = Order(
             action=action,
             orderType="STP",
             totalQuantity=_exact(hb_order.amount),
-            auxPrice=_exact(hb_order.stop_price),
+            auxPrice=_exact(_ib_stop_trigger_price(hb_order)),
         )
         stop.tif = str(hb_order.time_in_force)
         if hb_order.outside_rth:
@@ -472,8 +484,6 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
         return stop
 
     if hb_order.order_type == OrderType.STOP_LOSS_LIMIT:
-        if hb_order.stop_price is None:
-            raise ValueError("STOP_LOSS_LIMIT order requires non-None stop_price")
         if hb_order.price is None:
             raise ValueError("STOP_LOSS_LIMIT order requires non-None price")
         stop_limit = Order(
@@ -481,7 +491,7 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
             orderType="STP LMT",
             totalQuantity=_exact(hb_order.amount),
             lmtPrice=_exact(hb_order.price),
-            auxPrice=_exact(hb_order.stop_price),
+            auxPrice=_exact(_ib_stop_trigger_price(hb_order)),
         )
         stop_limit.tif = str(hb_order.time_in_force)
         if hb_order.outside_rth:

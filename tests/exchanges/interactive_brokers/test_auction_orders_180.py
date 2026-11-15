@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from data_type_primitives import TriggerKind, TriggerSpec
 
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
@@ -55,7 +56,7 @@ def _order(order_type: OrderType, **extra: Any) -> HBOrder:
     if order_type in (OrderType.LIMIT, OrderType.STOP_LOSS_LIMIT):
         kw["price"] = Decimal("150.25")
     if order_type in (OrderType.STOP_LOSS, OrderType.STOP_LOSS_LIMIT):
-        kw["stop_price"] = Decimal("95")
+        kw["trigger"] = TriggerSpec(kind=TriggerKind.ABSOLUTE, value=Decimal("95"))
     return HBOrder(order_type=order_type, side=TradeType.BUY, amount=Decimal(10), **kw, **extra)
 
 

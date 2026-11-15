@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from data_type_primitives import TriggerKind, TriggerSpec
 
 from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.interactive_brokers.exceptions import (
@@ -63,7 +64,7 @@ def _hb(
         side=side,
         amount=Decimal(amount),
         price=Decimal(price) if price else None,
-        stop_price=Decimal(stop) if stop else None,
+        trigger=TriggerSpec(kind=TriggerKind.ABSOLUTE, value=Decimal(stop)) if stop else None,
         **kw,
     )
 

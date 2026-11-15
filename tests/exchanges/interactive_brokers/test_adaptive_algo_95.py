@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from data_type_primitives import TriggerKind, TriggerSpec
 
 from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayGateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
@@ -65,7 +66,7 @@ def _stop() -> HBOrder:
         order_type=OrderType.STOP_LOSS,
         side=TradeType.SELL,
         amount=Decimal(5),
-        stop_price=Decimal("95"),
+        trigger=TriggerSpec(kind=TriggerKind.ABSOLUTE, value=Decimal("95")),
     )
 
 

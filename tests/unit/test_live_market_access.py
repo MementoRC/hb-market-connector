@@ -11,6 +11,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
+from data_type_primitives.common import OrderType, TradeType
 
 from market_connector.live_market_access import LiveMarketAccess
 
@@ -105,7 +106,9 @@ class TestPlaceOrder:
     def test_buy_delegates_to_connector_buy(
         self, market: LiveMarketAccess, connector: MagicMock
     ) -> None:
-        order_id = market.place_order("LIMIT", "BUY", Decimal("0.001"), Decimal("50000"))
+        order_id = market.place_order(
+            OrderType.LIMIT, TradeType.BUY, Decimal("0.001"), Decimal("50000")
+        )
         connector.buy.assert_called_once()
         call_args = connector.buy.call_args[0]
         assert call_args[0] == TRADING_PAIR
@@ -116,25 +119,29 @@ class TestPlaceOrder:
     def test_sell_delegates_to_connector_sell(
         self, market: LiveMarketAccess, connector: MagicMock
     ) -> None:
-        order_id = market.place_order("LIMIT", "SELL", Decimal("0.001"), Decimal("50000"))
+        order_id = market.place_order(
+            OrderType.LIMIT, TradeType.SELL, Decimal("0.001"), Decimal("50000")
+        )
         connector.sell.assert_called_once()
         call_args = connector.sell.call_args[0]
         assert call_args[0] == TRADING_PAIR
         assert order_id == "sell-001"
 
     def test_buy_is_case_insensitive(self, market: LiveMarketAccess, connector: MagicMock) -> None:
-        market.place_order("limit", "buy", Decimal("0.001"), Decimal("50000"))
+        with pytest.warns(DeprecationWarning):
+            market.place_order("limit", "buy", Decimal("0.001"), Decimal("50000"))
         connector.buy.assert_called_once()
 
     def test_sell_is_case_insensitive(self, market: LiveMarketAccess, connector: MagicMock) -> None:
-        market.place_order("LIMIT", "sell", Decimal("0.001"), Decimal("50000"))
+        with pytest.warns(DeprecationWarning):
+            market.place_order("LIMIT", "sell", Decimal("0.001"), Decimal("50000"))
         connector.sell.assert_called_once()
 
     def test_returns_connector_order_id(
         self, market: LiveMarketAccess, connector: MagicMock
     ) -> None:
         connector.buy.return_value = "custom-id-123"
-        result = market.place_order("LIMIT", "BUY", Decimal("1"), Decimal("100"))
+        result = market.place_order(OrderType.LIMIT, TradeType.BUY, Decimal("1"), Decimal("100"))
         assert result == "custom-id-123"
 
 
@@ -345,6 +352,13 @@ class TestProtocolSatisfaction:
         sf_market = pytest.importorskip("strategy_framework.protocols.market")
         protocol_cls = sf_market.MarketAccessProtocol
         assert isinstance(market, protocol_cls)
+
+    def test_bridge_satisfies_market_access_protocol(self) -> None:
+        from market_connector.hb_compat.bridge import LiveMarketAccess as BridgeAccess
+
+        sf_market = pytest.importorskip("strategy_framework.protocols.market")
+        bridge = BridgeAccess(gateway=MagicMock(), trading_pair=TRADING_PAIR, loop=MagicMock())
+        assert isinstance(bridge, sf_market.MarketAccessProtocol)
 
     def test_satisfies_trading_rules_protocol(self, market: LiveMarketAccess) -> None:
         sf_tr = pytest.importorskip("strategy_framework.protocols.trading_rules")

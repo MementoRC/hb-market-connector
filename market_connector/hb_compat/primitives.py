@@ -25,6 +25,7 @@ which re-exports the *parent hummingbot* ``OrderType``/``TradeType`` for
 source (``hummingbot.core.data_type.common``, not ``data_type_primitives``).
 """
 
+import warnings
 from enum import Enum, StrEnum
 
 from data_type_primitives.common import OrderType as CanonicalOrderType
@@ -144,6 +145,31 @@ def coerce_trade_type(value: object) -> TradeType:
         raise ValueError(f"Unsupported trade type: {value!r}") from None
 
 
+def normalise_place_order_args(
+    order_type: CanonicalOrderType | str,
+    side: CanonicalTradeType | str,
+    *,
+    stacklevel: int = 3,
+) -> tuple[CanonicalOrderType, CanonicalTradeType]:
+    """Normalise ``place_order`` inputs to canonical dtp members.
+
+    A ``str`` for either argument is deprecated and emits ``DeprecationWarning``.
+
+    Raises:
+        ValueError: If either value names no supported member.
+    """
+    if isinstance(order_type, str) or isinstance(side, str):
+        warnings.warn(
+            "Passing str for place_order order_type/side is deprecated; pass "
+            "data_type_primitives.common OrderType/TradeType members instead.",
+            DeprecationWarning,
+            stacklevel=stacklevel,
+        )
+    canonical_ot = CanonicalOrderType[coerce_order_type(order_type).name]
+    canonical_tt = CanonicalTradeType[coerce_trade_type(side).name]
+    return canonical_ot, canonical_tt
+
+
 __all__ = [
     "CanonicalOrderType",
     "CanonicalTradeType",
@@ -152,5 +178,6 @@ __all__ = [
     "coerce_order_type",
     "coerce_trade_type",
     "from_canonical",
+    "normalise_place_order_args",
     "to_canonical",
 ]

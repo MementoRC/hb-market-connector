@@ -1,6 +1,6 @@
-"""Sync wrapper adapting ExchangeGateway -> strategy-framework protocols.
+"""Sync wrapper adapting ExchangeGateway to the strategy-framework protocol shapes.
 
-This is the ONLY module in hb-market-connector that imports strategy-framework.
+Satisfies the protocols structurally; it does not import strategy-framework.
 Uses run_coroutine_threadsafe because the event loop is always running
 in the hummingbot process.
 """
@@ -11,8 +11,12 @@ import asyncio
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import TYPE_CHECKING, Any
 
+from market_connector.hb_compat.primitives import normalise_place_order_args
+
 if TYPE_CHECKING:
     from decimal import Decimal
+
+    from data_type_primitives.common import OrderType, TradeType
 
     from market_connector.protocols import ExchangeGateway
 
@@ -55,9 +59,17 @@ class LiveMarketAccess:
 
     # --- MarketAccessProtocol ---
 
-    def place_order(self, order_type: str, side: str, amount: Decimal, price: Decimal) -> str:
+    def place_order(
+        self,
+        order_type: OrderType | str,
+        side: TradeType | str,
+        amount: Decimal,
+        price: Decimal,
+    ) -> str:
+        """Place an order; ``str`` order_type/side is deprecated (pass dtp enums)."""
+        ot, tt = normalise_place_order_args(order_type, side)
         return self._run(  # type: ignore[no-any-return]
-            self._gateway.place_order(self._trading_pair, order_type, side, amount, price)
+            self._gateway.place_order(self._trading_pair, ot, tt, amount, price)
         )
 
     def cancel_order(self, order_id: str) -> bool:

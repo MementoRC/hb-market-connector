@@ -11,6 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `place_order` on the hb_compat bridge `LiveMarketAccess` and `live_market_access.LiveMarketAccess` is now typed `OrderType | str` / `TradeType | str` on the `data_type_primitives.common` enums; passing `str` is deprecated (emits `DeprecationWarning`, removal planned). Fixes `AttributeError` for enum inputs in `live_market_access` (#243).
 - BREAKING: Coinbase `place_order` raises `UnsupportedOrderError` (was `ValueError`) for valid-but-unsupported order types; unknown strings still raise `ValueError`. IB `_hb_to_ib_order` (and `place_order`/`what_if`) raises `UnsupportedOrderError` (was `NotImplementedError`) for `LIMIT_MAKER` and unknown types. IB `place_bracket`/`place_oca` without a contract resolver raise `GatewayNotStartedError` (was `RuntimeError`). Update `except` clauses accordingly (#236).
 - `OrderOutcomeUnknownError` now also subclasses `data_type_primitives.OrderOutcomeUnknownError` (dtp >=v0.10.0); pickle round-trip fixed (#234).
 

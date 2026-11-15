@@ -9,6 +9,7 @@ Public API:
 """
 
 from market_connector.__about__ import __version__
+from market_connector.capabilities import LinkedMode, OrderCapabilities
 from market_connector.exceptions import (
     AuthenticationError,
     ExchangeUnavailableError,
@@ -30,14 +31,23 @@ from market_connector.primitives import (
     TradeEvent,
     TradeType,
 )
-from market_connector.protocols import ExchangeGateway, ExecutionGateway, MarketDataGateway
+from market_connector.protocols import (
+    ExchangeGateway,
+    ExecutionGateway,
+    HasCapabilities,
+    MarketDataGateway,
+)
 
 __all__ = [
     "__version__",
     # Protocols
     "ExchangeGateway",
     "ExecutionGateway",
+    "HasCapabilities",
     "MarketDataGateway",
+    # Capabilities
+    "LinkedMode",
+    "OrderCapabilities",
     # Primitives
     "OpenOrder",
     "OrderBookSnapshot",

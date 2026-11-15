@@ -19,16 +19,20 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 import pytest
+from data_type_primitives.common import OrderType
 from rate_limit.testing import assert_conforms_rest_limiter
 
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.primitives import OrderBookSnapshot
+from market_connector.protocols import HasCapabilities
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable, Iterable
 
     from rate_limit import Clock, Sleep
 
     from market_connector.auth.protocols import Request, Signer
+    from market_connector.capabilities import OrderCapabilities
     from market_connector.protocols import ExchangeGateway
     from market_connector.symbols.mapper import SymbolMapper
     from market_connector.ws_models.auth_models import WsAuthModel
@@ -172,6 +176,95 @@ class GatewayContractTestBase:
         await gateway.start()
         candles = await gateway.get_candles(trading_pair, "1m", 10)
         assert isinstance(candles, list)
+
+
+# ---------------------------------------------------------------------------
+# OrderCapabilities contract
+# ---------------------------------------------------------------------------
+
+
+async def check_order_capabilities(
+    capabilities: OrderCapabilities,
+    validate: Callable[[OrderType], Awaitable[None]],
+    *,
+    unsupported_probes: Iterable[OrderType] | None = None,
+) -> list[str]:
+    """Check a gateway's advertised order types against its placement validation.
+
+    ``validate(order_type)`` runs the gateway's network-free placement validation. Only
+    ``UnsupportedOrderError`` is a capability statement; any other exception (or success) means
+    the adapter did not reject the type as unsupported.
+
+    Args:
+        capabilities: The descriptor under test.
+        validate: Async placement validation for one order type.
+        unsupported_probes: Non-advertised types that must be rejected. ``None`` probes every
+            canonical ``OrderType`` the descriptor does not advertise.
+
+    Returns:
+        Human-readable failures; empty when descriptor and adapter agree.
+    """
+    failures: list[str] = []
+    for order_type in sorted(capabilities.order_types, key=lambda t: t.name):
+        if await _rejects_as_unsupported(validate, order_type):
+            failures.append(
+                f"{order_type.name}: advertised in order_types but adapter raised "
+                "UnsupportedOrderError"
+            )
+    probes = (
+        [t for t in OrderType if t not in capabilities.order_types]
+        if unsupported_probes is None
+        else [t for t in unsupported_probes if t not in capabilities.order_types]
+    )
+    for order_type in probes:
+        if not await _rejects_as_unsupported(validate, order_type):
+            failures.append(
+                f"{order_type.name}: not advertised in order_types but adapter did not raise "
+                "UnsupportedOrderError"
+            )
+    return failures
+
+
+async def _rejects_as_unsupported(
+    validate: Callable[[OrderType], Awaitable[None]], order_type: OrderType
+) -> bool:
+    try:
+        await validate(order_type)
+    except UnsupportedOrderError:
+        return True
+    except Exception:
+        # Not a capability statement (e.g. fake REST failure): treated as "not rejected".
+        return False
+    return False
+
+
+class OrderCapabilitiesContractBase:
+    """Abstract base: subclass, provide a ``gateway`` fixture and ``validate_placement``.
+
+    Class attribute ``unsupported_probes`` (default ``None``) narrows the non-advertised types
+    probed, for adapters whose request model cannot carry every canonical type.
+    """
+
+    unsupported_probes: Iterable[OrderType] | None = None
+
+    @pytest.fixture
+    def gateway(self) -> HasCapabilities:
+        raise NotImplementedError("Subclass must provide a gateway fixture")
+
+    def validate_placement(self, gateway: Any) -> Callable[[OrderType], Awaitable[None]]:
+        raise NotImplementedError("Subclass must implement validate_placement")
+
+    def test_gateway_has_capabilities(self, gateway: HasCapabilities) -> None:
+        assert isinstance(gateway, HasCapabilities)
+
+    @pytest.mark.asyncio
+    async def test_capabilities_match_adapter(self, gateway: HasCapabilities) -> None:
+        failures = await check_order_capabilities(
+            gateway.order_capabilities,
+            self.validate_placement(gateway),
+            unsupported_probes=self.unsupported_probes,
+        )
+        assert failures == []
 
 
 # ---------------------------------------------------------------------------

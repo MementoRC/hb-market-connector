@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from data_type_primitives.common import OrderType
+
+from market_connector.capabilities import OrderCapabilities
 from market_connector.exchanges.coinbase.endpoints import ENDPOINT_REGISTRY
 from market_connector.exchanges.coinbase.factory import coinbase_signer_factory
 from market_connector.exchanges.coinbase.mixins.accounts import AccountsMixin
@@ -24,9 +27,23 @@ from market_connector.ws_models.decoder import JsonEnvelopeDecoder
 if TYPE_CHECKING:
     from market_connector.exchanges.coinbase.config import CoinbaseConfig
 
+COINBASE_ORDER_CAPABILITIES = OrderCapabilities(
+    order_types=frozenset({OrderType.LIMIT, OrderType.LIMIT_MAKER, OrderType.MARKET}),
+    trigger_kinds=frozenset(),
+    trigger_references=frozenset(),
+    supports_trailing=False,
+    linked=frozenset(),
+    native_linked=False,
+)
+
 
 class CoinbaseGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMixin):
     """Coinbase Advanced Trade gateway — implements ExchangeGateway protocol."""
+
+    @property
+    def order_capabilities(self) -> OrderCapabilities:
+        """Order features this gateway supports (see ``HasCapabilities``)."""
+        return COINBASE_ORDER_CAPABILITIES
 
     def __init__(self, config: CoinbaseConfig) -> None:
         self._config = config

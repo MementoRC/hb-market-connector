@@ -6,7 +6,11 @@ import math
 import time
 from typing import TYPE_CHECKING, Any
 
-from market_connector.exceptions import GatewayNotStartedError
+from data_type_primitives import TriggerKind, TriggerReference
+from data_type_primitives.common import OrderType as CanonicalOrderType
+
+from market_connector.capabilities import OrderCapabilities
+from market_connector.exceptions import GatewayNotStartedError, UnsupportedOrderError
 from market_connector.exchanges.kraken.age_penalties import (
     amend_penalty,
     cancel_penalty,
@@ -62,6 +66,19 @@ _CONDITIONAL_KEYS = frozenset(_ORDER_TYPE_MAP) - {"MARKET", "LIMIT", "LIMIT_MAKE
 # Conditional types that also carry a limit price (sent as ``price2``).
 _LIMIT_KEYS = frozenset({"STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"})
 
+# Derived from _ORDER_TYPE_MAP so the descriptor cannot drift from the adapter.
+# Triggers: absolute price, percent (``price_in_percent``) and trailing distance offsets.
+KRAKEN_ORDER_CAPABILITIES = OrderCapabilities(
+    order_types=frozenset(CanonicalOrderType[name] for name in _ORDER_TYPE_MAP),
+    trigger_kinds=frozenset(
+        {TriggerKind.ABSOLUTE, TriggerKind.PERCENT, TriggerKind.RELATIVE_OFFSET}
+    ),
+    trigger_references=frozenset({TriggerReference.LAST}),
+    supports_trailing=True,
+    linked=frozenset(),
+    native_linked=False,
+)
+
 
 def _order_type_key(order_type: object) -> str:
     """Name-based key for any OrderType enum (hummingbot or local) or string."""
@@ -77,12 +94,17 @@ def _to_kraken_ordertype(order_type: object) -> str:
             mirror (matched by name), or a case-insensitive string.
 
     Raises:
-        ValueError: For unsupported types.
+        UnsupportedOrderError: A valid canonical type Kraken does not map (e.g. ``AMM_SWAP``).
+        ValueError: For names that are not a canonical order type (malformed input).
     """
     key = _order_type_key(order_type)
-    if key not in _ORDER_TYPE_MAP:
-        raise ValueError(f"Unsupported order type: {order_type!r}.")
-    return _ORDER_TYPE_MAP[key]
+    if key in _ORDER_TYPE_MAP:
+        return _ORDER_TYPE_MAP[key]
+    if key in CanonicalOrderType.__members__:
+        raise UnsupportedOrderError(
+            exchange="kraken", order_type=key, reason="order type not supported by Kraken"
+        )
+    raise ValueError(f"Unsupported order type: {order_type!r}.")
 
 
 def _trailing_fields(

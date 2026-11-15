@@ -9,6 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `UnsupportedOrderError(GatewayError)` (exported from `market_connector`) with `exchange`, `order_type`, `feature`, `reason` attributes, for well-formed orders a venue cannot honour (#236).
 - `HBOrder.trigger: TriggerSpec | None` for conditional order types (STOP_LOSS, STOP_LOSS_LIMIT); IB builds `auxPrice` from an ABSOLUTE/LAST trigger and raises `UnsupportedOrderError` for other kinds/references (#237).
+- `OrderCapabilities` (frozen descriptor), `LinkedMode` and the `HasCapabilities` protocol (exported from `market_connector`); Coinbase, Kraken and IB gateways expose `order_capabilities` (#238).
+- `market_connector.testing.contract.check_order_capabilities` and `OrderCapabilitiesContractBase` to verify a descriptor against the adapter's `UnsupportedOrderError` behaviour (#238).
 
 ### Deprecated
 
@@ -16,6 +18,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Kraken `place_order` raises `UnsupportedOrderError` (was `ValueError`) for valid canonical order types it does not map (e.g. `AMM_SWAP`); unknown strings still raise `ValueError` (#238).
 - `place_order` on the hb_compat bridge `LiveMarketAccess` and `live_market_access.LiveMarketAccess` is now typed `OrderType | str` / `TradeType | str` on the `data_type_primitives.common` enums; passing `str` is deprecated (emits `DeprecationWarning`, removal planned). Fixes `AttributeError` for enum inputs in `live_market_access` (#243).
 - Order validation moved from the IB transport to `HBOrder` construction: conditional types require a trigger, a trigger on MARKET/LIMIT/LIMIT_MAKER is rejected, STOP_LOSS_LIMIT requires `price`. `ValueError` now surfaces at construction, not at `_hb_to_ib_order` (#237).
 - BREAKING: Coinbase `place_order` raises `UnsupportedOrderError` (was `ValueError`) for valid-but-unsupported order types; unknown strings still raise `ValueError`. IB `_hb_to_ib_order` (and `place_order`/`what_if`) raises `UnsupportedOrderError` (was `NotImplementedError`) for `LIMIT_MAKER` and unknown types. IB `place_bracket`/`place_oca` without a contract resolver raise `GatewayNotStartedError` (was `RuntimeError`). Update `except` clauses accordingly (#236).

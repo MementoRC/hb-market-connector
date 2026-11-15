@@ -144,7 +144,8 @@ async def test_place_order_missing_price_for_limit_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_place_order_unsupported_type_raises() -> None:
-    # Conditional (#209) and trailing (#223) types are supported; unknown names are not.
+    # Conditional (#209) and trailing (#223) types are supported; unknown names are not
+    # (malformed input -> ValueError; valid canonical-but-unmapped -> UnsupportedOrderError, #238).
     rest = MockRestClient()
     mixin = _TestableOrders(rest)
     with pytest.raises(ValueError, match="Unsupported order type"):

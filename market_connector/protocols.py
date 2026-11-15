@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager as AsyncContextManager
     from decimal import Decimal
 
+    from market_connector.capabilities import OrderCapabilities
     from market_connector.contracts.protocols import ContractResolver
     from market_connector.hb_compat.primitives import CanonicalOrderType, CanonicalTradeType
     from market_connector.primitives import (
@@ -32,6 +33,14 @@ if TYPE_CHECKING:
 
 # Note: @runtime_checkable isinstance checks verify method *names* only,
 # not parameter types or return types. Use mypy for full type checking.
+
+
+@runtime_checkable
+class HasCapabilities(Protocol):
+    """Gateway that declares the order features it supports."""
+
+    @property
+    def order_capabilities(self) -> OrderCapabilities: ...
 
 
 @runtime_checkable

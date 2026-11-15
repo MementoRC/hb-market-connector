@@ -70,9 +70,8 @@ _LIMIT_KEYS = frozenset({"STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"})
 # Triggers: absolute price, percent (``price_in_percent``) and trailing distance offsets.
 KRAKEN_ORDER_CAPABILITIES = OrderCapabilities(
     order_types=frozenset(CanonicalOrderType[name] for name in _ORDER_TYPE_MAP),
-    trigger_kinds=frozenset(
-        {TriggerKind.ABSOLUTE, TriggerKind.PERCENT, TriggerKind.RELATIVE_OFFSET}
-    ),
+    # RELATIVE_OFFSET is not advertised until Kraken adopts TriggerSpec (P6, #240).
+    trigger_kinds=frozenset({TriggerKind.ABSOLUTE, TriggerKind.PERCENT}),
     trigger_references=frozenset({TriggerReference.LAST}),
     supports_trailing=True,
     linked=frozenset(),

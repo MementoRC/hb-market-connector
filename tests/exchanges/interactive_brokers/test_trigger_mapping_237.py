@@ -68,7 +68,8 @@ class TestTriggerMapsLikeStopPrice:
     ):
         via_trigger = _hb_to_ib_order(_from_trigger(order_type, price))
         via_stop_price = _hb_to_ib_order(_from_stop_price(order_type, price))
-        assert via_trigger == via_stop_price
+        # ib_async.Order.__eq__ is identity, so compare field by field.
+        assert vars(via_trigger) == vars(via_stop_price)
 
     def test_tif_and_outside_rth_identical(
         self, order_type: OrderType, price: Decimal | None, ib_type: str
@@ -78,7 +79,7 @@ class TestTriggerMapsLikeStopPrice:
         via_stop_price = _hb_to_ib_order(_from_stop_price(order_type, price, **extra))
         assert via_trigger.tif == via_stop_price.tif == "GTC"
         assert via_trigger.outsideRth is via_stop_price.outsideRth is True
-        assert via_trigger == via_stop_price
+        assert vars(via_trigger) == vars(via_stop_price)
 
     def test_mapping_from_trigger_emits_no_deprecation_warning(
         self, order_type: OrderType, price: Decimal | None, ib_type: str

@@ -346,6 +346,13 @@ class TestProtocolSatisfaction:
         protocol_cls = sf_market.MarketAccessProtocol
         assert isinstance(market, protocol_cls)
 
+    def test_bridge_satisfies_market_access_protocol(self) -> None:
+        from market_connector.hb_compat.bridge import LiveMarketAccess as BridgeAccess
+
+        sf_market = pytest.importorskip("strategy_framework.protocols.market")
+        bridge = BridgeAccess(gateway=MagicMock(), trading_pair=TRADING_PAIR, loop=MagicMock())
+        assert isinstance(bridge, sf_market.MarketAccessProtocol)
+
     def test_satisfies_trading_rules_protocol(self, market: LiveMarketAccess) -> None:
         sf_tr = pytest.importorskip("strategy_framework.protocols.trading_rules")
         protocol_cls = sf_tr.TradingRulesProtocol

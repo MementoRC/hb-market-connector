@@ -6,14 +6,17 @@ never on a concrete connector class.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from contextlib import AbstractAsyncContextManager as AsyncContextManager
     from decimal import Decimal
 
+    from data_type_primitives import LinkedOrderSpec
+
     from market_connector.capabilities import OrderCapabilities
+    from market_connector.contracts.instrument import InstrumentRef
     from market_connector.contracts.protocols import ContractResolver
     from market_connector.hb_compat.primitives import CanonicalOrderType, CanonicalTradeType
     from market_connector.primitives import (
@@ -41,6 +44,66 @@ class HasCapabilities(Protocol):
 
     @property
     def order_capabilities(self) -> OrderCapabilities: ...
+
+
+@runtime_checkable
+class BracketHandle(Protocol):
+    """Read-only view of a placed bracket (entry plus one or two exits)."""
+
+    @property
+    def group_id(self) -> str | int: ...
+
+    @property
+    def entry_client_id(self) -> str | int: ...
+
+    @property
+    def take_profit_client_id(self) -> str | int | None: ...
+
+    @property
+    def stop_loss_client_id(self) -> str | int | None: ...
+
+    @property
+    def emulated(self) -> bool: ...
+
+
+@runtime_checkable
+class OcoHandle(Protocol):
+    """Read-only view of a placed OCO group; ids follow ``LinkedOrderSpec.ordered_legs()``."""
+
+    @property
+    def group_id(self) -> str | int: ...
+
+    @property
+    def leg_client_ids(self) -> tuple[str | int, ...]: ...
+
+    @property
+    def emulated(self) -> bool: ...
+
+
+@runtime_checkable
+class SupportsBracket(Protocol):
+    """Gateway that places bracket orders (entry with take-profit and/or stop-loss)."""
+
+    async def place_bracket(
+        self,
+        target: str | InstrumentRef,
+        spec: LinkedOrderSpec,
+        *,
+        options: Mapping[str, Any] | None = None,
+    ) -> BracketHandle: ...
+
+
+@runtime_checkable
+class SupportsOco(Protocol):
+    """Gateway that places OCO (one-cancels-other) groups."""
+
+    async def place_oco(
+        self,
+        target: str | InstrumentRef,
+        spec: LinkedOrderSpec,
+        *,
+        options: Mapping[str, Any] | None = None,
+    ) -> OcoHandle: ...
 
 
 @runtime_checkable

@@ -22,9 +22,10 @@ import pytest
 from data_type_primitives.common import OrderType
 from rate_limit.testing import assert_conforms_rest_limiter
 
+from market_connector.capabilities import LinkedMode
 from market_connector.exceptions import UnsupportedOrderError
 from market_connector.primitives import OrderBookSnapshot
-from market_connector.protocols import HasCapabilities
+from market_connector.protocols import HasCapabilities, SupportsBracket, SupportsOco
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
@@ -221,6 +222,33 @@ async def check_order_capabilities(
             failures.append(
                 f"{order_type.name}: not advertised in order_types but adapter did not raise "
                 "UnsupportedOrderError"
+            )
+    return failures
+
+
+def check_linked_protocol_capabilities(gateway: object) -> list[str]:
+    """Check that a gateway implementing a linked-order protocol advertises the matching mode.
+
+    A ``SupportsBracket`` implementer must list ``LinkedMode.BRACKET`` in its
+    ``order_capabilities.linked``; a ``SupportsOco`` implementer must list ``LinkedMode.OCO``.
+    Gateways implementing neither are not required to advertise anything.
+
+    Returns:
+        Human-readable failures; empty when protocols and descriptor agree.
+    """
+    required = [
+        (SupportsBracket, LinkedMode.BRACKET, "place_bracket"),
+        (SupportsOco, LinkedMode.OCO, "place_oco"),
+    ]
+    failures: list[str] = []
+    for protocol, mode, method in required:
+        if not isinstance(gateway, protocol):
+            continue
+        caps = getattr(gateway, "order_capabilities", None)
+        if caps is None or mode not in caps.linked:
+            failures.append(
+                f"{mode.name}: gateway implements {method} ({protocol.__name__}) but does not "
+                f"advertise LinkedMode.{mode.name} in order_capabilities.linked"
             )
     return failures
 

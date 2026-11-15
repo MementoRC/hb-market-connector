@@ -32,10 +32,14 @@ from market_connector.primitives import (
     TradeType,
 )
 from market_connector.protocols import (
+    BracketHandle,
     ExchangeGateway,
     ExecutionGateway,
     HasCapabilities,
     MarketDataGateway,
+    OcoHandle,
+    SupportsBracket,
+    SupportsOco,
 )
 
 __all__ = [
@@ -45,6 +49,10 @@ __all__ = [
     "ExecutionGateway",
     "HasCapabilities",
     "MarketDataGateway",
+    "SupportsBracket",
+    "SupportsOco",
+    "BracketHandle",
+    "OcoHandle",
     # Capabilities
     "LinkedMode",
     "OrderCapabilities",

@@ -513,21 +513,29 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
     )
 
 
-def _validate_bracket(entry: HBOrder, take_profit: HBOrder, stop_loss: HBOrder) -> None:
+def _validate_bracket(
+    entry: HBOrder, take_profit: HBOrder | None, stop_loss: HBOrder | None
+) -> None:
     """Reject a malformed bracket with ValueError before anything reaches IB."""
     from market_connector.orders import OrderType  # noqa: PLC0415
 
+    if take_profit is None and stop_loss is None:
+        raise ValueError("a bracket needs at least one of take_profit or stop_loss")
     if entry.order_type not in (OrderType.MARKET, OrderType.LIMIT):
         raise ValueError(f"bracket entry must be MARKET or LIMIT, not {entry.order_type}")
-    if take_profit.order_type != OrderType.LIMIT:
+    if take_profit is not None and take_profit.order_type != OrderType.LIMIT:
         raise ValueError(f"bracket take_profit must be LIMIT, not {take_profit.order_type}")
-    if stop_loss.order_type not in (OrderType.STOP_LOSS, OrderType.STOP_LOSS_LIMIT):
+    if stop_loss is not None and stop_loss.order_type not in (
+        OrderType.STOP_LOSS,
+        OrderType.STOP_LOSS_LIMIT,
+    ):
         raise ValueError(
             f"bracket stop_loss must be STOP_LOSS or STOP_LOSS_LIMIT, not {stop_loss.order_type}"
         )
-    if take_profit.side == entry.side or stop_loss.side == entry.side:
+    children = [o for o in (take_profit, stop_loss) if o is not None]
+    if any(c.side == entry.side for c in children):
         raise ValueError("bracket children must be on the opposite side of the entry")
-    if take_profit.amount != entry.amount or stop_loss.amount != entry.amount:
+    if any(c.amount != entry.amount for c in children):
         raise ValueError("bracket children must have the same amount as the entry")
 
 
@@ -1322,15 +1330,20 @@ class IbGatewayTransport:
             raise ConnectionLostError(1100, "transport not connected")
 
     async def place_bracket(
-        self, native_contract: Any, entry: HBOrder, take_profit: HBOrder, stop_loss: HBOrder
+        self,
+        native_contract: Any,
+        entry: HBOrder,
+        take_profit: HBOrder | None,
+        stop_loss: HBOrder | None,
     ) -> IbBracket:
-        """Place an entry with attached take-profit and stop-loss children as one bracket.
+        """Place an entry with attached take-profit and/or stop-loss children as one bracket.
 
         The entry must be MARKET/LIMIT, the take-profit LIMIT and the stop-loss
-        STOP_LOSS/STOP_LOSS_LIMIT; both children take the opposite side and the
-        entry's amount. All validation runs before any IB call (ValueError). The
-        three legs are sent back to back with the transmit flag only on the last,
-        so IB activates the bracket atomically.
+        STOP_LOSS/STOP_LOSS_LIMIT; children take the opposite side and the
+        entry's amount. At least one child is required (the other may be ``None``).
+        All validation runs before any IB call (ValueError). The legs are sent
+        back to back with the transmit flag only on the last, so IB activates the
+        bracket atomically.
 
         If any leg fails (rejected, timed out or otherwise), every other placed leg
         not known to be rejected is cancelled. A rejection then raises
@@ -1345,16 +1358,21 @@ class IbGatewayTransport:
         self._require_writable("place_bracket")
         self._require_connected()
         _validate_bracket(entry, take_profit, stop_loss)
-        ib_orders = [_hb_to_ib_order(o) for o in (entry, take_profit, stop_loss)]
+        legs = [o for o in (entry, take_profit, stop_loss) if o is not None]
+        ib_orders = [_hb_to_ib_order(o) for o in legs]
         parent_id = self._ib.client.getReqId()
-        ids = [parent_id, self._ib.client.getReqId(), self._ib.client.getReqId()]
-        for ib_order, order_id, transmit in zip(ib_orders, ids, (False, False, True), strict=True):
+        ids = [parent_id, *(self._ib.client.getReqId() for _ in legs[1:])]
+        for position, (ib_order, order_id) in enumerate(zip(ib_orders, ids, strict=True)):
             ib_order.orderId = order_id
             ib_order.parentId = 0 if order_id == parent_id else parent_id
-            ib_order.transmit = transmit
+            ib_order.transmit = position == len(ib_orders) - 1
         trades = [self._submit_leg(native_contract, o) for o in ib_orders]
-        parent, tp_handle, sl_handle = await self._settle_legs(trades)
-        return IbBracket(parent=parent, take_profit=tp_handle, stop_loss=sl_handle)
+        handles = iter(await self._settle_legs(trades))
+        return IbBracket(
+            parent=next(handles),
+            take_profit=None if take_profit is None else next(handles),
+            stop_loss=None if stop_loss is None else next(handles),
+        )
 
     async def place_oca(
         self,

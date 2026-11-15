@@ -19,6 +19,7 @@ from market_connector.exceptions import (
     OrderRejectedError,
     RateLimitError,
     SubscriptionLimitError,
+    UnsupportedOrderError,
 )
 from market_connector.live_market_access import LiveMarketAccess
 from market_connector.primitives import (
@@ -54,6 +55,7 @@ __all__ = [
     "OrderRejectedError",
     "RateLimitError",
     "SubscriptionLimitError",
+    "UnsupportedOrderError",
     # Adapters
     "LiveMarketAccess",
 ]

@@ -2,8 +2,8 @@
 
 Contract: ``order_type`` and ``side`` are normalised by member NAME (case-insensitive), so a
 ``data_type_primitives.common`` member, a string, or the local StrEnum all produce the SAME
-request payload. Unsupported types raise ``ValueError("Unsupported order type ...")`` before
-any HTTP call.
+request payload. Valid-but-unsupported types raise ``UnsupportedOrderError`` and unknown strings
+raise ``ValueError("Unsupported order type ...")``, both before any HTTP call.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import pytest
 from data_type_primitives.common import OrderType as DtpOrderType
 from data_type_primitives.common import TradeType as DtpTradeType
 
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.coinbase.mixins.orders import OrdersMixin
 from market_connector.primitives import OrderType, TradeType
 from market_connector.transport.response import Response
@@ -144,7 +145,7 @@ class TestUnsupportedTypes:
     async def test_raises_unsupported_before_http(
         self, orders: _Orders, rest: _RecordingRest, order_type: Any
     ) -> None:
-        with pytest.raises(ValueError, match="Unsupported order type"):
+        with pytest.raises(UnsupportedOrderError):
             await orders.place_order(
                 "BTC-USD", order_type, TradeType.BUY, _AMOUNT, _PRICE, client_order_id="c1"
             )

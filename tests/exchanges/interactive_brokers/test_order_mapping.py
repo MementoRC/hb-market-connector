@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.interactive_brokers.transport import _hb_to_ib_order
 from market_connector.orders import HBOrder, OrderType, TradeType
 
@@ -80,9 +81,9 @@ class TestUnsupportedOrderTypes:
             OrderType.LIMIT_MAKER,
         ],
     )
-    def test_unsupported_types_raise_not_implemented(self, order_type: OrderType):
+    def test_unsupported_types_raise_unsupported_order_error(self, order_type: OrderType):
         with (
             patch.dict("sys.modules", {"ib_async": MagicMock()}),
-            pytest.raises(NotImplementedError, match=r"(?i)post-only"),
+            pytest.raises(UnsupportedOrderError, match=r"(?i)post-only"),
         ):
             _hb_to_ib_order(_make_order(order_type, TradeType.BUY))

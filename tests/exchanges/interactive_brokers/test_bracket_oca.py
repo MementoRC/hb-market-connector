@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     OrderRejectedError,
@@ -562,12 +563,12 @@ class TestGatewayDelegation:
 
     async def test_place_bracket_without_resolver_raises(self) -> None:
         gateway, transport, _ = _gateway(with_resolver=False)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(GatewayNotStartedError):
             await gateway.place_bracket(MagicMock(), _entry(), _tp(), _sl())
         transport.place_bracket.assert_not_called()
 
     async def test_place_oca_without_resolver_raises(self) -> None:
         gateway, transport, _ = _gateway(with_resolver=False)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(GatewayNotStartedError):
             await gateway.place_oca(MagicMock(), _oca_orders())
         transport.place_oca.assert_not_called()

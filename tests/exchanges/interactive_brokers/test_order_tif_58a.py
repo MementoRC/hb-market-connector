@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.interactive_brokers.transport import _hb_to_ib_order
 from market_connector.orders import HBOrder, OrderType, TradeType
 
@@ -96,6 +97,6 @@ class TestGuards:
         assert ib_order.action == "BUY"
         assert ib_order.totalQuantity == 10.0
 
-    def test_limit_maker_still_not_implemented(self):
-        with pytest.raises(NotImplementedError):
+    def test_limit_maker_still_unsupported(self):
+        with pytest.raises(UnsupportedOrderError):
             _hb_to_ib_order(_make(OrderType.LIMIT_MAKER))

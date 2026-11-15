@@ -14,11 +14,17 @@ Test double and interpretations (the implementation must honour these):
     raises any other error (conn lost, timeout...) -> UNKNOWN
     returns a still-open status (SUBMITTED, ...)   -> UNKNOWN (ambiguous)
   ``cancel_linked`` never raises for a per-leg failure.
-* ``leg_outcomes`` for a bracket is always ``(entry, take_profit, stop_loss)``; an absent exit is
-  ``None`` in place (the handle cannot know the spec, so the shape is fixed). For an OCA group it
-  follows ``handle.leg_client_ids``.
-* ``all_legs_terminal`` is True iff every non-None outcome is CANCELED, ALREADY_FILLED or
-  NOT_FOUND (UNKNOWN makes it False; ``None`` legs are ignored).
+* ``len(leg_outcomes)`` equals the number of legs the group actually has, in dtp
+  ``LinkedOrderSpec.ordered_legs()`` order (ENTRY, TAKE_PROFIT, STOP_LOSS, then OCO legs). The
+  handle does not carry the spec, so a bracket's order is derived from its non-None ids in that
+  same relative order: entry, then take_profit if set, then stop_loss if set. A single-exit
+  bracket therefore has exactly 2 entries (entry, the one exit); there is no placeholder for the
+  missing exit. For an OCA group the order follows ``handle.leg_client_ids``.
+* ``None`` in dtp means "a leg in the group that was never placed/acknowledged", NOT "absent exit".
+  The IB handles cannot express that (``IbBracket`` / ``IbOcaGroup`` only hold placed legs), so
+  no ``None`` case is tested here.
+* ``all_legs_terminal`` is True iff every outcome is CANCELED, ALREADY_FILLED or NOT_FOUND
+  (UNKNOWN makes it False).
 * ``residual_filled`` is the sum over placed legs of ``filled_qty`` of the handle returned by
   ``cancel_order``; for a leg whose cancel raised, the leg's own pre-cancel ``filled_qty``.
 * ``group_id == str(handle.group_id)`` (IB bracket ids are ints).
@@ -168,7 +174,7 @@ class TestBracketGroupIdAndLegOrder:
         assert isinstance(out.group_id, str)
         assert out.group_id == "1"
 
-    async def test_leg_order_is_entry_take_profit_stop_loss(
+    async def test_leg_order_is_entry_take_profit_stop_loss_as_in_ordered_legs(
         self, gateway: IbGatewayGateway, transport: MagicMock
     ) -> None:
         b = _bracket()
@@ -178,15 +184,30 @@ class TestBracketGroupIdAndLegOrder:
 
         assert out.leg_outcomes == (C.ALREADY_FILLED, C.CANCELED, C.NOT_FOUND)
 
-    async def test_absent_stop_loss_is_none_in_place(self, gateway: IbGatewayGateway) -> None:
-        out = await gateway.cancel_linked(_bracket(sl=False))
+    async def test_tp_only_bracket_has_two_outcomes_entry_then_take_profit(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        b = _bracket(sl=False)
+        _wire(transport, {1: _filled(b.parent), 2: _not_found()})
 
-        assert out.leg_outcomes == (C.CANCELED, C.CANCELED, None)
+        out = await gateway.cancel_linked(b)
 
-    async def test_absent_take_profit_is_none_in_place(self, gateway: IbGatewayGateway) -> None:
-        out = await gateway.cancel_linked(_bracket(tp=False))
+        assert out.leg_outcomes == (C.ALREADY_FILLED, C.NOT_FOUND)
 
-        assert out.leg_outcomes == (C.CANCELED, None, C.CANCELED)
+    async def test_sl_only_bracket_has_two_outcomes_entry_then_stop_loss(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        b = _bracket(tp=False)
+        _wire(transport, {1: _filled(b.parent), 3: _not_found()})
+
+        out = await gateway.cancel_linked(b)
+
+        assert out.leg_outcomes == (C.ALREADY_FILLED, C.NOT_FOUND)
+
+    async def test_entry_only_bracket_has_a_single_outcome(self, gateway: IbGatewayGateway) -> None:
+        out = await gateway.cancel_linked(_bracket(tp=False, sl=False))
+
+        assert out.leg_outcomes == (C.CANCELED,)
 
     async def test_absent_leg_is_never_sent_to_the_transport(
         self, gateway: IbGatewayGateway, transport: MagicMock
@@ -239,11 +260,21 @@ class TestBracketTerminalFlag:
 
         assert out.all_legs_terminal is True
 
-    async def test_absent_legs_do_not_block_terminal(self, gateway: IbGatewayGateway) -> None:
+    async def test_absent_exits_do_not_block_terminal(self, gateway: IbGatewayGateway) -> None:
         out = await gateway.cancel_linked(_bracket(tp=False, sl=False))
 
-        assert out.leg_outcomes == (C.CANCELED, None, None)
+        assert out.leg_outcomes == (C.CANCELED,)
         assert out.all_legs_terminal is True
+
+    async def test_single_exit_bracket_with_unknown_exit_is_non_terminal(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        _wire(transport, {2: TimeoutError()})
+
+        out = await gateway.cancel_linked(_bracket(sl=False))
+
+        assert out.leg_outcomes == (C.CANCELED, C.UNKNOWN)
+        assert out.all_legs_terminal is False
 
 
 class TestBracketDoesNotRaise:

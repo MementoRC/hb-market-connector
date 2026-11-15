@@ -171,10 +171,16 @@ class _Bracketer:
     ) -> Any:
         return _bracket()
 
+    async def cancel_linked(self, handle: Any) -> Any:
+        raise NotImplementedError
+
 
 class _Ocoer:
     async def place_oco(self, target: Any, spec: LinkedOrderSpec, *, options: Any = None) -> Any:
         return _oco()
+
+    async def cancel_linked(self, handle: Any) -> Any:
+        raise NotImplementedError
 
 
 class TestProtocols:

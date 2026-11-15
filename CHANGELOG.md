@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `OrderOutcomeUnknownError` now also subclasses `data_type_primitives.OrderOutcomeUnknownError` (dtp >=v0.10.0); pickle round-trip fixed (#234).
+
 ## [0.8.0] - 2026-11-14
 
 ### Added

@@ -4,6 +4,8 @@ All gateway errors inherit from GatewayError, allowing consumers to catch
 either specific errors or the base class as a catch-all.
 """
 
+import data_type_primitives
+
 
 class GatewayError(Exception):
     """Base class for all gateway errors."""
@@ -52,20 +54,29 @@ class ExchangeUnavailableError(GatewayError):
     """The exchange is down, returning 5xx, or otherwise unreachable."""
 
 
-class OrderOutcomeUnknownError(ExchangeUnavailableError):
+class OrderOutcomeUnknownError(
+    ExchangeUnavailableError, data_type_primitives.OrderOutcomeUnknownError
+):
     """The order POST was sent but its outcome is unknown (5xx, Cloudflare, transport error).
 
     The order may or may not exist on the exchange. It was never re-sent; resolve it by
     looking it up with ``client_order_id``.
+
+    Dual base: ``ExchangeUnavailableError`` keeps existing ``except`` clauses working, and
+    ``data_type_primitives.OrderOutcomeUnknownError`` is the L0 type the strategy framework
+    catches (ADR-0001). Pickling is handled by the dtp base's ``__reduce__``.
     """
 
     def __init__(self, message: str | None = None, *, client_order_id: str) -> None:
-        super().__init__(
+        # Explicit base call: the dtp __init__ requires client_order_id and is the only
+        # __init__ in the MRO, so cooperative super() would not pass it through.
+        data_type_primitives.OrderOutcomeUnknownError.__init__(
+            self,
             message
             or f"Order outcome unknown for client_order_id={client_order_id!r}: "
-            "the response was lost; look the order up by client_order_id before retrying"
+            "the response was lost; look the order up by client_order_id before retrying",
+            client_order_id=client_order_id,
         )
-        self.client_order_id = client_order_id
 
 
 class ServiceUnavailableError(GatewayError):

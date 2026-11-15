@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from enum import Enum
 from typing import TYPE_CHECKING
 
 import httpx
@@ -12,6 +13,7 @@ from market_connector.exceptions import (
     GatewayNotStartedError,
     OrderOutcomeUnknownError,
     OrderRejectedError,
+    UnsupportedOrderError,
 )
 from market_connector.exchanges.coinbase.converters import to_exchange_pair, to_open_order
 from market_connector.exchanges.coinbase.schemas.rest import (
@@ -55,7 +57,26 @@ def _build_order_config(
         }
     if order_type == OrderType.MARKET:
         return {"market_market_ioc": {"base_size": base_size}}
-    raise ValueError(f"Unsupported order type: {order_type}")
+    raise UnsupportedOrderError(
+        exchange="coinbase",
+        order_type=getattr(order_type, "name", str(order_type)),
+        reason="order type not supported by Coinbase",
+    )
+
+
+def _coerce_supported_order_type(value: object) -> OrderType:
+    """Coerce to a local OrderType; canonical types with no local member are unsupported."""
+    try:
+        return coerce_order_type(value)
+    except ValueError:
+        name = value.name if isinstance(value, Enum) else str(value).strip().upper()
+        if name.replace("-", "_") in CanonicalOrderType.__members__:
+            raise UnsupportedOrderError(
+                exchange="coinbase",
+                order_type=name,
+                reason="order type not supported by Coinbase",
+            ) from None
+        raise
 
 
 class OrdersMixin:
@@ -73,7 +94,7 @@ class OrdersMixin:
             raise GatewayNotStartedError("Gateway not started")
 
         client_id = client_order_id or f"coinbase-{uuid.uuid4()}"
-        cfg = _build_order_config(coerce_order_type(order_type), amount, price)
+        cfg = _build_order_config(_coerce_supported_order_type(order_type), amount, price)
         body: dict[str, object] = {
             "client_order_id": client_id,
             "product_id": to_exchange_pair(trading_pair),

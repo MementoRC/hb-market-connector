@@ -35,6 +35,7 @@ else:
         IB = None  # noqa: F841
 
 from market_connector.contracts.protocols import ResolvedContract
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.interactive_brokers._error_router import _ErrorRouter
 from market_connector.exchanges.interactive_brokers._ib_numbers import (
     decimal_from_str_or_none,
@@ -417,7 +418,7 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
     Raises:
         ValueError: When a required price/stop_price is missing, or a stop_price is
             supplied for a non-stop order type.
-        NotImplementedError: For LIMIT_MAKER or any other unsupported order type.
+        UnsupportedOrderError: For LIMIT_MAKER or any other unsupported order type.
     """
     from ib_async import Order  # noqa: PLC0415 — lazy, ib_async is optional
 
@@ -488,13 +489,17 @@ def _hb_to_ib_order(hb_order: HBOrder) -> Any:
         return stop_limit
 
     if hb_order.order_type == OrderType.LIMIT_MAKER:
-        raise NotImplementedError(
-            "LIMIT_MAKER (post-only) is not supported by Interactive Brokers; "
-            "place a LIMIT order instead."
+        raise UnsupportedOrderError(
+            exchange="interactive_brokers",
+            order_type="LIMIT_MAKER",
+            reason="LIMIT_MAKER (post-only) is not supported by Interactive Brokers; "
+            "place a LIMIT order instead",
         )
 
-    raise NotImplementedError(
-        f"Order type {hb_order.order_type!r} is not supported by the IB transport."
+    raise UnsupportedOrderError(
+        exchange="interactive_brokers",
+        order_type=repr(hb_order.order_type),
+        reason="order type is not supported by the IB transport",
     )
 
 

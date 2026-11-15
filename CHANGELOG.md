@@ -5,8 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `UnsupportedOrderError(GatewayError)` (exported from `market_connector`) with `exchange`, `order_type`, `feature`, `reason` attributes, for well-formed orders a venue cannot honour (#236).
+
 ### Changed
 
+- BREAKING: Coinbase `place_order` raises `UnsupportedOrderError` (was `ValueError`) for valid-but-unsupported order types; unknown strings still raise `ValueError`. IB `_hb_to_ib_order` (and `place_order`/`what_if`) raises `UnsupportedOrderError` (was `NotImplementedError`) for `LIMIT_MAKER` and unknown types. IB `place_bracket`/`place_oca` without a contract resolver raise `GatewayNotStartedError` (was `RuntimeError`). Update `except` clauses accordingly (#236).
 - `OrderOutcomeUnknownError` now also subclasses `data_type_primitives.OrderOutcomeUnknownError` (dtp >=v0.10.0); pickle round-trip fixed (#234).
 
 ## [0.8.0] - 2026-11-14

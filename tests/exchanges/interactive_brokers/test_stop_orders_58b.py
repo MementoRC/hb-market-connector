@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.interactive_brokers.transport import _hb_to_ib_order
 from market_connector.orders import HBOrder, OrderType, TradeType
 
@@ -151,7 +152,7 @@ class TestLimitMakerRejected:
             amount=Decimal("10"),
             price=Decimal("100.5"),
         )
-        with pytest.raises(NotImplementedError, match=r"(?i)post-only") as exc:
+        with pytest.raises(UnsupportedOrderError, match=r"(?i)post-only") as exc:
             _hb_to_ib_order(order)
         assert "limit" in str(exc.value).lower()
         assert "LIMIT" in str(exc.value)

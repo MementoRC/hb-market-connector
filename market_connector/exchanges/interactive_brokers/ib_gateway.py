@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         StreamTransport,
     )
 
+from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.interactive_brokers.linked_orders import OcaType
 from market_connector.exchanges.interactive_brokers.mixins import (
     MarketDataMixin,
@@ -152,10 +153,10 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
     ) -> IbBracket:
         """Resolve contract once then place an entry with take-profit and stop-loss children.
 
-        Raises RuntimeError if no contract_resolver has been wired.
+        Raises GatewayNotStartedError if no contract_resolver has been wired.
         """
         if self.contract_resolver is None:
-            raise RuntimeError(
+            raise GatewayNotStartedError(
                 "Gateway has no contract_resolver; cannot place orders. "
                 "Use build_ib_gateway() to construct a fully-wired gateway."
             )
@@ -170,10 +171,10 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
     ) -> IbOcaGroup:
         """Resolve contract once then place *orders* as one OCA group.
 
-        Raises RuntimeError if no contract_resolver has been wired.
+        Raises GatewayNotStartedError if no contract_resolver has been wired.
         """
         if self.contract_resolver is None:
-            raise RuntimeError(
+            raise GatewayNotStartedError(
                 "Gateway has no contract_resolver; cannot place orders. "
                 "Use build_ib_gateway() to construct a fully-wired gateway."
             )

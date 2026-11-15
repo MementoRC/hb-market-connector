@@ -95,6 +95,36 @@ class ExchangePermissionError(GatewayError):
     """The request was denied due to insufficient permissions or account restrictions."""
 
 
+class UnsupportedOrderError(GatewayError):
+    """A well-formed order uses a type or feature the venue does not support.
+
+    Distinct from ``ValueError`` (malformed input) and ``NotImplementedError``
+    (unfinished code): the request is valid but this venue cannot honour it.
+    """
+
+    def __init__(
+        self,
+        *,
+        exchange: str,
+        order_type: str | None = None,
+        feature: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        self.exchange = exchange
+        self.order_type = order_type
+        self.feature = feature
+        self.reason = reason
+        parts = [f"{exchange}: unsupported order"]
+        if order_type is not None:
+            parts.append(f"order_type={order_type}")
+        if feature is not None:
+            parts.append(f"feature={feature}")
+        message = " ".join(parts)
+        if reason is not None:
+            message = f"{message} ({reason})"
+        super().__init__(message)
+
+
 class UnknownPairError(GatewayError):
     """A pair string could not be mapped (no matching rule or fallback)."""
 

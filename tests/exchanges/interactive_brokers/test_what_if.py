@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.interactive_brokers.exceptions import (
     ConnectionLostError,
     IbError,
@@ -303,7 +304,7 @@ class TestTransportWhatIf:
             await transport.what_if(MagicMock(), bad)  # type: ignore[attr-defined]
         assert ib.what_if_calls == []
 
-    async def test_limit_maker_raises_not_implemented_before_ib(self) -> None:
+    async def test_limit_maker_raises_unsupported_before_ib(self) -> None:
         transport, ib = await _make()
         bad = HBOrder(
             order_type=OrderType.LIMIT_MAKER,
@@ -311,7 +312,7 @@ class TestTransportWhatIf:
             amount=Decimal(1),
             price=Decimal(10),
         )
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnsupportedOrderError):
             await transport.what_if(MagicMock(), bad)  # type: ignore[attr-defined]
         assert ib.what_if_calls == []
 

@@ -25,7 +25,7 @@ which re-exports the *parent hummingbot* ``OrderType``/``TradeType`` for
 source (``hummingbot.core.data_type.common``, not ``data_type_primitives``).
 """
 
-from enum import StrEnum
+from enum import Enum, StrEnum
 
 from data_type_primitives.common import OrderType as CanonicalOrderType
 from data_type_primitives.common import TradeType as CanonicalTradeType
@@ -114,11 +114,43 @@ def from_canonical(member: CanonicalOrderType | CanonicalTradeType) -> OrderType
         ) from None
 
 
+def _member_name(value: object) -> str:
+    if isinstance(value, Enum):
+        return value.name
+    return str(value).strip().upper().replace("-", "_")
+
+
+def coerce_order_type(value: object) -> OrderType:
+    """Normalise a canonical/local ``OrderType`` member or case-insensitive str by member name.
+
+    Raises:
+        ValueError: If the name is not a local ``OrderType`` member.
+    """
+    try:
+        return OrderType[_member_name(value)]
+    except KeyError:
+        raise ValueError(f"Unsupported order type: {value!r}") from None
+
+
+def coerce_trade_type(value: object) -> TradeType:
+    """Normalise a canonical/local ``TradeType`` member or case-insensitive str by member name.
+
+    Raises:
+        ValueError: If the name is not a local ``TradeType`` member.
+    """
+    try:
+        return TradeType[_member_name(value)]
+    except KeyError:
+        raise ValueError(f"Unsupported trade type: {value!r}") from None
+
+
 __all__ = [
     "CanonicalOrderType",
     "CanonicalTradeType",
     "OrderType",
     "TradeType",
+    "coerce_order_type",
+    "coerce_trade_type",
     "from_canonical",
     "to_canonical",
 ]

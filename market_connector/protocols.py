@@ -14,12 +14,15 @@ if TYPE_CHECKING:
     from decimal import Decimal
 
     from market_connector.contracts.protocols import ContractResolver
+    from market_connector.hb_compat.primitives import CanonicalOrderType, CanonicalTradeType
     from market_connector.primitives import (
         CandleData,
         OpenOrder,
         OrderBookSnapshot,
         OrderBookUpdate,
+        OrderType,
         TradeEvent,
+        TradeType,
     )
     from market_connector.transport.protocols import (
         RequestTransport,
@@ -38,8 +41,8 @@ class ExecutionGateway(Protocol):
     async def place_order(
         self,
         trading_pair: str,
-        order_type: str,
-        side: str,
+        order_type: OrderType | CanonicalOrderType | str,
+        side: TradeType | CanonicalTradeType | str,
         amount: Decimal,
         price: Decimal | None,
     ) -> str:

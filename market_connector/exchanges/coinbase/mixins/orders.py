@@ -19,6 +19,12 @@ from market_connector.exchanges.coinbase.schemas.rest import (
     CreateOrderResponse,
     ListOrdersResponse,
 )
+from market_connector.hb_compat.primitives import (
+    CanonicalOrderType,
+    CanonicalTradeType,
+    coerce_order_type,
+    coerce_trade_type,
+)
 from market_connector.primitives import OpenOrder, OrderType, TradeType
 
 if TYPE_CHECKING:
@@ -56,8 +62,8 @@ class OrdersMixin:
     async def place_order(
         self: HasRest & HasReady,  # type: ignore[valid-type]
         trading_pair: str,
-        order_type: OrderType | str,
-        side: TradeType | str,
+        order_type: OrderType | CanonicalOrderType | str,
+        side: TradeType | CanonicalTradeType | str,
         amount: Decimal,
         price: Decimal | None,
         *,
@@ -67,11 +73,11 @@ class OrdersMixin:
             raise GatewayNotStartedError("Gateway not started")
 
         client_id = client_order_id or f"coinbase-{uuid.uuid4()}"
-        cfg = _build_order_config(OrderType(order_type), amount, price)
+        cfg = _build_order_config(coerce_order_type(order_type), amount, price)
         body: dict[str, object] = {
             "client_order_id": client_id,
             "product_id": to_exchange_pair(trading_pair),
-            "side": side if isinstance(side, str) else side.value,
+            "side": coerce_trade_type(side).value,
             "order_configuration": cfg,
         }
         try:

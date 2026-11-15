@@ -16,8 +16,9 @@ from __future__ import annotations
 from decimal import Decimal  # noqa: TCH003
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
+from market_connector.hb_compat.primitives import coerce_order_type, coerce_trade_type
 from market_connector.primitives import OrderType, TradeType
 
 __all__ = ["HBOrder", "OrderType", "TimeInForce", "TradeType"]
@@ -44,6 +45,17 @@ class HBOrder(BaseModel):
 
     order_type: OrderType
     side: TradeType
+
+    @field_validator("order_type", mode="before")
+    @classmethod
+    def _coerce_order_type(cls, value: object) -> OrderType:
+        return coerce_order_type(value)
+
+    @field_validator("side", mode="before")
+    @classmethod
+    def _coerce_side(cls, value: object) -> TradeType:
+        return coerce_trade_type(value)
+
     amount: Decimal
     price: Decimal | None = None
     stop_price: Decimal | None = None

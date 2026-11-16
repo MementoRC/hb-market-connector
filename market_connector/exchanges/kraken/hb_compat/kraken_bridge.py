@@ -172,7 +172,7 @@ class KrakenConnectorBridge:
         Returns:
             The first txid string from the Kraken API response.
         """
-        extra = {} if userref is None else {"userref": userref}
+        extra: dict[str, Any] = {} if userref is None else {"userref": userref}
         return await self._gateway.place_order(
             trading_pair=trading_pair,
             order_type=order_type,

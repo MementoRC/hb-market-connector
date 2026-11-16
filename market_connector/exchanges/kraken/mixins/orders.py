@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import math
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from data_type_primitives import TriggerKind, TriggerReference
 from data_type_primitives.common import OrderType as CanonicalOrderType
 
 from market_connector.capabilities import OrderCapabilities
-from market_connector.exceptions import GatewayNotStartedError, UnsupportedOrderError
+from market_connector.exceptions import (
+    ExchangeUnavailableError,
+    GatewayNotStartedError,
+    OrderOutcomeUnknownError,
+    UnsupportedOrderError,
+)
 from market_connector.exchanges.kraken.age_penalties import (
     amend_penalty,
     cancel_penalty,
@@ -65,6 +72,8 @@ _TRAILING_KEYS = frozenset({"TRAILING_STOP", "TRAILING_STOP_LIMIT"})
 _CONDITIONAL_KEYS = frozenset(_ORDER_TYPE_MAP) - {"MARKET", "LIMIT", "LIMIT_MAKER"} - _TRAILING_KEYS
 # Conditional types that also carry a limit price (sent as ``price2``).
 _LIMIT_KEYS = frozenset({"STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"})
+# Kraken cl_ord_id: ASCII up to this many characters, or a UUID.
+_CL_ORD_ID_MAX_LEN = 18
 
 # Derived from _ORDER_TYPE_MAP so the descriptor cannot drift from the adapter.
 # Triggers: absolute price, percent (``price_in_percent``) and trailing distance offsets.
@@ -210,14 +219,40 @@ async def _request_multi_keyed(
     return await rest.request(endpoint_name, data=body, limit_id=limit_ids[0], pools=pools)
 
 
-async def _orders_by_userref(
-    rest: RestConnectorBase, endpoint_name: str, userref: int | None
+def _validate_cl_ord_id(cl_ord_id: str) -> None:
+    """Raise ``ValueError`` unless ``cl_ord_id`` is ASCII up to 18 characters or a UUID."""
+    if cl_ord_id.isascii() and 1 <= len(cl_ord_id) <= _CL_ORD_ID_MAX_LEN:
+        return
+    try:
+        is_uuid = cl_ord_id.isascii() and len(cl_ord_id) in {32, 36} and bool(uuid.UUID(cl_ord_id))
+    except ValueError:
+        is_uuid = False
+    if not is_uuid:
+        raise ValueError(
+            f"Invalid cl_ord_id {cl_ord_id!r}: must be ASCII up to {_CL_ORD_ID_MAX_LEN} "
+            "characters or a UUID"
+        )
+
+
+def _order_filter(userref: int | None, cl_ord_id: str | None) -> dict[str, object]:
+    """Build the OpenOrders/ClosedOrders filter; both identifiers set is a ``ValueError``."""
+    if userref is not None and cl_ord_id is not None:
+        raise ValueError("userref and cl_ord_id are mutually exclusive")
+    if userref is not None:
+        return {"userref": userref}
+    if cl_ord_id is not None:
+        return {"cl_ord_id": cl_ord_id}
+    return {}
+
+
+async def _orders_by_filter(
+    rest: RestConnectorBase, endpoint_name: str, filters: dict[str, object]
 ) -> dict[str, Any]:
-    """POST ``endpoint_name`` (filtered by ``userref`` when given); return the checked raw reply."""
-    if userref is None:
+    """POST ``endpoint_name`` (with ``filters`` when non-empty); return the checked raw reply."""
+    if not filters:
         response = await rest.request(endpoint_name)
     else:
-        response = await rest.request(endpoint_name, data={"userref": userref})
+        response = await rest.request(endpoint_name, data=filters)
     raw: dict[str, Any] = response.raw  # type: ignore[assignment]
     raise_on_kraken_error(raw.get("error", []))
     return raw
@@ -284,6 +319,7 @@ class OrdersMixin:
         limit_price: Decimal | None = None,
         price_in_percent: bool = False,
         userref: int | None = None,
+        cl_ord_id: str | None = None,
     ) -> str:
         """Place an order on Kraken and return the first txid.
 
@@ -304,17 +340,30 @@ class OrdersMixin:
             userref: Optional int32 client tag (Kraken ``userref``); lets the order be
                 found again via ``get_open_orders`` / ``get_closed_orders`` when the
                 AddOrder response is lost.
+            cl_ord_id: Optional client order id (Kraken ``cl_ord_id``): ASCII up to
+                18 characters or a UUID, unique among OPEN orders, mutually exclusive
+                with ``userref``. Used by linked-order emulation with
+                ``KrakenClOrdIdLinkCodec`` (#248, #255).
 
         Returns:
             The first txid string from ``result.txid``.
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.
-            ValueError: For an unknown dashed pair, unsupported order types or
-                inconsistent price arguments; raised before any request.
+            ValueError: For an unknown dashed pair, unsupported order types,
+                inconsistent price arguments, both ``userref`` and ``cl_ord_id``, or an
+                invalid ``cl_ord_id``; raised before any request.
+            OrderOutcomeUnknownError: Only when ``cl_ord_id`` is set and the reply was
+                lost (timeout or transport error). The outcome is unknown; resolve it
+                with ``get_open_orders`` / ``get_closed_orders(cl_ord_id=...)``. Any
+                other exception means the order was definitely not placed.
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
+        if cl_ord_id is not None:
+            if userref is not None:
+                raise ValueError("userref and cl_ord_id are mutually exclusive")
+            _validate_cl_ord_id(cl_ord_id)
 
         kraken_ordertype = _to_kraken_ordertype(order_type)
         key = _order_type_key(order_type)
@@ -332,9 +381,21 @@ class OrdersMixin:
         }
         if userref is not None:
             body["userref"] = userref
+        if cl_ord_id is not None:
+            body["cl_ord_id"] = cl_ord_id
 
         await _ensure_room(self, trading_pair, 1)
-        response = await _request_keyed(self._rest, "add_order", trading_pair, body)
+        try:
+            response = await _request_keyed(self._rest, "add_order", trading_pair, body)
+        except OrderOutcomeUnknownError:
+            raise
+        except (httpx.TimeoutException, httpx.TransportError, ExchangeUnavailableError) as exc:
+            if cl_ord_id is None:
+                raise
+            raise OrderOutcomeUnknownError(
+                f"AddOrder reply lost for cl_ord_id={cl_ord_id!r}: {exc}",
+                client_order_id=cl_ord_id,
+            ) from exc
         # Error replies carry no result, so raise before validating it.
         raise_on_kraken_error(response.raw.get("error", []))  # type: ignore[union-attr]
         envelope = KrakenResponse[AddOrderResult].model_validate(response.raw)
@@ -348,35 +409,43 @@ class OrdersMixin:
     async def cancel_order(
         self: HasRest & HasReady,  # type: ignore[valid-type]
         trading_pair: str,
-        txid: str,
+        txid: str | None = None,
+        *,
+        cl_ord_id: str | None = None,
     ) -> bool:
-        """Cancel an order by txid.
+        """Cancel an order by txid or by ``cl_ord_id`` (exactly one).
 
         Args:
             trading_pair: Not sent to Kraken's cancel endpoint; keys the per-pair
                 matching rate limit.
             txid: The Kraken transaction ID to cancel.
+            cl_ord_id: The client order id the order was placed with.
 
         Returns:
             ``True`` if ``result.count >= 1`` (order was cancelled).
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.
+            ValueError: Unless exactly one of ``txid`` / ``cl_ord_id`` is given;
+                raised before any request.
 
         The matching counter is charged the order-age penalty. The age comes from
-        this process's ``place_order``; an unknown txid is charged the worst case.
+        this process's ``place_order``; an unknown or ``cl_ord_id`` order is charged
+        the worst case.
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
+        if (txid is None) == (cl_ord_id is None):
+            raise ValueError("Exactly one of txid or cl_ord_id is required")
 
-        placed = _placed_at(self).get(txid)
+        placed = None if txid is None else _placed_at(self).get(txid)
         units = cancel_penalty(0.0 if placed is None else self._order_clock() - placed)
-        response = await _request_keyed(
-            self._rest, "cancel_order", trading_pair, {"txid": txid}, units
-        )
+        body: dict[str, object] = {"txid": txid} if txid is not None else {"cl_ord_id": cl_ord_id}
+        response = await _request_keyed(self._rest, "cancel_order", trading_pair, body, units)
         envelope = KrakenResponse[CancelOrderResult].model_validate(response.raw)
         raise_on_kraken_error(envelope.error)
-        _placed_at(self).pop(txid, None)
+        if txid is not None:
+            _placed_at(self).pop(txid, None)
         _add_open(self, trading_pair, -1)
         return envelope.result.count >= 1  # type: ignore[union-attr]
 
@@ -420,6 +489,9 @@ class OrdersMixin:
         price: Decimal | None = None,
     ) -> str:
         """Edit an order (cancel and replace) and return the new txid.
+
+        Kraken EditOrder does not support ``cl_ord_id`` and assigns a new txid, so
+        linked-order legs must use ``amend_order`` or cancel/replace, never this.
 
         Unset ``amount`` / ``price`` are omitted from the request. The matching
         counter is charged the edit penalty for the order's age; the old txid is
@@ -518,8 +590,10 @@ class OrdersMixin:
     async def get_open_orders(
         self: HasRest & HasReady,  # type: ignore[valid-type]
         userref: int | None = None,
+        *,
+        cl_ord_id: str | None = None,
     ) -> dict[str, OrderInfo]:
-        """Return open orders keyed by txid, optionally only those tagged ``userref``.
+        """Return open orders keyed by txid, optionally filtered by ``userref`` or ``cl_ord_id``.
 
         Kraken's ``/0/private/OpenOrders`` response wraps the order map under
         the ``"open"`` key: ``{"result": {"open": {<txid>: {...}}}}``.  This
@@ -527,29 +601,36 @@ class OrdersMixin:
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.
+            ValueError: If both ``userref`` and ``cl_ord_id`` are set (nothing is sent).
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        raw = await _orders_by_userref(self._rest, "open_orders", userref)
+        raw = await _orders_by_filter(self._rest, "open_orders", _order_filter(userref, cl_ord_id))
         open_dict: dict[str, object] = raw.get("result", {}).get("open", {})
         return {txid: OrderInfo.model_validate(info) for txid, info in open_dict.items()}
 
     async def get_closed_orders(
         self: HasRest & HasReady,  # type: ignore[valid-type]
         userref: int | None = None,
+        *,
+        cl_ord_id: str | None = None,
     ) -> dict[str, OrderInfo]:
-        """Return closed orders keyed by txid, optionally only those tagged ``userref``.
+        """Return closed orders keyed by txid, optionally filtered by ``userref`` or ``cl_ord_id``.
 
-        Unwraps ``result.closed`` of ``/0/private/ClosedOrders`` (first page only).
+        Unwraps ``result.closed`` of ``/0/private/ClosedOrders``. Only the first page
+        is returned.
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.
+            ValueError: If both ``userref`` and ``cl_ord_id`` are set (nothing is sent).
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        raw = await _orders_by_userref(self._rest, "closed_orders", userref)
+        raw = await _orders_by_filter(
+            self._rest, "closed_orders", _order_filter(userref, cl_ord_id)
+        )
         closed_dict: dict[str, object] = raw.get("result", {}).get("closed", {})
         return {txid: OrderInfo.model_validate(info) for txid, info in closed_dict.items()}
 

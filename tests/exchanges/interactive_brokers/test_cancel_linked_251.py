@@ -32,17 +32,28 @@ Test double and interpretations (the implementation must honour these):
   cancel raised, the leg's own pre-cancel ``filled_qty``. A leg's side is read from the IB
   handle's ``OrderHandle.action`` (``"BUY"``/``"SELL"``); the handles carry no other side.
 * ``group_id == str(handle.group_id)`` (IB bracket ids are ints).
+* ``status`` (dtp v0.13.0 ``LinkedCancelStatus``) is derived from the per-leg outcomes, first
+  matching rule wins:
+    1. any leg ALREADY_FILLED                          -> FILLED (even with other legs open)
+    2. every leg CANCELED or NOT_FOUND (terminal)      -> CANCELED
+    3. any leg's cancel raised a non-not-found error   -> UNKNOWN (beats PENDING)
+    4. any leg came back from cancel still open        -> PENDING (requested, unconfirmed)
+  dtp validators: PENDING needs ``all_legs_terminal=False``; CANCELED and FAILED need
+  ``all_legs_terminal=True``; FILLED and UNKNOWN are allowed either way.
+* FAILED is never produced by a native IB ``cancel_linked``: it describes a group-level
+  submission failure in strategy-framework's emulator, which a native cancel does not observe.
 """
 
 from __future__ import annotations
 
+import itertools
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from data_type_primitives import CancelOutcome, LinkedCancelOutcome
+from data_type_primitives import CancelOutcome, LinkedCancelOutcome, LinkedCancelStatus
 
 from market_connector.exchanges.interactive_brokers.exceptions import ConnectionLostError, IbError
 from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayGateway
@@ -546,3 +557,136 @@ class TestOcaCancelLinked:
         out = await gateway.cancel_linked(_oca(("BUY", "SELL", "BUY")))
 
         assert out.residual_filled == Decimal(0)
+
+
+S = LinkedCancelStatus
+
+
+def _open(leg: Any) -> Any:
+    return _after(leg, IBOrderState.SUBMITTED)
+
+
+def _err() -> Exception:
+    return TimeoutError()
+
+
+# id -> (group factory, results(group) -> {client_id: result}, expected status, expected terminal)
+_STATUS_CASES: dict[str, tuple[Any, Any, LinkedCancelStatus, bool]] = {
+    "bracket_all_canceled": (_bracket, lambda g: {}, S.CANCELED, True),
+    "bracket_all_not_found": (
+        _bracket,
+        lambda g: {1: _not_found(), 2: _not_found(), 3: _not_found()},
+        S.CANCELED,
+        True,
+    ),
+    "bracket_tp_filled_sl_canceled": (
+        _bracket,
+        lambda g: {2: _filled(g.take_profit)},
+        S.FILLED,
+        True,
+    ),
+    "bracket_tp_filled_sl_errored": (
+        _bracket,
+        lambda g: {2: _filled(g.take_profit), 3: _err()},
+        S.FILLED,
+        False,
+    ),
+    "bracket_tp_filled_sl_open": (
+        _bracket,
+        lambda g: {2: _filled(g.take_profit), 3: _open(g.stop_loss)},
+        S.FILLED,
+        False,
+    ),
+    "bracket_entry_filled_exits_canceled": (
+        _bracket,
+        lambda g: {1: _filled(g.parent)},
+        S.FILLED,
+        True,
+    ),
+    "bracket_exit_errored_rest_canceled": (_bracket, lambda g: {3: _err()}, S.UNKNOWN, False),
+    "bracket_exit_open_rest_canceled": (
+        _bracket,
+        lambda g: {3: _open(g.stop_loss)},
+        S.PENDING,
+        False,
+    ),
+    "bracket_one_open_one_errored": (
+        _bracket,
+        lambda g: {2: _open(g.take_profit), 3: _err()},
+        S.UNKNOWN,
+        False,
+    ),
+    "bracket_tp_only_canceled": (lambda: _bracket(sl=False), lambda g: {}, S.CANCELED, True),
+    "bracket_sl_only_canceled": (lambda: _bracket(tp=False), lambda g: {}, S.CANCELED, True),
+    "bracket_tp_only_filled": (
+        lambda: _bracket(sl=False),
+        lambda g: {2: _filled(g.take_profit)},
+        S.FILLED,
+        True,
+    ),
+    "bracket_sl_only_filled": (
+        lambda: _bracket(tp=False),
+        lambda g: {3: _filled(g.stop_loss)},
+        S.FILLED,
+        True,
+    ),
+    "oco_all_canceled": (_oca, lambda g: {}, S.CANCELED, True),
+    "oco_winner_filled": (_oca, lambda g: {8: _filled(g.orders[1])}, S.FILLED, True),
+    "oco_one_errored": (_oca, lambda g: {9: _err()}, S.UNKNOWN, False),
+    "oco_one_open": (_oca, lambda g: {9: _open(g.orders[2])}, S.PENDING, False),
+}
+
+
+class TestCancelLinkedStatus:
+    @pytest.mark.parametrize("case", list(_STATUS_CASES))
+    async def test_status_is_derived_from_leg_outcomes(
+        self, gateway: IbGatewayGateway, transport: MagicMock, case: str
+    ) -> None:
+        make, results, status, terminal = _STATUS_CASES[case]
+        g = make()
+        _wire(transport, results(g))
+
+        out = await gateway.cancel_linked(g)
+
+        assert out.status is status
+        assert out.all_legs_terminal is terminal
+        # The expected pair must itself be valid under dtp's validators (raises otherwise).
+        LinkedCancelOutcome(
+            group_id="g",
+            all_legs_terminal=terminal,
+            residual_filled=Decimal(0),
+            leg_outcomes=(C.CANCELED,),
+            status=status,
+        )
+
+    @pytest.mark.parametrize("case", list(_STATUS_CASES))
+    async def test_returned_outcome_round_trips_through_dtp_validation(
+        self, gateway: IbGatewayGateway, transport: MagicMock, case: str
+    ) -> None:
+        make, results, _, _ = _STATUS_CASES[case]
+        g = make()
+        _wire(transport, results(g))
+
+        out = await gateway.cancel_linked(g)
+
+        assert LinkedCancelOutcome.model_validate(out.model_dump()) == out
+
+    async def test_failed_is_never_produced_by_native_cancel_linked(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        statuses: set[LinkedCancelStatus | None] = set()
+        for names in itertools.product(_MAPPING, repeat=3):
+            for make in (_bracket, _oca):
+                g = make()
+                legs = (g.parent, g.take_profit, g.stop_loss) if make is _bracket else g.orders
+                _wire(
+                    transport,
+                    {
+                        leg.client_order_id: _MAPPING[n][0](leg)
+                        for n, leg in zip(names, legs, strict=True)
+                    },
+                )
+                statuses.add((await gateway.cancel_linked(g)).status)
+
+        assert S.FAILED not in statuses
+        assert None not in statuses

@@ -39,7 +39,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from data_type_primitives.common import OrderType, PriceType, TradeType
+from data_type_primitives.common import OrderType, PositionAction, PriceType, TradeType
 from data_type_primitives.in_flight_order import InFlightOrder, OrderState, OrderUpdate
 
 from market_connector.exceptions import ExchangeCancelOnlyError, ExchangeUnavailableError
@@ -91,6 +91,9 @@ KRAKEN_ORDER_STATE_MAP: Mapping[KrakenOrderState, OrderState] = {
 
 _UNRESOLVED: frozenset[OrderState] = frozenset({OrderState.PENDING_CREATE, OrderState.UNKNOWN})
 _USERREF_MAX = 2**31 - 1  # Kraken userref is a signed int32
+_LIMIT_PRICE_TYPES: frozenset[OrderType] = frozenset(
+    {OrderType.STOP_LOSS_LIMIT, OrderType.TAKE_PROFIT_LIMIT, OrderType.TRAILING_STOP_LIMIT}
+)
 
 
 class LostOrderError(Exception):
@@ -157,6 +160,7 @@ class KrakenConnectorCore:
         self._userref_counter = int(time.time() * 1000) % _USERREF_MAX
         self._userrefs: dict[str, int] = {}  # cid -> userref
         self._userref_to_cid: dict[int, str] = {}  # write-only; kept for diagnostics
+        self._limit_prices: dict[str, tuple[Decimal | None, bool]] = {}  # cid -> (limit, pct)
         self._submitting: set[str] = set()  # AddOrder request in flight
         self._cancel_requested: set[str] = set()  # cancel asked before the txid was known
         self._cancelling: set[str] = set()  # CancelOrder in flight
@@ -256,14 +260,23 @@ class KrakenConnectorCore:
         amount: Decimal,
         order_type: OrderType = OrderType.LIMIT,
         price: Decimal = NAN,
-        **kwargs: Any,
+        *,
+        limit_price: Decimal | None = None,
+        price_in_percent: bool = False,
+        position_action: PositionAction | None = None,
+        expiration_ts: float | None = None,
     ) -> str:
         """Track a BUY order and send it in the background; returns the client order id.
 
-        ``kwargs`` (``expiration_ts``, ``position_action``) are accepted for
-        ``ExchangePyBase`` parity and not forwarded.
+        ``limit_price`` is Kraken's ``price2`` (required for ``*_LIMIT`` types, else
+        ``ValueError``). ``position_action`` (a ``PositionAction`` or None, else
+        ``TypeError``) and ``expiration_ts`` are accepted for ``ExchangePyBase`` parity
+        and not forwarded; any other keyword raises ``TypeError``.
         """
-        return self._create(TradeType.BUY, trading_pair, amount, order_type, price)
+        return self._create(
+            TradeType.BUY, trading_pair, amount, order_type, price,
+            limit_price, price_in_percent, position_action,
+        )  # fmt: skip
 
     def sell(
         self,
@@ -271,10 +284,17 @@ class KrakenConnectorCore:
         amount: Decimal,
         order_type: OrderType = OrderType.LIMIT,
         price: Decimal = NAN,
-        **kwargs: Any,
+        *,
+        limit_price: Decimal | None = None,
+        price_in_percent: bool = False,
+        position_action: PositionAction | None = None,
+        expiration_ts: float | None = None,
     ) -> str:
         """Track a SELL order and send it in the background; returns the client order id."""
-        return self._create(TradeType.SELL, trading_pair, amount, order_type, price)
+        return self._create(
+            TradeType.SELL, trading_pair, amount, order_type, price,
+            limit_price, price_in_percent, position_action,
+        )  # fmt: skip
 
     def cancel(self, trading_pair: str, client_order_id: str) -> str:
         """Cancel in the background; returns ``client_order_id``. Unknown ids are a no-op.
@@ -315,11 +335,19 @@ class KrakenConnectorCore:
         amount: Decimal,
         order_type: OrderType,
         price: Decimal,
+        limit_price: Decimal | None,
+        price_in_percent: bool,
+        position_action: PositionAction | None,
     ) -> str:
         loop = asyncio.get_running_loop()
+        if position_action is not None and not isinstance(position_action, PositionAction):
+            raise TypeError(f"position_action must be a PositionAction, got {position_action!r}")
+        if order_type in _LIMIT_PRICE_TYPES and limit_price is None:
+            raise ValueError(f"{order_type.name} requires limit_price")
         amount, price = quantize_order(self.trading_rules.get(trading_pair), amount, price)
         client_order_id = f"hbot-{trade_type.name.lower()}-{uuid.uuid4().hex}"
         self._assign_userref(client_order_id)
+        self._limit_prices[client_order_id] = (limit_price, price_in_percent)
         self._created_at[client_order_id] = self._clock()
         order = InFlightOrder(
             client_order_id=client_order_id,
@@ -355,6 +383,7 @@ class KrakenConnectorCore:
             self._fail(order, ExchangeCancelOnlyError("cancel_only backoff window open"))
             return
         self._submitting.add(cid)
+        limit_price, price_in_percent = self._limit_prices.get(cid, (None, False))
         try:
             wire_pair = self._wire_pair(order.trading_pair)
             price = None if order.order_type is OrderType.MARKET else order.price
@@ -367,6 +396,8 @@ class KrakenConnectorCore:
                 amount=order.amount,
                 price=price,
                 userref=self._userrefs.get(cid),
+                limit_price=limit_price,
+                price_in_percent=price_in_percent,
             )
         except asyncio.CancelledError:
             logger.warning(
@@ -528,6 +559,7 @@ class KrakenConnectorCore:
             return False
         self._cancel_requested.discard(cid)
         self._userref_to_cid.pop(self._userrefs.pop(cid, 0), None)
+        self._limit_prices.pop(cid, None)
         self._created_at.pop(cid, None)
         self._set_state(order, state, time.time())
         self._finished[cid] = order

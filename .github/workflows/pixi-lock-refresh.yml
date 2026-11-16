@@ -21,6 +21,7 @@ jobs:
     uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-pixi-lock-refresh.yml@a5dc6bd9422eb649eb071b2f79c6e0406870dc49 # v4.2.0
     with:
       target-branch: development
+      auto-merge: true
     secrets:
       APP_CLIENT_ID: ${{ secrets.LOCK_REFRESH_APP_CLIENT_ID }}
       APP_PRIVATE_KEY: ${{ secrets.LOCK_REFRESH_APP_PRIVATE_KEY }}

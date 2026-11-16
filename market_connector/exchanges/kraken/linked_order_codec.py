@@ -1,75 +1,40 @@
-"""Kraken ``userref`` codec for linked-order (group, leg) identifiers.
+"""Kraken ``cl_ord_id`` codec for linked-order (group, leg) identifiers.
 
-Bit budget (negative int32 half only; Kraken ``userref`` is a signed int32)::
+Format: ``mcl-<group_id>-<leg_index>`` (see ``PrefixedLinkIdCodec``).
 
-    1 bit sign (always 1) | 4 bits marker (0xA) | 23 bits group id | 4 bits leg index
+Carrier: Kraken AddOrder ``cl_ord_id``, free-format ASCII up to 18 characters,
+unique among OPEN orders per client. It is used instead of ``userref`` because
+negative userrefs are undocumented and the positive half is the connector's
+per-order userref counter (``hb_compat/kraken_connector_core.py``
+``_assign_userref``).
 
-The tag is the bitwise complement of ``(marker << 27) | (group_id << 4) | leg``,
-so it is always in ``[-2**31, -1]``.
+``cl_ord_id`` is MUTUALLY EXCLUSIVE with ``userref`` on AddOrder, so linked legs
+carry no userref. Placement wiring and lost-create recovery keyed on
+``cl_ord_id`` are tracked in hb-market-connector#255. Non-linked orders keep the
+userref path.
 
-Why negative: the positive half ``1..2**31-1`` is used by the connector's
-existing per-order userref counter (``hb_compat/kraken_connector_core.py``
-``_assign_userref``). Staying negative keeps the two ranges disjoint, and the
-marker nibble makes foreign userrefs (manual orders, other bots) decode to
-``None``, which is what strategy-framework orphan-cancel safety relies on.
+Capacity: the 18-character cap allows ``4 + 11 + 1 + 2`` characters, so
+``GROUP_ID_MAX`` is 99_999_999_999. ``encode`` raises ``ValueError`` above it
+before any request goes out (strategy-framework's pre-place round-trip turns it
+into ``LinkIdCodecError``). SF's group counter is monotonic, so this is a hard
+ceiling (about 10^11) unless SF adds id reuse.
 
-Capacity hard stop: strategy-framework's group counter is monotonic. Once it
-passes ``GROUP_ID_MAX`` every new linked group fails SF's pre-place round-trip
-(``LinkIdCodecError``), permanently for that account until SF id reuse lands
-(tracked as an SF follow-up).
-
-Uniqueness caveat: Kraken does not enforce userref uniqueness. If group ids are
+Uniqueness: Kraken requires uniqueness only among open orders. If group ids are
 ever reused, a decoded tag is authoritative only for OPEN orders and for closed
-orders newer than the group's creation. Closed-order lookups by userref may
-return a previous group's terminal legs.
+orders newer than the group's creation.
 
-Satisfies hb-strategy-framework's structural ``LinkedOrderIdCodec`` Protocol
-without importing it (ADR 0001: no L2->L2 imports).
+Foreign ``cl_ord_id`` values fail the prefix filter and decode to ``None``,
+which strategy-framework orphan-cancel safety relies on.
 """
 
 from __future__ import annotations
 
-__all__ = ["KrakenUserrefLinkCodec"]
+from market_connector.exchanges._prefixed_link_codec import PrefixedLinkIdCodec
 
-_MARKER = 0xA
-_MARKER_SHIFT = 27
-_LEG_BITS = 4
-_INT32_MIN = -(2**31)
+__all__ = ["KrakenClOrdIdLinkCodec"]
 
 
-class KrakenUserrefLinkCodec:
-    """Encode/decode (group_id, leg_index) as a negative int32 Kraken userref.
+class KrakenClOrdIdLinkCodec(PrefixedLinkIdCodec):
+    """Encode/decode (group_id, leg_index) as a Kraken ``cl_ord_id`` (<= 18 chars)."""
 
-    Layout: 1 sign / 4 marker (0xA) / 23 group id / 4 leg index, negative half
-    only. The positive half belongs to the connector's per-order userref
-    counter; the marker makes foreign userrefs decode to ``None``.
-
-    Capacity: once SF's monotonic group counter exceeds ``GROUP_ID_MAX``, every
-    new linked group fails SF's pre-place round-trip (``LinkIdCodecError``)
-    until SF id reuse lands. Kraken does not enforce userref uniqueness, so
-    with reused group ids a decoded tag is authoritative only for open orders
-    and closed orders newer than the group's creation.
-    """
-
-    GROUP_ID_MAX = 2**23 - 1
-    LEG_INDEX_MAX = 15
-
-    def encode(self, group_id: int, leg_index: int) -> int:
-        for name, value in (("group_id", group_id), ("leg_index", leg_index)):
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise TypeError(f"{name} must be int, got {type(value).__name__}")
-        if not 0 <= group_id <= self.GROUP_ID_MAX:
-            raise ValueError(f"group_id {group_id} out of range [0, {self.GROUP_ID_MAX}]")
-        if not 0 <= leg_index <= self.LEG_INDEX_MAX:
-            raise ValueError(f"leg_index {leg_index} out of range [0, {self.LEG_INDEX_MAX}]")
-        return ~((_MARKER << _MARKER_SHIFT) | (group_id << _LEG_BITS) | leg_index)
-
-    def decode(self, tag: str | int) -> tuple[int, int] | None:
-        if isinstance(tag, bool) or not isinstance(tag, int):
-            return None
-        if not _INT32_MIN <= tag <= -1:
-            return None
-        raw = ~tag
-        if raw >> _MARKER_SHIFT != _MARKER:
-            return None
-        return (raw >> _LEG_BITS) & self.GROUP_ID_MAX, raw & self.LEG_INDEX_MAX
+    GROUP_ID_MAX = 99_999_999_999

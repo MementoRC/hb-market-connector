@@ -227,6 +227,7 @@ class OrderDescription(_Base):
 class OrderInfo(_Base):
     refid: str | None = None
     userref: int | None = None
+    cl_ord_id: str | None = None
     status: str = ""
     opentm: float = 0.0
     starttm: float = 0.0

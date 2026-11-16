@@ -65,7 +65,9 @@ class KrakenConfig:
 
     def __post_init__(self) -> None:
         if self.sandbox:
-            raise ValueError("Kraken spot has no sandbox environment; sandbox=True is not supported (see #260)")
+            raise ValueError(
+                "Kraken spot has no sandbox environment; sandbox=True is not supported (see #260)"
+            )
         # Fill in URL defaults after frozen dataclass construction via object.__setattr__
         if not self.base_url:
             object.__setattr__(self, "base_url", _KRAKEN_REST_URL)

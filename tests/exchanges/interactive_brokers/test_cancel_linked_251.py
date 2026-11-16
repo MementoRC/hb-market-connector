@@ -25,8 +25,12 @@ Test double and interpretations (the implementation must honour these):
   no ``None`` case is tested here.
 * ``all_legs_terminal`` is True iff every outcome is CANCELED, ALREADY_FILLED or NOT_FOUND
   (UNKNOWN makes it False).
-* ``residual_filled`` is the sum over placed legs of ``filled_qty`` of the handle returned by
-  ``cancel_order``; for a leg whose cancel raised, the leg's own pre-cancel ``filled_qty``.
+* ``residual_filled`` is dtp v0.13.0's SIGNED net open exposure in base quantity, relative to
+  ``ordered_legs()[0]``'s side: a leg on the same side as the first leg ADDS its ``filled_qty``,
+  a leg on the opposite side SUBTRACTS it (bracket: entry filled minus exits filled; may be
+  negative). ``filled_qty`` is that of the handle returned by ``cancel_order``; for a leg whose
+  cancel raised, the leg's own pre-cancel ``filled_qty``. A leg's side is read from the IB
+  handle's ``OrderHandle.action`` (``"BUY"``/``"SELL"``); the handles carry no other side.
 * ``group_id == str(handle.group_id)`` (IB bracket ids are ints).
 """
 
@@ -55,14 +59,25 @@ C = CancelOutcome
 _TERMINAL = {C.CANCELED, C.ALREADY_FILLED, C.NOT_FOUND}
 
 
-def _leg(cid: int, status: IBOrderState = IBOrderState.SUBMITTED, filled: str = "0") -> Any:
-    """Stand-in for an ``OrderHandle`` (only client_order_id/status/filled_qty/owned are used)."""
+def _leg(
+    cid: int,
+    status: IBOrderState = IBOrderState.SUBMITTED,
+    filled: str = "0",
+    action: str = "BUY",
+) -> Any:
+    """Stand-in for an ``OrderHandle``.
+
+    Only client_order_id/status/filled_qty/owned/action are used. ``action`` is the real
+    ``OrderHandle.action`` property (``"BUY"`` or ``"SELL"``), the only per-leg side the IB
+    handles expose; ``cancel_linked`` must read each leg's side from it.
+    """
     return SimpleNamespace(
         client_order_id=cid,
         order_id=cid,
         status=status,
         filled_qty=Decimal(filled),
         owned=True,
+        action=action,
     )
 
 
@@ -95,19 +110,34 @@ def _wire(transport: MagicMock, results: dict[int, Any]) -> None:
     transport.cancel_order = AsyncMock(side_effect=cancel_order)
 
 
-def _bracket(tp: bool = True, sl: bool = True, **entry_kw: Any) -> IbBracket:
+_OPPOSITE = {"BUY": "SELL", "SELL": "BUY"}
+
+
+def _bracket(
+    tp: bool = True,
+    sl: bool = True,
+    entry_action: str = "BUY",
+    exit_filled: str = "0",
+    **entry_kw: Any,
+) -> IbBracket:
+    """Entry on ``entry_action``; exits on the opposite side (dtp bracket rule)."""
+    exit_action = _OPPOSITE[entry_action]
     return IbBracket(
-        parent=_leg(1, **entry_kw),
-        take_profit=_leg(2) if tp else None,
-        stop_loss=_leg(3) if sl else None,
+        parent=_leg(1, action=entry_action, **entry_kw),
+        take_profit=_leg(2, filled=exit_filled, action=exit_action) if tp else None,
+        stop_loss=_leg(3, filled=exit_filled, action=exit_action) if sl else None,
     )
 
 
-def _oca() -> IbOcaGroup:
+def _oca(actions: tuple[str, str, str] = ("SELL", "SELL", "SELL")) -> IbOcaGroup:
     return IbOcaGroup(
         group="oca-1",
         oca_type=OcaType.CANCEL_WITH_BLOCK,
-        orders=(_leg(7), _leg(8), _leg(9)),
+        orders=(
+            _leg(7, action=actions[0]),
+            _leg(8, action=actions[1]),
+            _leg(9, action=actions[2]),
+        ),
     )
 
 
@@ -310,33 +340,69 @@ class TestBracketDoesNotRaise:
 
 
 class TestBracketResidualFilled:
-    async def test_entry_fill_counts_as_residual(
+    async def test_entry_filled_and_exits_unfilled_is_the_entry_fill(
         self, gateway: IbGatewayGateway, transport: MagicMock
     ) -> None:
         b = _bracket()
-        _wire(transport, {1: _filled(b.parent, "10")})
+        _wire(transport, {1: _filled(b.parent, "0.5")})
 
         out = await gateway.cancel_linked(b)
 
-        assert out.residual_filled == Decimal(10)
+        assert out.residual_filled == Decimal("0.5")
         assert isinstance(out.residual_filled, Decimal)
 
-    async def test_residual_sums_fills_across_legs(
+    async def test_entry_and_take_profit_both_filled_nets_to_zero(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        b = _bracket()
+        _wire(transport, {1: _filled(b.parent, "1"), 2: _filled(b.take_profit, "1")})
+
+        out = await gateway.cancel_linked(b)
+
+        assert out.residual_filled == Decimal(0)
+
+    async def test_partial_take_profit_then_cancel_leaves_the_remainder(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        b = _bracket()
+        _wire(
+            transport,
+            {1: _filled(b.parent, "1"), 2: _cancelled(b.take_profit, "0.4")},
+        )
+
+        out = await gateway.cancel_linked(b)
+
+        assert out.residual_filled == Decimal("0.6")
+
+    async def test_double_exit_fill_is_negative(
         self, gateway: IbGatewayGateway, transport: MagicMock
     ) -> None:
         b = _bracket()
         _wire(
             transport,
             {
-                1: _filled(b.parent, "10"),
-                2: _cancelled(b.take_profit, "1.5"),
-                3: _cancelled(b.stop_loss),
+                1: _filled(b.parent, "1"),
+                2: _filled(b.take_profit, "1"),
+                3: _filled(b.stop_loss, "1"),
             },
         )
 
         out = await gateway.cancel_linked(b)
 
-        assert out.residual_filled == Decimal("11.5")
+        assert out.residual_filled == Decimal(-1)
+
+    async def test_sign_is_relative_to_a_sell_entry(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        b = _bracket(entry_action="SELL")
+        _wire(
+            transport,
+            {1: _filled(b.parent, "1"), 2: _cancelled(b.take_profit, "0.4")},
+        )
+
+        out = await gateway.cancel_linked(b)
+
+        assert out.residual_filled == Decimal("0.6")
 
     async def test_partially_filled_then_cancelled_entry_reports_the_fill(
         self, gateway: IbGatewayGateway, transport: MagicMock
@@ -349,7 +415,7 @@ class TestBracketResidualFilled:
         assert out.leg_outcomes[0] is C.CANCELED
         assert out.residual_filled == Decimal(4)
 
-    async def test_failed_leg_contributes_its_pre_cancel_fill(
+    async def test_failed_entry_contributes_its_pre_cancel_fill(
         self, gateway: IbGatewayGateway, transport: MagicMock
     ) -> None:
         b = _bracket(filled="2")
@@ -358,6 +424,17 @@ class TestBracketResidualFilled:
         out = await gateway.cancel_linked(b)
 
         assert out.residual_filled == Decimal(2)
+
+    async def test_failed_exit_subtracts_its_pre_cancel_fill(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        b = _bracket(sl=False, exit_filled="0.5", filled="2")
+        _wire(transport, {2: TimeoutError()})
+
+        out = await gateway.cancel_linked(b)
+
+        assert out.leg_outcomes == (C.CANCELED, C.UNKNOWN)
+        assert out.residual_filled == Decimal("1.5")
 
     async def test_no_fills_is_zero(self, gateway: IbGatewayGateway) -> None:
         out = await gateway.cancel_linked(_bracket())
@@ -424,7 +501,7 @@ class TestOcaCancelLinked:
         assert out.all_legs_terminal is False
         assert _cancelled_ids(transport) == [7, 8, 9]
 
-    async def test_residual_sums_fills_across_legs(
+    async def test_same_side_oca_sums_fills(
         self, gateway: IbGatewayGateway, transport: MagicMock
     ) -> None:
         g = _oca()
@@ -434,3 +511,38 @@ class TestOcaCancelLinked:
 
         assert out.residual_filled == Decimal("3.5")
         assert isinstance(out.residual_filled, Decimal)
+
+    async def test_breakout_oca_double_fill_nets_to_zero(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        g = _oca(("BUY", "SELL", "BUY"))
+        _wire(transport, {7: _filled(g.orders[0], "1"), 8: _filled(g.orders[1], "1")})
+
+        out = await gateway.cancel_linked(g)
+
+        assert out.residual_filled == Decimal(0)
+
+    async def test_same_side_as_first_leg_winner_is_positive(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        g = _oca(("BUY", "SELL", "BUY"))
+        _wire(transport, {7: _filled(g.orders[0], "1")})
+
+        out = await gateway.cancel_linked(g)
+
+        assert out.residual_filled == Decimal(1)
+
+    async def test_opposite_side_winner_is_negative(
+        self, gateway: IbGatewayGateway, transport: MagicMock
+    ) -> None:
+        g = _oca(("BUY", "SELL", "BUY"))
+        _wire(transport, {8: _filled(g.orders[1], "1")})
+
+        out = await gateway.cancel_linked(g)
+
+        assert out.residual_filled == Decimal(-1)
+
+    async def test_no_fills_is_zero(self, gateway: IbGatewayGateway) -> None:
+        out = await gateway.cancel_linked(_oca(("BUY", "SELL", "BUY")))
+
+        assert out.residual_filled == Decimal(0)

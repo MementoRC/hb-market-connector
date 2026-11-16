@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from market_connector.auth.passthrough import PassThroughSigner
     from market_connector.contracts.instrument import InstrumentRef
     from market_connector.contracts.protocols import ContractResolver
-    from market_connector.exchanges.interactive_brokers.linked_orders import IbBracket, IbOcaGroup
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
     from market_connector.exchanges.interactive_brokers.order_options import IbOrderOptions
     from market_connector.exchanges.interactive_brokers.pnl import IbPnL, IbPositionPnL
@@ -41,6 +40,7 @@ if TYPE_CHECKING:
 from data_type_primitives import (
     LegRole,
     LegSpec,
+    LinkedCancelOutcome,
     LinkedOrderSpec,
     TriggerKind,
     TriggerReference,
@@ -49,7 +49,12 @@ from data_type_primitives.common import OrderType
 
 from market_connector.capabilities import LinkedMode, OrderCapabilities
 from market_connector.exceptions import GatewayNotStartedError
-from market_connector.exchanges.interactive_brokers.linked_orders import OcaType
+from market_connector.exchanges.interactive_brokers.linked_orders import (
+    IbBracket,
+    IbOcaGroup,
+    OcaType,
+    cancel_legs,
+)
 from market_connector.exchanges.interactive_brokers.mixins import (
     MarketDataMixin,
     SubscriptionsMixin,
@@ -312,6 +317,14 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
     async def cancel_order(self, handle: OrderHandle) -> OrderHandle:
         """Delegate cancel to transport (idempotent on terminal orders)."""
         return await self._transport.cancel_order(handle)
+
+    async def cancel_linked(self, handle: IbBracket | IbOcaGroup) -> LinkedCancelOutcome:
+        """Cancel every placed leg of a bracket or OCA group; never raises per-leg failures."""
+        if isinstance(handle, IbOcaGroup):
+            legs = list(handle.orders)
+        else:
+            legs = [leg for leg in (handle.parent, handle.take_profit, handle.stop_loss) if leg]
+        return await cancel_legs(self._transport.cancel_order, str(handle.group_id), legs)
 
     async def cancel_all(self) -> list[OrderHandle]:
         """Delegate to transport: cancel this client's open orders (not manual TWS ones).

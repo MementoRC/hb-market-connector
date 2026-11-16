@@ -3,11 +3,79 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import IntEnum
 from typing import TYPE_CHECKING
 
+from data_type_primitives import CancelOutcome, LinkedCancelOutcome, LinkedCancelStatus
+
+from market_connector.exchanges.interactive_brokers.exceptions import IbError
+from market_connector.exchanges.interactive_brokers.order_handle import IBOrderState
+
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from market_connector.exchanges.interactive_brokers.order_handle import OrderHandle
+
+_NOT_FOUND_CODE = 10147
+_TERMINAL = frozenset(
+    {CancelOutcome.CANCELED, CancelOutcome.ALREADY_FILLED, CancelOutcome.NOT_FOUND}
+)
+
+
+async def _cancel_leg(
+    cancel: Callable[[OrderHandle], Awaitable[OrderHandle]], leg: OrderHandle
+) -> tuple[CancelOutcome, Decimal, bool]:
+    """Cancel one leg: (outcome, filled_qty, errored). Never raises for a per-leg failure."""
+    try:
+        after = await cancel(leg)
+    except IbError as exc:
+        outcome = (
+            CancelOutcome.NOT_FOUND if exc.error_code == _NOT_FOUND_CODE else CancelOutcome.UNKNOWN
+        )
+        return outcome, leg.filled_qty, outcome is CancelOutcome.UNKNOWN
+    except Exception:
+        return CancelOutcome.UNKNOWN, leg.filled_qty, True
+    if after.status == IBOrderState.CANCELLED:
+        return CancelOutcome.CANCELED, after.filled_qty, False
+    if after.status == IBOrderState.FILLED:
+        return CancelOutcome.ALREADY_FILLED, after.filled_qty, False
+    return CancelOutcome.UNKNOWN, after.filled_qty, False
+
+
+def _linked_status(outcomes: list[CancelOutcome], errored: bool) -> LinkedCancelStatus:
+    if CancelOutcome.ALREADY_FILLED in outcomes:
+        return LinkedCancelStatus.FILLED
+    if all(o in _TERMINAL for o in outcomes):
+        return LinkedCancelStatus.CANCELED
+    return LinkedCancelStatus.UNKNOWN if errored else LinkedCancelStatus.PENDING
+
+
+async def cancel_legs(
+    cancel: Callable[[OrderHandle], Awaitable[OrderHandle]],
+    group_id: str,
+    legs: list[OrderHandle],
+) -> LinkedCancelOutcome:
+    """Cancel every placed leg once and summarise as a dtp ``LinkedCancelOutcome``.
+
+    ``residual_filled`` is signed net exposure relative to ``legs[0]``'s side.
+    """
+    outcomes: list[CancelOutcome] = []
+    residual = Decimal(0)
+    errored = False
+    first_action = legs[0].action
+    for leg in legs:
+        outcome, filled, leg_errored = await _cancel_leg(cancel, leg)
+        outcomes.append(outcome)
+        errored = errored or leg_errored
+        residual += filled if leg.action == first_action else -filled
+    return LinkedCancelOutcome(
+        group_id=group_id,
+        all_legs_terminal=all(o in _TERMINAL for o in outcomes),
+        residual_filled=residual,
+        leg_outcomes=tuple(outcomes),
+        status=_linked_status(outcomes, errored),
+    )
 
 
 class OcaType(IntEnum):

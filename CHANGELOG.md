@@ -18,6 +18,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Bump `hb-data-type-primitives` to v0.11.0 (LinkedOrderSpec/LegSpec/LinkKind/LegRole for #239).
 - Bump `hb-data-type-primitives` to v0.12.0 (CancelOutcome/LinkedCancelOutcome for #251).
+- Bump `hb-data-type-primitives` to v0.13.0 (`residual_filled` is signed net exposure, for #251).
 
 ## [0.9.0] - 2026-11-15
 

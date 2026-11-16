@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager as AsyncContextManager
     from decimal import Decimal
 
-    from data_type_primitives import LinkedOrderSpec
+    from data_type_primitives import LinkedCancelOutcome, LinkedOrderSpec
 
     from market_connector.capabilities import OrderCapabilities
     from market_connector.contracts.instrument import InstrumentRef
@@ -92,6 +92,8 @@ class SupportsBracket(Protocol):
         options: Mapping[str, Any] | None = None,
     ) -> BracketHandle: ...
 
+    async def cancel_linked(self, handle: BracketHandle) -> LinkedCancelOutcome: ...
+
 
 @runtime_checkable
 class SupportsOco(Protocol):
@@ -104,6 +106,8 @@ class SupportsOco(Protocol):
         *,
         options: Mapping[str, Any] | None = None,
     ) -> OcoHandle: ...
+
+    async def cancel_linked(self, handle: OcoHandle) -> LinkedCancelOutcome: ...
 
 
 @runtime_checkable

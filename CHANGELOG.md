@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `SupportsBracket` / `SupportsOco` protocols and read-only `BracketHandle` / `OcoHandle` handle protocols (#239); `check_linked_protocol_capabilities` contract helper.
+- `cancel_linked(handle) -> LinkedCancelOutcome` on `SupportsBracket` / `SupportsOco` (#251); IB cancels each placed leg natively and reports per-leg outcomes, signed residual fill and status (dtp v0.13.0). Coinbase unchanged.
 - IB: `place_oco`, and `place_bracket(target, spec)` taking a `LinkedOrderSpec` (single-exit brackets supported). `IbBracket` / `IbOcaGroup` expose the handle members.
 
 ### Deprecated
@@ -17,6 +18,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Bump `hb-data-type-primitives` to v0.11.0 (LinkedOrderSpec/LegSpec/LinkKind/LegRole for #239).
+- Bump `hb-data-type-primitives` to v0.12.0 (CancelOutcome/LinkedCancelOutcome for #251).
+- Bump `hb-data-type-primitives` to v0.13.0 (`residual_filled` is signed net exposure, for #251).
 
 ## [0.9.0] - 2026-11-15
 

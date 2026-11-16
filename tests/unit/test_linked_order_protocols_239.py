@@ -11,8 +11,9 @@ Approved API (option B):
 
 Both handles are runtime_checkable typing.Protocol classes exported from ``market_connector``
 whose members are read-only ``@property`` declarations (covariant, so a frozen dataclass with
-``group_id: str`` matches ``str | int``). They are not concrete classes. ``cancel_linked`` is
-deferred to issue #251 and must not appear on either Protocol.
+``group_id: str`` matches ``str | int``). They are not concrete classes. ``cancel_linked`` was
+deferred by #239 and is now declared on both Protocols by issue #251 (see
+test_cancel_linked_251.py).
 Contract helper (market_connector.testing.contract):
 
     check_linked_protocol_capabilities(gateway) -> list[str]   # empty == consistent
@@ -170,10 +171,16 @@ class _Bracketer:
     ) -> Any:
         return _bracket()
 
+    async def cancel_linked(self, handle: Any) -> Any:
+        raise NotImplementedError
+
 
 class _Ocoer:
     async def place_oco(self, target: Any, spec: LinkedOrderSpec, *, options: Any = None) -> Any:
         return _oco()
+
+    async def cancel_linked(self, handle: Any) -> Any:
+        raise NotImplementedError
 
 
 class TestProtocols:
@@ -214,10 +221,12 @@ class TestProtocols:
         assert inspect.iscoroutinefunction(getattr(getattr(protocols, proto), method))
 
     @pytest.mark.parametrize("proto", ["SupportsBracket", "SupportsOco"])
-    def test_cancel_linked_is_deferred_to_251(self, proto: str) -> None:
+    def test_cancel_linked_is_declared_by_251(self, proto: str) -> None:
+        # #251 supersedes the #239 deferral: cancel_linked is now on both Protocols, and
+        # still not on ExecutionGateway.
         from market_connector import protocols
 
-        assert not hasattr(getattr(protocols, proto), "cancel_linked")
+        assert hasattr(getattr(protocols, proto), "cancel_linked")
         assert "cancel_linked" not in dir(protocols.ExecutionGateway)
 
     def test_exported_from_package_top_level(self) -> None:

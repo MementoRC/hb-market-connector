@@ -9,6 +9,7 @@ import uuid
 from typing import Protocol, runtime_checkable
 
 import pytest
+
 from market_connector.exchanges.coinbase.linked_order_codec import CoinbaseClientOrderIdLinkCodec
 
 

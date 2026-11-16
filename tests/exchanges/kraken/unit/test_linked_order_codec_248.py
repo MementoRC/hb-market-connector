@@ -1,14 +1,18 @@
-"""RED acceptance tests for issue #248: Kraken userref LinkedOrderIdCodec.
+"""RED acceptance tests for issue #248: Kraken cl_ord_id LinkedOrderIdCodec.
 
 The Protocol is owned by hb-strategy-framework; it is mirrored locally here.
+Kraken AddOrder `cl_ord_id`: free-format ASCII, up to 18 chars, unique among
+open orders, mutually exclusive with userref.
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Protocol, runtime_checkable
 
 import pytest
-from market_connector.exchanges.kraken.linked_order_codec import KrakenUserrefLinkCodec
+
+from market_connector.exchanges.kraken.linked_order_codec import KrakenClOrdIdLinkCodec
 
 
 @runtime_checkable
@@ -17,59 +21,65 @@ class LinkedOrderIdCodec(Protocol):
     def decode(self, tag: str | int) -> tuple[int, int] | None: ...
 
 
-INT32_MIN = -(2**31)
-INT32_MAX = 2**31 - 1
-GROUP_IDS = [0, 1, 12345, KrakenUserrefLinkCodec.GROUP_ID_MAX]
+GROUP_ID_MAX = 99_999_999_999
+GROUP_IDS = [0, 1, 12345, 10**10, GROUP_ID_MAX]
 LEG_INDEXES = [0, 1, 2, 15]
+CL_ORD_ID_MAX_LEN = 18
 
 
 @pytest.fixture
-def codec() -> KrakenUserrefLinkCodec:
-    return KrakenUserrefLinkCodec()
+def codec() -> KrakenClOrdIdLinkCodec:
+    return KrakenClOrdIdLinkCodec()
 
 
 def test_constants() -> None:
-    assert KrakenUserrefLinkCodec.GROUP_ID_MAX == 8_388_607
-    assert KrakenUserrefLinkCodec.LEG_INDEX_MAX == 15
+    assert KrakenClOrdIdLinkCodec.GROUP_ID_MAX == GROUP_ID_MAX
+    assert KrakenClOrdIdLinkCodec.LEG_INDEX_MAX == 15
 
 
-def test_satisfies_protocol(codec: KrakenUserrefLinkCodec) -> None:
+def test_satisfies_protocol(codec: KrakenClOrdIdLinkCodec) -> None:
     assert isinstance(codec, LinkedOrderIdCodec)
 
 
 @pytest.mark.parametrize("gid", GROUP_IDS)
 @pytest.mark.parametrize("leg", LEG_INDEXES)
-def test_round_trip(codec: KrakenUserrefLinkCodec, gid: int, leg: int) -> None:
-    assert codec.decode(codec.encode(gid, leg)) == (gid, leg)
+def test_encode_format(codec: KrakenClOrdIdLinkCodec, gid: int, leg: int) -> None:
+    assert codec.encode(gid, leg) == f"mcl-{gid}-{leg}"
 
 
 @pytest.mark.parametrize("gid", GROUP_IDS)
 @pytest.mark.parametrize("leg", LEG_INDEXES)
-def test_encoded_is_negative_int32(codec: KrakenUserrefLinkCodec, gid: int, leg: int) -> None:
+def test_encoded_is_ascii_str_within_18_chars(
+    codec: KrakenClOrdIdLinkCodec, gid: int, leg: int
+) -> None:
     tag = codec.encode(gid, leg)
-    assert type(tag) is int
-    assert INT32_MIN <= tag <= -1
+    assert isinstance(tag, str)
+    assert tag.isascii()
+    assert len(tag) <= CL_ORD_ID_MAX_LEN
 
 
-@pytest.mark.parametrize(("gid", "leg"), [(0, 0), (1, 0), (7, 1), (12345, 3), (8_388_607, 15)])
-def test_bit_layout(codec: KrakenUserrefLinkCodec, gid: int, leg: int) -> None:
-    tag = codec.encode(gid, leg)
-    assert ~tag == (0xA << 27) | (gid << 4) | leg
+def test_max_encoded_length_is_exactly_18(codec: KrakenClOrdIdLinkCodec) -> None:
+    assert len(codec.encode(GROUP_ID_MAX, 15)) == CL_ORD_ID_MAX_LEN
 
 
-def test_round_trip_sweep(codec: KrakenUserrefLinkCodec) -> None:
-    gmax = KrakenUserrefLinkCodec.GROUP_ID_MAX
-    for gid in range(0, gmax + 1, 104_729):
+@pytest.mark.parametrize("gid", GROUP_IDS)
+@pytest.mark.parametrize("leg", LEG_INDEXES)
+def test_round_trip(codec: KrakenClOrdIdLinkCodec, gid: int, leg: int) -> None:
+    assert codec.decode(codec.encode(gid, leg)) == (gid, leg)
+
+
+def test_round_trip_sweep(codec: KrakenClOrdIdLinkCodec) -> None:
+    for gid in range(0, GROUP_ID_MAX + 1, 999_999_937):
         for leg in range(16):
             tag = codec.encode(gid, leg)
-            assert INT32_MIN <= tag < 0
+            assert len(tag) <= CL_ORD_ID_MAX_LEN
             assert codec.decode(tag) == (gid, leg)
 
 
 @pytest.mark.parametrize(
     ("gid", "leg"),
     [
-        (KrakenUserrefLinkCodec.GROUP_ID_MAX + 1, 0),
+        (GROUP_ID_MAX + 1, 0),
         (-1, 0),
         (0, 16),
         (0, -1),
@@ -81,40 +91,41 @@ def test_round_trip_sweep(codec: KrakenUserrefLinkCodec) -> None:
         (0, "1"),
     ],
 )
-def test_encode_rejects_invalid(codec: KrakenUserrefLinkCodec, gid: object, leg: object) -> None:
+def test_encode_rejects_invalid(codec: KrakenClOrdIdLinkCodec, gid: object, leg: object) -> None:
     with pytest.raises((ValueError, TypeError)):
         codec.encode(gid, leg)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("userref", [1, 42, INT32_MAX, 1000, 65535, 123_456_789, 2**30])
-def test_foreign_userref_decodes_to_none_positive(
-    codec: KrakenUserrefLinkCodec, userref: int
-) -> None:
-    """foreign userref decodes to None: connector counter range (positive) is never ours."""
+@pytest.mark.parametrize("userref", [1, 42, -5, 2**31 - 1])
+def test_legacy_int_userref_decodes_to_none(codec: KrakenClOrdIdLinkCodec, userref: int) -> None:
     assert codec.decode(userref) is None
 
 
-def test_foreign_userref_decodes_to_none_counter_sample(codec: KrakenUserrefLinkCodec) -> None:
-    """foreign userref decodes to None: sample of the per-order counter range."""
-    for userref in range(1, 5000, 7):
-        assert codec.decode(userref) is None
-
-
 @pytest.mark.parametrize(
-    "userref",
+    "tag",
     [
-        0,
-        -1,
-        ~((0x5 << 27) | (7 << 4) | 1),
-        INT32_MIN - 1,
-        INT32_MAX + 1,
-        True,
-        False,
-        "mcl-1-0",
-        None,
-        -5.0,
+        "mcl-100000000000-0",
+        "mcl-1",
+        "mcl-1-0-2",
+        "mcl-01-0",
+        "mcl-1-00",
+        "mcl--1-0",
+        "mcl-1-16",
+        "MCL-1-0",
+        "mcl-1-0 ",
+        "",
     ],
 )
-def test_foreign_userref_decodes_to_none(codec: KrakenUserrefLinkCodec, userref: object) -> None:
-    """foreign userref decodes to None (SF orphan-cancel safety)."""
-    assert codec.decode(userref) is None  # type: ignore[arg-type]
+def test_malformed_tag_decodes_to_none(codec: KrakenClOrdIdLinkCodec, tag: str) -> None:
+    assert codec.decode(tag) is None
+
+
+def test_foreign_cl_ord_id_decodes_to_none(codec: KrakenClOrdIdLinkCodec) -> None:
+    """foreign cl_ord_id decodes to None: strategy-framework orphan-cancel safety."""
+    for tag in (str(uuid.uuid4()), "hbl-1-0", "hbot-buy-abc"):
+        assert codec.decode(tag) is None
+
+
+@pytest.mark.parametrize("tag", [None, True])
+def test_non_str_non_int_decodes_to_none(codec: KrakenClOrdIdLinkCodec, tag: object) -> None:
+    assert codec.decode(tag) is None  # type: ignore[arg-type]

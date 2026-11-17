@@ -1,10 +1,8 @@
 """End-to-end: ``KrakenConnectorCore`` (#266) over a real ``KrakenGateway`` private WS (#274), RED.
 
 Only the sockets (``websockets.connect``) and the REST transport are faked. The private connector
-uses the gateway's own auth, ack gate and ``wait_ws_disconnect``; its decoder is swapped for
-``RawFrameDecoder`` (acks still go through the real Kraken decoder) because the stock decoder
-cannot deliver a private array frame to a handler (``pair`` is the ``{"sequence": N}`` dict and
-the payload is the channel name), a separate defect outside the #274 contract.
+uses the gateway's own auth, ack gate, STOCK Kraken decoder and ``wait_ws_disconnect``; frames are
+pushed as realistic JSON text (no decoder bypass).
 
 Pinned: an error ack keeps ``user_stream_initialized`` False and the supervisor retries; a
 ``subscribed`` ack flips it True; an ownTrades frame on the private socket reaches
@@ -78,7 +76,6 @@ async def rig(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Rig]:
         ack_timeout=_ACK_TIMEOUT,
         private_reconnect_delay=0.01,
     ) as opened:
-        opened.use_raw_frame_decoder()
         yield opened
 
 
@@ -109,8 +106,11 @@ async def build(rig: Rig, bus: EventBus, seen: base.Recorder) -> AsyncIterator[C
 
 
 def _ws_frame(trade_id: str) -> list[Any]:
+    """A realistic Kraken WS v1 ownTrades frame (pushed as JSON text, stock decoder)."""
     detail = {
         "ordertxid": base._TXID,
+        "postxid": "TKH2SE-M7IF5-CFI7LT",
+        "userref": 0,
         "pair": "XBT/USD",
         "time": "1700000000.5123",
         "type": "sell",

@@ -196,11 +196,12 @@ async def test_subscribe_own_trades_routes_private_frame(monkeypatch: pytest.Mon
     raw = _load("own_trades.json")
     received: list[OwnTradesEvent] = []
 
-    async with open_rig(monkeypatch) as rig:
-        rig.use_raw_frame_decoder()
-        async with await rig.gw.subscribe_own_trades(received.append):
-            rig.priv.push(raw)
-            await until(lambda: len(received) == 1)
+    async with (
+        open_rig(monkeypatch) as rig,
+        await rig.gw.subscribe_own_trades(received.append),
+    ):
+        rig.priv.push(raw)
+        await until(lambda: len(received) == 1)
 
     assert len(received) == 1
     event = received[0]
@@ -244,11 +245,13 @@ async def test_subscribe_open_orders_routes_private_frame(monkeypatch: pytest.Mo
     ]
     received: list[OpenOrdersEvent] = []
 
-    async with open_rig(monkeypatch) as rig:  # #274: private + ack-gated, see own_trades test
-        rig.use_raw_frame_decoder()
-        async with await rig.gw.subscribe_open_orders(received.append):
-            rig.priv.push(raw)
-            await until(lambda: len(received) == 1)
+    # #274: private + ack-gated, see the own_trades test above
+    async with (
+        open_rig(monkeypatch) as rig,
+        await rig.gw.subscribe_open_orders(received.append),
+    ):
+        rig.priv.push(raw)
+        await until(lambda: len(received) == 1)
 
     assert len(received) == 1
     event = received[0]

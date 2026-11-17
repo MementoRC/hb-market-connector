@@ -40,10 +40,8 @@ import httpx
 import pytest
 
 from market_connector.exchanges.kraken.kraken_gateway import KrakenConfig, KrakenGateway
-from market_connector.exchanges.kraken.specs import KRAKEN_WS_DECODER
 from market_connector.transport.response import Response
 from market_connector.transport.ws_base import WsConnectorBase
-from market_connector.ws_models.decoder import NormalizedWsMessage, WsMessageKind
 from tests.unit.transport import test_ws_base as wsb
 
 if TYPE_CHECKING:
@@ -165,18 +163,6 @@ class PrivWs(wsb._FakeWs):
         return frame
 
 
-class RawFrameDecoder:
-    """Delivers array frames to their handler as the raw frame (what the mixin handlers decode)."""
-
-    def decode(self, raw: dict | list | str) -> NormalizedWsMessage:
-        if isinstance(raw, dict):
-            return KRAKEN_WS_DECODER.decode(raw)
-        assert isinstance(raw, list)
-        return NormalizedWsMessage(
-            kind=WsMessageKind.DATA, channel=raw[-2], pair=None, payload=raw, error=None
-        )
-
-
 @dataclass
 class Rig:
     gw: KrakenGateway
@@ -193,9 +179,6 @@ class Rig:
     @property
     def conn(self) -> WsConnectorBase:
         return self.gw._ws_private  # type: ignore[attr-defined,no-any-return]
-
-    def use_raw_frame_decoder(self) -> None:
-        self.conn._decoder = RawFrameDecoder()  # type: ignore[assignment]
 
 
 @contextlib.asynccontextmanager

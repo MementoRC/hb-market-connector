@@ -12,9 +12,10 @@ Pinned contract (``KrakenConnectorCore``; nothing here exists yet):
   - ``status_polling_initialized``: True while the poller started by ``start()`` is live;
     False before ``start()`` and after ``stop()``.
 
-  Excluded: ``user_stream_initialized`` (the core never owns the WebSocket; ``on_own_trades``
-  is fed from outside) and ``order_books_initialized`` (the core caches books on demand per
-  pair and has no configured pair set to be complete against).
+  ``user_stream_initialized`` (issue #266) is a fifth key present only with the default
+  ``own_trades_ws=True``; with ``own_trades_ws=False`` (the config these tests use) the dict
+  has exactly the four keys above. ``order_books_initialized`` stays excluded (the core caches
+  books on demand per pair and has no configured pair set to be complete against).
 * ``ready`` is derived: ``ready == all(status_dict.values())``.
 * A failed ``update_*`` leaves its key False (and does not raise through ``status_dict``).
 """
@@ -53,7 +54,12 @@ def gateway() -> KrakenGateway:
 @pytest.fixture
 def core(gateway: KrakenGateway) -> Any:
     cls = importlib.import_module(_CORE_MOD).KrakenConnectorCore
-    return cls(gateway, event_bus=EventBus(name="status-214"), status_poll_interval=3600.0)
+    return cls(
+        gateway,
+        event_bus=EventBus(name="status-214"),
+        status_poll_interval=3600.0,
+        own_trades_ws=False,
+    )
 
 
 def _true_keys(core: Any) -> set[str]:
@@ -77,6 +83,13 @@ def test_status_dict_is_a_property_with_agreed_keys(core: Any) -> None:
     assert isinstance(status, dict)
     assert set(status) == KEYS
     assert all(type(v) is bool for v in status.values())
+
+
+def test_default_config_adds_user_stream_key(gateway: KrakenGateway) -> None:
+    cls = importlib.import_module(_CORE_MOD).KrakenConnectorCore
+    default = cls(gateway, event_bus=EventBus(name="status-214-default"))
+    assert set(default.status_dict) == KEYS | {"user_stream_initialized"}
+    assert not any(default.status_dict.values())
 
 
 async def test_everything_false_before_start(core: Any) -> None:

@@ -28,6 +28,7 @@ from market_connector.hb_compat.order_events import (
 )
 
 if TYPE_CHECKING:
+    from data_type_primitives import TradingRules
     from data_type_primitives.in_flight_order import InFlightOrder
 
     from market_connector.exchanges.kraken.schemas.rest import TradeInfo
@@ -36,29 +37,40 @@ if TYPE_CHECKING:
 NAN = Decimal("NaN")
 
 
-def round_down(value: Decimal, decimals: int) -> Decimal:
-    """Round ``value`` down to ``decimals`` places; shorter values and NaN pass unchanged."""
-    exponent = value.as_tuple().exponent
-    if not isinstance(exponent, int) or -exponent <= decimals:
+def round_down(value: Decimal, increment: Decimal) -> Decimal:
+    """Round ``value`` down to a multiple of ``increment``.
+
+    NaN, infinities and a non-positive ``increment`` (no constraint) pass unchanged.
+    """
+    if not value.is_finite() or not increment.is_finite() or increment <= 0:
         return value
-    return value.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_DOWN)
+    exponent = increment.adjusted()
+    if exponent <= 0 and increment == Decimal(1).scaleb(exponent):  # power of ten: exact
+        value_exponent = value.as_tuple().exponent
+        if isinstance(value_exponent, int) and value_exponent >= exponent:
+            return value  # already no finer than the increment
+        return value.quantize(increment, rounding=ROUND_DOWN)
+    return (value / increment).to_integral_value(rounding=ROUND_DOWN) * increment
 
 
-def quantize_amount(rule: TradingRule | None, amount: Decimal) -> Decimal:
+def quantize_amount(rule: TradingRules | None, amount: Decimal) -> Decimal:
     """Round ``amount`` down to the lot size; 0 when unknown, NaN or below the minimum size."""
     if rule is None or amount.is_nan():
         return Decimal(0)
-    quantized = round_down(amount, rule.amount_decimals)
+    quantized = round_down(amount, rule.min_base_amount_increment)
     return quantized if quantized >= rule.min_order_size else Decimal(0)
 
 
 def quantize_order(
-    rule: TradingRule | None, amount: Decimal, price: Decimal
+    rule: TradingRules | None, amount: Decimal, price: Decimal
 ) -> tuple[Decimal, Decimal]:
     """Amount (lot) and price (tick) rounded down for AddOrder; unchanged without a rule."""
     if rule is None:
         return amount, price
-    return round_down(amount, rule.amount_decimals), round_down(price, rule.price_decimals)
+    return (
+        round_down(amount, rule.min_base_amount_increment),
+        round_down(price, rule.min_price_increment),
+    )
 
 
 def build_trade_update(

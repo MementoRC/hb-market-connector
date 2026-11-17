@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- hb_compat exchange registry (`list_exchanges` / `get_exchange`), `ExchangeDescriptor` with Kraken descriptor, `ConnectorCoreHandle` lifecycle and `ConnectorCoreProtocol`; Kraken core exposes dtp `TradingRules` / `OrderBookSnapshot` and price/size quanta (#265)
+
+### Changed
+
+- `KrakenConnectorCore.trading_rules` now holds dtp `TradingRules` and `get_order_book` returns dtp `OrderBookSnapshot` (#265)
+
 ### Fixed
 
 - Kraken spot rejects `sandbox=True` with `ValueError` (Kraken spot has no sandbox; REST previously pointed at demo-futures while WS stayed on production) (#260)

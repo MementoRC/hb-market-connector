@@ -927,8 +927,8 @@ class TestMarketData:
         (request,) = rest.bodies("depth")
         assert request["pair"] == _WIRE_PAIR  # gateway gets the converted pair
         book = connector.get_order_book(_PAIR)  # sync, no await
-        assert book.bids[0] == (Decimal("27000.0"), Decimal("2.0"))
-        assert book.asks[0] == (Decimal("27010.0"), Decimal("1.5"))
+        assert (book.bids[0].price, book.bids[0].quantity) == (Decimal("27000.0"), Decimal("2.0"))
+        assert (book.asks[0].price, book.asks[0].quantity) == (Decimal("27010.0"), Decimal("1.5"))
         connector.get_order_book(_PAIR)
         assert len(rest.bodies("depth")) == 1  # reads never hit REST
 

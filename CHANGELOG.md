@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Kraken spot rejects `sandbox=True` with `ValueError` (Kraken spot has no sandbox; REST previously pointed at demo-futures while WS stayed on production) (#260)
+- Kraken converter maps `TAKE_PROFIT_LIMIT` and `TRAILING_STOP_LIMIT` (#261)
+
 ## [0.10.0] - 2026-11-16
 
 ### Added

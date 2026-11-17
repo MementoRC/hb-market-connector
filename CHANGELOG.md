@@ -5,11 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-16
+
 ### Added
 
 - `SupportsBracket` / `SupportsOco` protocols and read-only `BracketHandle` / `OcoHandle` handle protocols (#239); `check_linked_protocol_capabilities` contract helper.
 - `cancel_linked(handle) -> LinkedCancelOutcome` on `SupportsBracket` / `SupportsOco` (#251); IB cancels each placed leg natively and reports per-leg outcomes, signed residual fill and status (dtp v0.13.0). Coinbase unchanged.
 - IB: `place_oco`, and `place_bracket(target, spec)` taking a `LinkedOrderSpec` (single-exit brackets supported). `IbBracket` / `IbOcaGroup` expose the handle members.
+- Per-exchange `LinkedOrderIdCodec` (Kraken `cl_ord_id`, Coinbase `client_order_id`) (#248)
+- Kraken `cl_ord_id` primitives for emulated linked legs (#255)
+- `KrakenConnectorCore.buy/sell` keyword-only `limit_price`, `price_in_percent`, `position_action`, `expiration_ts`; stop/take-profit/trailing `*_LIMIT` orders require `limit_price` (ValueError); unknown kwargs raise TypeError (#259)
 
 ### Deprecated
 

@@ -124,7 +124,7 @@ def test_gateway_uses_production_urls(kwargs, io_spies):
     gw = _build_gateway(**kwargs)
     assert gw._config.base_url == PROD_REST
     assert transport.call_args.kwargs["base_url"] == PROD_REST
-    assert ws.call_args.kwargs["url"] == PROD_WS
+    assert ws.call_args_list[0].kwargs["url"] == PROD_WS  # #274: 2nd call is the private WS
 
 
 @pytest.mark.parametrize("kwargs", [{}, {"sandbox": False}], ids=["default", "explicit_false"])
@@ -133,4 +133,4 @@ def test_bridge_uses_production_urls(kwargs, io_spies):
     bridge = _build_bridge(**kwargs)
     assert bridge.gateway._config.base_url == PROD_REST
     assert transport.call_args.kwargs["base_url"] == PROD_REST
-    assert ws.call_args.kwargs["url"] == PROD_WS
+    assert ws.call_args_list[0].kwargs["url"] == PROD_WS  # #274: 2nd call is the private WS

@@ -57,6 +57,7 @@ class KrakenTokenRestAdapter:
 
 def kraken_ws_auth_factory(
     rest_client: Any = None,
+    nest_token_under: str | None = None,
 ) -> tuple[PassThroughAuth, TokenFetchAuth]:
     """Return a (public, private) pair of WsAuthModel instances for Kraken.
 
@@ -64,13 +65,17 @@ def kraken_ws_auth_factory(
         rest_client: Optional RestClient used by the private TokenFetchAuth to
                      call /0/private/GetWebSocketsToken.  Pass None to create
                      a spec-only instance (e.g. in unit tests).
+        nest_token_under: Message key to nest the token under; the gateway passes
+                     ``"subscription"`` (Kraken WS v1 wire format). Default: top level.
 
     Returns:
         A 2-tuple of (KRAKEN_PUBLIC_WS_AUTH, private_ws_auth) where:
         - public_ws_auth  is PassThroughAuth (no-op for public streams)
         - private_ws_auth is TokenFetchAuth with rest_client bound
     """
-    private_ws_auth = replace(KRAKEN_PRIVATE_WS_AUTH, rest_client=rest_client)
+    private_ws_auth = replace(
+        KRAKEN_PRIVATE_WS_AUTH, rest_client=rest_client, nest_token_under=nest_token_under
+    )
     return KRAKEN_PUBLIC_WS_AUTH, private_ws_auth
 
 

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 from market_connector.exceptions import SubscriptionAckTimeoutError, SubscriptionRejectedError
+from market_connector.hb_compat.logging import get_logger
 from market_connector.ws_models.decoder import NormalizedWsMessage, WsMessageKind
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+logger = get_logger(__name__)
 
 
 class AckGate:
@@ -44,10 +48,24 @@ class AckGate:
         elif status == "error":
             future.set_exception(SubscriptionRejectedError(str(payload.get("errorMessage", ""))))
 
+    def fail_all(self, exc: Exception) -> None:
+        """Fail every pending ack future with *exc* (e.g. the gateway is stopping)."""
+        for future in self._pending.values():
+            if not future.done():
+                future.set_exception(exc)
+
     async def consume(self, queue: asyncio.Queue[NormalizedWsMessage]) -> None:
-        """Drain *queue* forever, dispatching each management message."""
+        """Drain *queue* forever, dispatching each management message.
+
+        A bad message is logged and skipped; error-status acks are logged as warnings.
+        """
         while True:
-            self.dispatch(await queue.get())
+            msg = await queue.get()
+            try:
+                _log_error_ack(msg)
+                self.dispatch(msg)
+            except Exception:
+                logger.exception("Dropping malformed management message: %r", msg)
 
     async def wait(self, reqid: int, future: asyncio.Future[None], timeout: float) -> None:
         """Wait for the ack of *reqid*; raise on rejection or when *timeout* elapses."""
@@ -75,10 +93,26 @@ async def gated_subscribe(
     """
     reqid, future = gate.expect()
     ws.subscribe(channel, None, handler)
+    sent = False
     try:
         await ws.send({**message, "reqid": reqid})
+        sent = True
         await gate.wait(reqid, future, timeout_getter())
-    except BaseException:
+    except BaseException as exc:
         gate.discard(reqid)
         ws.unsubscribe(channel, None)
+        if sent and isinstance(exc, SubscriptionAckTimeoutError | asyncio.CancelledError):
+            # The server may still have honoured the unacked subscribe: undo it, best effort.
+            with contextlib.suppress(Exception):
+                await ws.send({"event": "unsubscribe", "subscription": message["subscription"]})
         raise
+
+
+def _log_error_ack(msg: NormalizedWsMessage) -> None:
+    payload = msg.payload
+    if (
+        msg.kind is WsMessageKind.SUBSCRIBE_ACK
+        and isinstance(payload, dict)
+        and payload.get("status") == "error"
+    ):
+        logger.warning("Kraken subscription rejected: %s", payload.get("errorMessage", payload))

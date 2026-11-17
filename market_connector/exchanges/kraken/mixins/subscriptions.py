@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from market_connector.exceptions import GatewayNotStartedError
-from market_connector.exchanges.kraken.ack_gate import AckGate, gated_subscribe
+from market_connector.exchanges.kraken.ack_gate import gated_subscribe
 from market_connector.exchanges.kraken.schemas.ws import (
     BookSnapshot,
     OpenOrdersEvent,
@@ -47,7 +47,7 @@ async def _private_ctx(
     ws = host._ws_private
     gate = getattr(host, "_ack_gate", None)
     if gate is None:
-        gate = host._ack_gate = AckGate()
+        raise RuntimeError("private subscribes need the host's _ack_gate (an AckGate); none set")
     await gated_subscribe(
         ws,
         gate,

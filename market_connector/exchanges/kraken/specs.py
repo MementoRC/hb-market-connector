@@ -263,6 +263,9 @@ KRAKEN_PRIVATE_WS_AUTH: TokenFetchAuth = TokenFetchAuth(
 # ---------------------------------------------------------------------------
 
 
+_PRIVATE_CHANNELS = frozenset({"ownTrades", "openOrders"})
+
+
 class KrakenWsDecoder:
     """WS decoder for Kraken v1 array-frame protocol.
 
@@ -322,7 +325,7 @@ class KrakenWsDecoder:
     @staticmethod
     def _is_private_frame(raw: list) -> bool:
         """Private frames are ``[data, "ownTrades"|"openOrders", {"sequence": N}]`` (#274)."""
-        return len(raw) == 3 and isinstance(raw[1], str) and isinstance(raw[2], dict)
+        return len(raw) == 3 and raw[1] in _PRIVATE_CHANNELS and isinstance(raw[2], dict)
 
     @staticmethod
     def _decode_private(raw: list) -> NormalizedWsMessage:

@@ -495,3 +495,134 @@ class TestQuantization:
         result = connector.quantize_order_price("BTC-USD", price)
         assert result % quantum == 0
         assert result <= price < result + quantum
+
+
+# ---------------------------------------------------------------------------
+# review follow-ups
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class _Mocks:
+    gw_start: AsyncMock
+    gw_stop: AsyncMock
+    core_start: AsyncMock
+    core_stop: AsyncMock
+
+
+def _install_mocks(
+    handle: Any, *, gw_start_exc: Exception | None = None, core_start_exc: Exception | None = None
+) -> _Mocks:
+    mocks = _Mocks(
+        AsyncMock(side_effect=gw_start_exc),
+        AsyncMock(),
+        AsyncMock(side_effect=core_start_exc),
+        AsyncMock(),
+    )
+    patch.object(handle.gateway, "start", mocks.gw_start).start()
+    patch.object(handle.gateway, "stop", mocks.gw_stop).start()
+    patch.object(handle.core, "start", mocks.core_start).start()
+    patch.object(handle.core, "stop", mocks.core_stop).start()
+    return mocks
+
+
+class TestStartRollback:
+    async def test_gateway_start_failure_rolls_back(self, handle: Any) -> None:
+        mocks = _install_mocks(handle, gw_start_exc=OSError("boom"))
+        with pytest.raises(OSError, match="boom"):
+            await handle.start()
+        mocks.core_start.assert_not_awaited()
+        mocks.gw_stop.assert_awaited_once()
+        await handle.close()  # no-op after the rollback
+        mocks.gw_stop.assert_awaited_once()
+        mocks.core_stop.assert_not_awaited()
+
+    async def test_core_start_failure_rolls_back(self, handle: Any) -> None:
+        mocks = _install_mocks(handle, core_start_exc=OSError("core boom"))
+        with pytest.raises(OSError, match="core boom"):
+            await handle.start()
+        mocks.gw_stop.assert_awaited_once()
+        await handle.close()
+        mocks.gw_stop.assert_awaited_once()
+
+    async def test_context_manager_failing_start_rolls_back(self, handle: Any) -> None:
+        mocks = _install_mocks(handle, gw_start_exc=OSError("boom"))
+        with pytest.raises(OSError, match="boom"):
+            async with handle:
+                pytest.fail("body must not run")
+        mocks.core_start.assert_not_awaited()
+        mocks.gw_stop.assert_awaited_once()
+
+
+class TestGatewayPartialStart:
+    async def test_stop_closes_rest_after_failed_ws_connect(self) -> None:
+        gw = KrakenGateway(api_key="k", secret_key="c2VjcmV0")
+        with (
+            patch.object(KrakenTransport, "request", new_callable=AsyncMock),
+            patch.object(
+                WsConnectorBase, "connect", new_callable=AsyncMock, side_effect=OSError("ws")
+            ),
+            patch.object(KrakenTransport, "close", new_callable=AsyncMock) as rest_close,
+        ):
+            with pytest.raises(OSError, match="ws"):
+                await gw.start()
+            await gw.stop()
+            rest_close.assert_awaited()
+
+
+class TestSecretRepr:
+    def test_config_repr_hides_secrets(self) -> None:
+        from market_connector.exchanges.kraken.kraken_gateway import KrakenConfig
+
+        text = repr(KrakenConfig(api_key="KEYSECRET", secret_key="SSECRET"))
+        assert "KEYSECRET" not in text
+        assert "SSECRET" not in text
+
+    def test_gateway_config_repr_hides_secrets(self) -> None:
+        gw = KrakenGateway(api_key="KEYSECRET", secret_key="c1NTRUNSRVQ=")
+        text = repr(gw._config)
+        assert "KEYSECRET" not in text
+        assert "c1NTRUNSRVQ=" not in text
+
+
+class TestQuantizePrecision:
+    async def test_amount_with_more_than_28_digits_truncates_down(self, connector: Any) -> None:
+        amount = Decimal("0." + "9" * 32)
+        assert connector.quantize_order_amount("BTC-USD", amount) == Decimal("0.99999999")
+
+    async def test_price_with_more_than_28_digits_truncates_down(self, connector: Any) -> None:
+        price = Decimal("0." + "9" * 32)
+        assert connector.quantize_order_price("ETH-USD", price) == Decimal("0.99")
+
+    @pytest.mark.parametrize(
+        ("amount", "expected"),
+        [
+            ("1.5", "1.5"),
+            ("100", "100"),
+            ("1.50000000", "1.50000000"),
+            ("1.500000000", "1.50000000"),
+        ],
+    )
+    async def test_amount_string_form_matches_legacy(
+        self, connector: Any, amount: str, expected: str
+    ) -> None:
+        assert str(connector.quantize_order_amount("BTC-USD", Decimal(amount))) == expected
+
+    def test_nan_increment_returns_value_unchanged(self) -> None:
+        from market_connector.exchanges.kraken.hb_compat.kraken_core_support import round_down
+
+        value = Decimal("1.2345")
+        assert round_down(value, Decimal("NaN")) == value
+
+
+class TestLazyRegistryLookup:
+    def test_get_exchange_kraken(self) -> None:
+        assert _registry().get_exchange("kraken").name == "kraken"
+
+    def test_unknown_lookup_imports_no_exchange_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delitem(sys.modules, _KRAKEN_DESCRIPTOR, raising=False)
+        with pytest.raises(KeyError):
+            _registry().get_exchange("nope")
+        assert _KRAKEN_DESCRIPTOR not in sys.modules

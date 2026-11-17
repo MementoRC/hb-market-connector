@@ -41,6 +41,8 @@ _HB_TO_KRAKEN: dict[str, str] = {
     "STOP_LOSS_LIMIT": "stop-loss-limit",
     "TAKE_PROFIT": "take-profit",
     "TRAILING_STOP": "trailing-stop",
+    "TAKE_PROFIT_LIMIT": "take-profit-limit",
+    "TRAILING_STOP_LIMIT": "trailing-stop-limit",
     # Limit-maker passthrough (hb-market-connector primitives)
     "LIMIT_MAKER": "limit",
 }

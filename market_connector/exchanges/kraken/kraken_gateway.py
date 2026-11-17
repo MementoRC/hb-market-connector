@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from market_connector.exchanges.kraken.ack_gate import AckGate
 from market_connector.exchanges.kraken.endpoints import ENDPOINT_REGISTRY
 from market_connector.exchanges.kraken.factory import (
+    KrakenTokenRestAdapter,
     kraken_signer_factory,
     kraken_ws_auth_factory,
 )
@@ -53,6 +57,7 @@ class KrakenConfig:
         base_url:   Override the REST base URL (e.g. for testing).
         ws_url:     Override the public WS URL.
         ws_auth_url: Override the private WS URL.
+        subscribe_ack_timeout: Seconds to wait for a private subscribe ack (#274).
     """
 
     api_key: str = field(repr=False)
@@ -62,6 +67,7 @@ class KrakenConfig:
     base_url: str = field(default="")
     ws_url: str = field(default="")
     ws_auth_url: str = field(default="")
+    subscribe_ack_timeout: float = 10.0
 
     def __post_init__(self) -> None:
         if self.sandbox:
@@ -128,7 +134,10 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         )
 
         # Public WebSocket (no auth); private WS auth bound after rest client is ready.
-        _public_ws_auth, _private_ws_auth = kraken_ws_auth_factory(rest_client=self._rest)
+        # The adapter resolves self._rest at call time (G2, #274).
+        _public_ws_auth, _private_ws_auth = kraken_ws_auth_factory(
+            rest_client=KrakenTokenRestAdapter(lambda: self._rest)
+        )
         self._ws_auth = _public_ws_auth
         self._ws_private_auth = _private_ws_auth
 
@@ -140,6 +149,16 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
             reconnect_delay=1.0,
             max_reconnect_delay=60.0,
         )
+        self._ws_private = WsConnectorBase(
+            url=self._config.ws_auth_url,
+            ws_auth=self._ws_private_auth,
+            decoder=self._ws_decoder,
+            heartbeat_interval=30.0,
+            reconnect_delay=1.0,
+            max_reconnect_delay=60.0,
+        )
+        self._ack_gate = AckGate()
+        self._ack_task: asyncio.Task[None] | None = None
         self._started = False
         self._opened = False  # start() was attempted: REST/WS may hold resources
 
@@ -149,17 +168,25 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         return self._started
 
     async def start(self) -> None:
-        """Validate connectivity and open the public WebSocket connection."""
+        """Validate connectivity, then open the public and private WebSocket connections."""
         if self._started:
             return
         self._opened = True
         await self._rest.request("server_time")
         await self._ws.connect()
+        try:
+            await self._ws_private.connect()
+        except BaseException:
+            await self._ws.disconnect()
+            raise
+        self._ack_task = asyncio.create_task(
+            self._ack_gate.consume(self._ws_private.management_messages)
+        )
         self._started = True
 
     async def wait_ws_disconnect(self) -> None:
         """Return when the private WebSocket connection drops."""
-        await self._ws.wait_disconnect()
+        await self._ws_private.wait_disconnect()
 
     async def stop(self) -> None:
         """Gracefully close WebSocket and REST connections (also after a partial start)."""
@@ -167,10 +194,22 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
             return
         self._opened = False
         self._started = False
+        await self._cancel_ack_task()
         try:
-            await self._ws.disconnect()
+            await self._ws_private.disconnect()
         finally:
-            await self._rest.close()
+            try:
+                await self._ws.disconnect()
+            finally:
+                await self._rest.close()
+
+    async def _cancel_ack_task(self) -> None:
+        task, self._ack_task = self._ack_task, None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 __all__ = [

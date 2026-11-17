@@ -13,6 +13,8 @@ from market_connector.exchanges.kraken.specs import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from market_connector.auth.protocols import Signer
     from market_connector.ws_models.auth_models import PassThroughAuth, TokenFetchAuth
 
@@ -37,6 +39,22 @@ def kraken_signer_factory(api_key: str, secret_key: str) -> Signer:
     return DeclarativeRestSigner.from_spec(KRAKEN_HMAC_SPEC, api_key=api_key, secret=secret_key)
 
 
+class KrakenTokenRestAdapter:
+    """Gives ``TokenFetchAuth`` a ``get()`` over the real ``request()`` REST API (#274).
+
+    The REST transport is resolved through *rest_getter* at call time, so a transport
+    swapped in after construction is the one used.
+    """
+
+    def __init__(self, rest_getter: Callable[[], Any]) -> None:
+        self._rest_getter = rest_getter
+
+    async def get(self, _endpoint: str) -> dict[str, Any]:
+        response = await self._rest_getter().request("get_websockets_token")
+        raw: dict[str, Any] = response.raw
+        return raw
+
+
 def kraken_ws_auth_factory(
     rest_client: Any = None,
 ) -> tuple[PassThroughAuth, TokenFetchAuth]:
@@ -57,6 +75,7 @@ def kraken_ws_auth_factory(
 
 
 __all__ = [
+    "KrakenTokenRestAdapter",
     "kraken_signer_factory",
     "kraken_ws_auth_factory",
 ]

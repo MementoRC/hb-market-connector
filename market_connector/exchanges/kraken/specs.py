@@ -313,8 +313,23 @@ class KrakenWsDecoder:
             # subscriptionStatus and unknown dicts → delegate to inner decoder
             return self._inner.decode(raw)
 
-        # Array frames → delegate to inner decoder
+        if isinstance(raw, list) and self._is_private_frame(raw):
+            return self._decode_private(raw)
+
+        # Public array frames → delegate to inner decoder
         return self._inner.decode(raw)
+
+    @staticmethod
+    def _is_private_frame(raw: list) -> bool:
+        """Private frames are ``[data, "ownTrades"|"openOrders", {"sequence": N}]`` (#274)."""
+        return len(raw) == 3 and isinstance(raw[1], str) and isinstance(raw[2], dict)
+
+    @staticmethod
+    def _decode_private(raw: list) -> NormalizedWsMessage:
+        """Channel-wide DATA message; the payload is the whole frame (data + sequence)."""
+        return NormalizedWsMessage(
+            kind=WsMessageKind.DATA, channel=raw[1], pair=None, payload=raw, error=None
+        )
 
 
 # Singleton instance for use in Stage 2 conformance wiring

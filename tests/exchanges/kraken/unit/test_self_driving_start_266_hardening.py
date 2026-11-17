@@ -201,6 +201,7 @@ class _Host(SubscriptionsMixin):
 
     def __init__(self) -> None:
         self._ws = _RouteWs()
+        self._ws_private = self._ws  # #274: private subscribes run on the private connector
 
 
 class TestSubscribeRouteCleanup:

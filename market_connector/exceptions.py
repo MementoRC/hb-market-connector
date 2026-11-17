@@ -42,6 +42,14 @@ class SubscriptionLimitError(GatewayError):
     """WebSocket subscription cap exceeded for the exchange."""
 
 
+class SubscriptionRejectedError(GatewayError):
+    """The exchange answered a subscribe request with an error status."""
+
+
+class SubscriptionAckTimeoutError(GatewayError, TimeoutError):
+    """No subscribe acknowledgement arrived within the configured timeout."""
+
+
 class AuthenticationError(GatewayError):
     """Credentials are invalid, expired, or missing required permissions."""
 

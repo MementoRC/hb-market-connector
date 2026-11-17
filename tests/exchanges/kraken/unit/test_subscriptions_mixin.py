@@ -11,6 +11,7 @@ import pytest
 
 from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.kraken.mixins.subscriptions import SubscriptionsMixin
+from tests.exchanges.kraken.unit.test_private_ws_274 import open_rig, until
 
 if TYPE_CHECKING:
     from market_connector.exchanges.kraken.schemas.ws import (
@@ -189,14 +190,18 @@ async def test_subscribe_trades_sends_subscribe_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subscribe_own_trades_routes_private_frame() -> None:
+async def test_subscribe_own_trades_routes_private_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #274: private subscribes run on the private connector and are ack-gated, so this goes
+    # through a real gateway over a fake private socket that acks every subscribe.
     raw = _load("own_trades.json")
-    ws = _MockWs()
     received: list[OwnTradesEvent] = []
-    mixin = _TestableSubs(ws)
 
-    async with await mixin.subscribe_own_trades(received.append):
-        ws.deliver("ownTrades", None, raw)
+    async with (
+        open_rig(monkeypatch) as rig,
+        await rig.gw.subscribe_own_trades(received.append),
+    ):
+        rig.priv.push(raw)
+        await until(lambda: len(received) == 1)
 
     assert len(received) == 1
     event = received[0]
@@ -220,7 +225,7 @@ async def test_subscribe_own_trades_not_ready_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subscribe_open_orders_routes_private_frame() -> None:
+async def test_subscribe_open_orders_routes_private_frame(monkeypatch: pytest.MonkeyPatch) -> None:
     # Synthetic openOrders frame (same shape as ownTrades)
     raw = [
         [
@@ -238,12 +243,15 @@ async def test_subscribe_open_orders_routes_private_frame() -> None:
         "openOrders",
         {"sequence": 5},
     ]
-    ws = _MockWs()
     received: list[OpenOrdersEvent] = []
-    mixin = _TestableSubs(ws)
 
-    async with await mixin.subscribe_open_orders(received.append):
-        ws.deliver("openOrders", None, raw)
+    # #274: private + ack-gated, see the own_trades test above
+    async with (
+        open_rig(monkeypatch) as rig,
+        await rig.gw.subscribe_open_orders(received.append),
+    ):
+        rig.priv.push(raw)
+        await until(lambda: len(received) == 1)
 
     assert len(received) == 1
     event = received[0]

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from market_connector.exceptions import GatewayNotStartedError
+from market_connector.exchanges.kraken.ack_gate import AckGate
 from market_connector.exchanges.kraken.endpoints import ENDPOINT_REGISTRY
 from market_connector.exchanges.kraken.factory import (
+    KrakenTokenRestAdapter,
     kraken_signer_factory,
     kraken_ws_auth_factory,
 )
@@ -21,11 +25,14 @@ from market_connector.exchanges.kraken.specs import (
     KRAKEN_WS_DECODER,
 )
 from market_connector.exchanges.kraken.transport import KrakenTransport
+from market_connector.hb_compat.logging import get_logger
 from market_connector.rate_limits.limiter import limiter_from_tiered_spec
 from market_connector.transport.ws_base import WsConnectorBase
 
 if TYPE_CHECKING:
     from market_connector.capabilities import OrderCapabilities
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # URL constants
@@ -53,6 +60,7 @@ class KrakenConfig:
         base_url:   Override the REST base URL (e.g. for testing).
         ws_url:     Override the public WS URL.
         ws_auth_url: Override the private WS URL.
+        subscribe_ack_timeout: Seconds to wait for a private subscribe ack (#274).
     """
 
     api_key: str = field(repr=False)
@@ -62,6 +70,7 @@ class KrakenConfig:
     base_url: str = field(default="")
     ws_url: str = field(default="")
     ws_auth_url: str = field(default="")
+    subscribe_ack_timeout: float = 10.0
 
     def __post_init__(self) -> None:
         if self.sandbox:
@@ -128,7 +137,11 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         )
 
         # Public WebSocket (no auth); private WS auth bound after rest client is ready.
-        _public_ws_auth, _private_ws_auth = kraken_ws_auth_factory(rest_client=self._rest)
+        # The adapter resolves self._rest at call time (G2, #274).
+        _public_ws_auth, _private_ws_auth = kraken_ws_auth_factory(
+            rest_client=KrakenTokenRestAdapter(lambda: self._rest),
+            nest_token_under="subscription",  # Kraken WS v1 wants subscription.token
+        )
         self._ws_auth = _public_ws_auth
         self._ws_private_auth = _private_ws_auth
 
@@ -140,6 +153,17 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
             reconnect_delay=1.0,
             max_reconnect_delay=60.0,
         )
+        self._ws_private = WsConnectorBase(
+            url=self._config.ws_auth_url,
+            ws_auth=self._ws_private_auth,
+            decoder=self._ws_decoder,
+            heartbeat_interval=30.0,
+            reconnect_delay=1.0,
+            max_reconnect_delay=60.0,
+        )
+        self._ack_gate = AckGate()
+        self._ack_task: asyncio.Task[None] | None = None
+        self._public_drain_task: asyncio.Task[None] | None = None
         self._started = False
         self._opened = False  # start() was attempted: REST/WS may hold resources
 
@@ -149,17 +173,28 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         return self._started
 
     async def start(self) -> None:
-        """Validate connectivity and open the public WebSocket connection."""
+        """Validate connectivity, then open the public and private WebSocket connections."""
         if self._started:
             return
         self._opened = True
-        await self._rest.request("server_time")
-        await self._ws.connect()
-        self._started = True
+        try:
+            await self._rest.request("server_time")
+            await self._ws.connect()
+            await self._ws_private.connect()
+            self._ack_task = asyncio.create_task(
+                self._ack_gate.consume(self._ws_private.management_messages)
+            )
+            self._public_drain_task = asyncio.create_task(
+                self._ack_gate.consume(self._ws.management_messages)
+            )
+            self._started = True
+        except BaseException:
+            await self._rollback()
+            raise
 
     async def wait_ws_disconnect(self) -> None:
         """Return when the private WebSocket connection drops."""
-        await self._ws.wait_disconnect()
+        await self._ws_private.wait_disconnect()
 
     async def stop(self) -> None:
         """Gracefully close WebSocket and REST connections (also after a partial start)."""
@@ -167,10 +202,48 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
             return
         self._opened = False
         self._started = False
+        self._ack_gate.fail_all(GatewayNotStartedError("Gateway stopped"))
         try:
-            await self._ws.disconnect()
+            await self._cancel_drain_tasks()
         finally:
-            await self._rest.close()
+            try:
+                await self._ws_private.disconnect()
+            finally:
+                try:
+                    await self._ws.disconnect()
+                finally:
+                    await self._rest.close()
+
+    async def _rollback(self) -> None:
+        """Undo a failed start(): every step is attempted and its error logged, never raised."""
+        self._opened = False
+        self._started = False
+        steps = (
+            ("drain tasks", self._cancel_drain_tasks),
+            ("private disconnect", self._ws_private.disconnect),
+            ("public disconnect", self._ws.disconnect),
+            ("REST close", self._rest.close),
+        )
+        for label, step in steps:
+            try:
+                await step()
+            except Exception:
+                logger.exception("start() rollback: %s failed", label)
+
+    async def _cancel_drain_tasks(self) -> None:
+        tasks = [t for t in (self._ack_task, self._public_drain_task) if t is not None]
+        self._ack_task = self._public_drain_task = None
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise  # stop() itself is being cancelled: do not swallow it
+            except Exception:
+                logger.exception("Kraken management-message drain task had failed")
 
 
 __all__ = [

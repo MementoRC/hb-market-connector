@@ -228,6 +228,9 @@ class TokenFetchAuth:
     inject_strategy: TokenInjectStrategy
     rest_client: Any  # RestClient structural type
     _state: dict = field(default_factory=dict, compare=False, repr=False)
+    # SUBSCRIBE_PAYLOAD only: put the token inside msg[nest_token_under] (a dict) instead of at
+    # the top level. Kraken WS v1 wants {"subscription": {"name": ..., "token": ...}}.
+    nest_token_under: str | None = None
 
     async def prepare_connection(self, base_url: str) -> str:
         await self._fetch_token()
@@ -242,7 +245,12 @@ class TokenFetchAuth:
     async def transform_outgoing(self, msg: dict) -> dict:
         if self.inject_strategy is TokenInjectStrategy.SUBSCRIBE_PAYLOAD:
             result = dict(msg)
-            result["token"] = self._state.get("token", "")
+            token = self._state.get("token", "")
+            if self.nest_token_under is None:
+                result["token"] = token
+            else:
+                key = self.nest_token_under
+                result[key] = {**msg.get(key, {}), "token": token}
             return result
         return msg
 

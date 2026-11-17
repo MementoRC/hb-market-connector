@@ -10,6 +10,7 @@ These tests use AsyncMock to stub all network I/O.  They validate:
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlparse
@@ -22,6 +23,14 @@ from market_connector.primitives import OrderType
 
 _DUMMY_KEY = "dummy-api-key"
 _DUMMY_SECRET = "dGVzdHNlY3JldGtleWJhc2U2NGVuY29kZWQ="  # noqa: S105 — not a real secret
+
+
+def _ws_mock() -> AsyncMock:
+    """Stub WS connector: start() drains ``management_messages`` (#274), so it needs a real queue.
+
+    A bare AsyncMock's ``queue.get()`` never suspends and would busy-spin the drain loop.
+    """
+    return AsyncMock(management_messages=asyncio.Queue())
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +74,8 @@ class TestGatewayInstantiation:
         gw = KrakenGateway(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET)
         gw._rest = AsyncMock()
         gw._rest.request = AsyncMock(return_value=MagicMock(raw={"result": {"unixtime": 1}}))
-        gw._ws = AsyncMock()
+        gw._ws = _ws_mock()
+        gw._ws_private = _ws_mock()
         await gw.start()
         assert gw.ready is True
         gw._rest.request.assert_awaited_once_with("server_time")
@@ -75,7 +85,8 @@ class TestGatewayInstantiation:
         gw = KrakenGateway(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET)
         gw._rest = AsyncMock()
         gw._rest.request = AsyncMock(return_value=MagicMock(raw={}))
-        gw._ws = AsyncMock()
+        gw._ws = _ws_mock()
+        gw._ws_private = _ws_mock()
         await gw.start()
         await gw.stop()
         assert gw.ready is False
@@ -103,7 +114,8 @@ class TestBridgeInstantiation:
         bridge = KrakenConnectorBridge(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET)
         bridge._gateway._rest = AsyncMock()
         bridge._gateway._rest.request = AsyncMock(return_value=MagicMock(raw={}))
-        bridge._gateway._ws = AsyncMock()
+        bridge._gateway._ws = _ws_mock()
+        bridge._gateway._ws_private = _ws_mock()
 
         with patch(
             "market_connector.exchanges.kraken.hb_compat.kraken_bridge.reconcile_stale_orders",
@@ -119,7 +131,8 @@ class TestBridgeInstantiation:
         bridge = KrakenConnectorBridge(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET)
         bridge._gateway._rest = AsyncMock()
         bridge._gateway._rest.request = AsyncMock(return_value=MagicMock(raw={}))
-        bridge._gateway._ws = AsyncMock()
+        bridge._gateway._ws = _ws_mock()
+        bridge._gateway._ws_private = _ws_mock()
 
         with patch(
             "market_connector.exchanges.kraken.hb_compat.kraken_bridge.reconcile_stale_orders",

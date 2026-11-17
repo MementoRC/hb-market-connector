@@ -1,0 +1,7 @@
+[
+  [
+    {"OGTT3Y-C6I3P-XRI6HX": {"avg_price": "34.50000", "cost": "0.00000", "descr": {"close": "", "leverage": "0:1", "order": "sell 10.00345345 XBT/EUR @ limit 34.50000 with 0:1 leverage", "ordertype": "limit", "pair": "XBT/EUR", "price": "34.50000", "price2": "0.00000", "type": "sell"}, "expiretm": null, "fee": "0.00000", "limitprice": "34.50000", "misc": "", "oflags": "fcib", "opentm": "0.000000", "refid": null, "starttm": null, "status": "open", "stopprice": "0.000000", "userref": 0, "vol": "10.00345345", "vol_exec": "0.00000000"}}
+  ],
+  "openOrders",
+  {"sequence": 234}
+]

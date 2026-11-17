@@ -147,6 +147,7 @@ markers = [
     "ib_orders: gated live test that places/modifies/cancels orders on the paper account",
 ]
 timeout = 30
+timeout_method = "thread"
 addopts = "--strict-markers --strict-config -v"
 
 [tool.bandit]

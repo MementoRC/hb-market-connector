@@ -13,6 +13,8 @@ from market_connector.exchanges.kraken.specs import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from market_connector.auth.protocols import Signer
     from market_connector.ws_models.auth_models import PassThroughAuth, TokenFetchAuth
 
@@ -37,8 +39,25 @@ def kraken_signer_factory(api_key: str, secret_key: str) -> Signer:
     return DeclarativeRestSigner.from_spec(KRAKEN_HMAC_SPEC, api_key=api_key, secret=secret_key)
 
 
+class KrakenTokenRestAdapter:
+    """Gives ``TokenFetchAuth`` a ``get()`` over the real ``request()`` REST API (#274).
+
+    The REST transport is resolved through *rest_getter* at call time, so a transport
+    swapped in after construction is the one used.
+    """
+
+    def __init__(self, rest_getter: Callable[[], Any]) -> None:
+        self._rest_getter = rest_getter
+
+    async def get(self, _endpoint: str) -> dict[str, Any]:
+        response = await self._rest_getter().request("get_websockets_token")
+        raw: dict[str, Any] = response.raw
+        return raw
+
+
 def kraken_ws_auth_factory(
     rest_client: Any = None,
+    nest_token_under: str | None = None,
 ) -> tuple[PassThroughAuth, TokenFetchAuth]:
     """Return a (public, private) pair of WsAuthModel instances for Kraken.
 
@@ -46,17 +65,22 @@ def kraken_ws_auth_factory(
         rest_client: Optional RestClient used by the private TokenFetchAuth to
                      call /0/private/GetWebSocketsToken.  Pass None to create
                      a spec-only instance (e.g. in unit tests).
+        nest_token_under: Message key to nest the token under; the gateway passes
+                     ``"subscription"`` (Kraken WS v1 wire format). Default: top level.
 
     Returns:
         A 2-tuple of (KRAKEN_PUBLIC_WS_AUTH, private_ws_auth) where:
         - public_ws_auth  is PassThroughAuth (no-op for public streams)
         - private_ws_auth is TokenFetchAuth with rest_client bound
     """
-    private_ws_auth = replace(KRAKEN_PRIVATE_WS_AUTH, rest_client=rest_client)
+    private_ws_auth = replace(
+        KRAKEN_PRIVATE_WS_AUTH, rest_client=rest_client, nest_token_under=nest_token_under
+    )
     return KRAKEN_PUBLIC_WS_AUTH, private_ws_auth
 
 
 __all__ = [
+    "KrakenTokenRestAdapter",
     "kraken_signer_factory",
     "kraken_ws_auth_factory",
 ]

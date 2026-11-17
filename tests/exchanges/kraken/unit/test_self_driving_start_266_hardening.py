@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from market_connector.exchanges.kraken.ack_gate import AckGate
 from market_connector.exchanges.kraken.mixins.subscriptions import SubscriptionsMixin
 from tests.exchanges.kraken.unit.test_self_driving_start_266 import (  # noqa: F401
     FakeOwnTradesWs,
@@ -201,6 +202,8 @@ class _Host(SubscriptionsMixin):
 
     def __init__(self) -> None:
         self._ws = _RouteWs()
+        self._ws_private = self._ws  # #274: private subscribes run on the private connector
+        self._ack_gate = AckGate()  # #274 hardening: no implicit gate any more
 
 
 class TestSubscribeRouteCleanup:

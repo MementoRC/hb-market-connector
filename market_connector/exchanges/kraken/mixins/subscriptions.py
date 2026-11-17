@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from market_connector.exceptions import GatewayNotStartedError
+from market_connector.exchanges.kraken.ack_gate import gated_subscribe
 from market_connector.exchanges.kraken.schemas.ws import (
     BookSnapshot,
     OpenOrdersEvent,
@@ -36,6 +37,31 @@ async def _register_route(
     except BaseException:
         ws.unsubscribe(channel, pair)
         raise
+
+
+@asynccontextmanager
+async def _private_ctx(
+    host: Any, channel: str, handler: Callable[[Any], None]
+) -> AsyncGenerator[None, None]:
+    """Ack-gated subscribe on the private connector; unsubscribe on exit is best-effort."""
+    ws = host._ws_private
+    gate = getattr(host, "_ack_gate", None)
+    if gate is None:
+        raise RuntimeError("private subscribes need the host's _ack_gate (an AckGate); none set")
+    await gated_subscribe(
+        ws,
+        gate,
+        lambda: host._config.subscribe_ack_timeout,
+        channel,
+        handler,
+        {"event": "subscribe", "subscription": {"name": channel}},
+    )
+    try:
+        yield
+    finally:
+        with contextlib.suppress(Exception):
+            await ws.send({"event": "unsubscribe", "subscription": {"name": channel}})
+        ws.unsubscribe(channel, None)
 
 
 class SubscriptionsMixin:
@@ -214,28 +240,7 @@ class SubscriptionsMixin:
                 return
             callback(OwnTradesEvent.from_raw_frame(raw))
 
-        @asynccontextmanager
-        async def _ctx() -> AsyncGenerator[None, None]:
-            await _register_route(
-                self._ws,
-                channel,
-                None,
-                _handler,
-                {"event": "subscribe", "subscription": {"name": "ownTrades"}},
-            )
-            try:
-                yield
-            finally:
-                with contextlib.suppress(Exception):
-                    await self._ws.send(
-                        {
-                            "event": "unsubscribe",
-                            "subscription": {"name": "ownTrades"},
-                        }
-                    )
-                self._ws.unsubscribe(channel, None)
-
-        return _ctx()
+        return _private_ctx(self, channel, _handler)
 
     async def subscribe_open_orders(
         self: HasWs & HasReady,  # type: ignore[valid-type]
@@ -271,25 +276,4 @@ class SubscriptionsMixin:
                 return
             callback(OpenOrdersEvent.from_raw_frame(raw))
 
-        @asynccontextmanager
-        async def _ctx() -> AsyncGenerator[None, None]:
-            await _register_route(
-                self._ws,
-                channel,
-                None,
-                _handler,
-                {"event": "subscribe", "subscription": {"name": "openOrders"}},
-            )
-            try:
-                yield
-            finally:
-                with contextlib.suppress(Exception):
-                    await self._ws.send(
-                        {
-                            "event": "unsubscribe",
-                            "subscription": {"name": "openOrders"},
-                        }
-                    )
-                self._ws.unsubscribe(channel, None)
-
-        return _ctx()
+        return _private_ctx(self, channel, _handler)

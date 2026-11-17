@@ -767,7 +767,7 @@ class TestGatewayWaitWsDisconnect:
             decoder=wsb._FakeDecoder(),
             reconnect_delay=30.0,  # the base reconnect must not mask the drop
         )
-        gateway._ws = conn
+        gateway._ws_private = conn  # #274: wait_ws_disconnect follows the private connector
         fake = _DroppableWs()
         try:
             await wsb._connect_with_fake_ws(conn, fake)

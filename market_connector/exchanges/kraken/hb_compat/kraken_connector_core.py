@@ -39,6 +39,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from data_type_primitives import OrderBookEntry, OrderBookSnapshot, TradingRules
 from data_type_primitives.common import OrderType, PositionAction, PriceType, TradeType
 from data_type_primitives.in_flight_order import InFlightOrder, OrderState, OrderUpdate
 
@@ -47,7 +48,6 @@ from market_connector.exchanges.kraken.errors import KrakenAPIError
 from market_connector.exchanges.kraken.hb_compat.kraken_core_support import (
     NAN,
     PendingTrades,
-    TradingRule,
     build_pair_tables,
     build_trade_update,
     completed_event,
@@ -55,6 +55,7 @@ from market_connector.exchanges.kraken.hb_compat.kraken_core_support import (
     filled_event,
     quantize_amount,
     quantize_order,
+    round_down,
     update_from_rest,
     update_from_ws,
 )
@@ -76,7 +77,6 @@ if TYPE_CHECKING:
     from market_connector.exchanges.kraken.schemas.rest import OrderInfo
     from market_connector.exchanges.kraken.schemas.ws import OwnTradeDetail, OwnTradesEvent
     from market_connector.hb_compat.event_bus import EventBus
-    from market_connector.primitives import OrderBookSnapshot
 
 logger = get_logger(__name__)
 
@@ -166,7 +166,7 @@ class KrakenConnectorCore:
         self._cancelling: set[str] = set()  # CancelOrder in flight
         self._syncing_fills: set[str] = set()  # QueryTrades in flight
         self._pending_trades = PendingTrades()
-        self.trading_rules: dict[str, TradingRule] = {}
+        self.trading_rules: dict[str, TradingRules] = {}
         self._wire_pairs: dict[str, str] = {}
         self._prices: dict[str, dict[PriceType, Decimal]] = {}
         self._books: dict[str, OrderBookSnapshot] = {}
@@ -763,7 +763,18 @@ class KrakenConnectorCore:
     async def update_order_book(self, trading_pair: str) -> None:
         """Fetch a fresh order-book snapshot into the cache."""
         book = await self._gateway.get_orderbook(self._wire_pair(trading_pair))
-        self._books[trading_pair] = book.model_copy(update={"trading_pair": trading_pair})
+        self._books[trading_pair] = OrderBookSnapshot(
+            timestamp=int(book.timestamp * 1000),
+            bids=sorted(
+                (OrderBookEntry(price=p, quantity=q) for p, q in book.bids),
+                key=lambda e: e.price,
+                reverse=True,
+            ),
+            asks=sorted(
+                (OrderBookEntry(price=p, quantity=q) for p, q in book.asks),
+                key=lambda e: e.price,
+            ),
+        )
 
     def get_order_book(self, trading_pair: str) -> OrderBookSnapshot | None:
         """Last fetched snapshot, ``None`` before the first :meth:`update_order_book`."""
@@ -775,14 +786,40 @@ class KrakenConnectorCore:
 
     async def update_trading_rules(self) -> None:
         """Load AssetPairs: trading rules and the hummingbot pair -> wire pair map."""
-        self.trading_rules, self._wire_pairs = build_pair_tables(
-            await self._gateway.get_asset_pairs()
-        )
+        rules, self._wire_pairs = build_pair_tables(await self._gateway.get_asset_pairs())
+        self.trading_rules = {
+            pair: TradingRules(
+                trading_pair=pair,
+                min_order_size=rule.min_order_size,
+                min_notional_size=rule.min_notional_size,
+                min_price_increment=Decimal(10) ** -rule.price_decimals,
+                min_base_amount_increment=Decimal(10) ** -rule.amount_decimals,
+            )
+            for pair, rule in rules.items()
+        }
         self._rules_loaded = True
 
     def quantize_order_amount(self, trading_pair: str, amount: Decimal) -> Decimal:
-        """Round down to the lot size; 0 if NaN, below the minimum order size or pair unknown."""
+        """Round down to the lot size; 0 if NaN, below the minimum order size or pair unknown.
+
+        A zero size increment means no constraint (amount unchanged above the minimum).
+        """
         return quantize_amount(self.trading_rules.get(trading_pair), amount)
+
+    def quantize_order_price(self, trading_pair: str, price: Decimal) -> Decimal:
+        """Round down to the price tick; unchanged for an unknown pair or a zero tick."""
+        rule = self.trading_rules.get(trading_pair)
+        return price if rule is None else round_down(price, rule.min_price_increment)
+
+    def get_order_price_quantum(self, trading_pair: str, price: Decimal) -> Decimal:
+        """The price tick of the pair (0 when unknown or unconstrained)."""
+        rule = self.trading_rules.get(trading_pair)
+        return Decimal(0) if rule is None else rule.min_price_increment
+
+    def get_order_size_quantum(self, trading_pair: str, amount: Decimal) -> Decimal:
+        """The lot size of the pair (0 when unknown or unconstrained)."""
+        rule = self.trading_rules.get(trading_pair)
+        return Decimal(0) if rule is None else rule.min_base_amount_increment
 
     async def update_balances(self) -> None:
         """Refresh balances from BalanceEx (hummingbot asset names; available = - hold_trade)."""

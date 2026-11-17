@@ -19,6 +19,7 @@ from market_connector.exceptions import (
     SubscriptionAckTimeoutError,
     SubscriptionRejectedError,
 )
+from market_connector.exchanges.kraken.ack_gate import AckGate
 from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
 from market_connector.exchanges.kraken.mixins.subscriptions import SubscriptionsMixin
 from market_connector.exchanges.kraken.specs import KRAKEN_WS_DECODER
@@ -379,6 +380,23 @@ class TestPublicQueueDrained:
         await until(lambda: rig.pub._queue.empty())  # the listen loop took every frame
         await asyncio.sleep(0.05)
         assert public.qsize() == 0
+
+    async def test_consume_yields_when_get_never_suspends(self) -> None:
+        """A get() that never suspends (e.g. AsyncMock) must not starve the event loop."""
+
+        class _NeverSuspends:
+            async def get(self) -> Any:
+                return SimpleNamespace(kind=WsMessageKind.DATA, payload=None)
+
+        consumer = asyncio.create_task(AckGate().consume(_NeverSuspends()))  # type: ignore[arg-type]
+        other = asyncio.create_task(asyncio.sleep(0.05, result="done"))
+        try:
+            assert await asyncio.wait_for(other, 1.0) == "done"
+        finally:
+            consumer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer
+        assert consumer.cancelled()
 
     async def test_public_error_acks_are_logged_as_warnings(
         self, rig: Rig, caplog: pytest.LogCaptureFixture

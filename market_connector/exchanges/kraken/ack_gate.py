@@ -61,6 +61,7 @@ class AckGate:
         """
         while True:
             msg = await queue.get()
+            await asyncio.sleep(0)  # always yield, even if get() never suspends
             try:
                 _log_error_ack(msg)
                 self.dispatch(msg)

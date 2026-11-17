@@ -55,8 +55,8 @@ class KrakenConfig:
         ws_auth_url: Override the private WS URL.
     """
 
-    api_key: str
-    secret_key: str
+    api_key: str = field(repr=False)
+    secret_key: str = field(repr=False)
     tier: KrakenAPITier = KrakenAPITier.STARTER
     sandbox: bool = False
     base_url: str = field(default="")
@@ -141,6 +141,7 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
             max_reconnect_delay=60.0,
         )
         self._started = False
+        self._opened = False  # start() was attempted: REST/WS may hold resources
 
     @property
     def ready(self) -> bool:
@@ -151,17 +152,21 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         """Validate connectivity and open the public WebSocket connection."""
         if self._started:
             return
+        self._opened = True
         await self._rest.request("server_time")
         await self._ws.connect()
         self._started = True
 
     async def stop(self) -> None:
-        """Gracefully close WebSocket and REST connections."""
-        if not self._started:
+        """Gracefully close WebSocket and REST connections (also after a partial start)."""
+        if not (self._opened or self._started):
             return
-        await self._ws.disconnect()
-        await self._rest.close()
+        self._opened = False
         self._started = False
+        try:
+            await self._ws.disconnect()
+        finally:
+            await self._rest.close()
 
 
 __all__ = [

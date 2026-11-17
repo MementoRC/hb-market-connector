@@ -8,6 +8,7 @@ with :meth:`ExchangeDescriptor.create`. No hummingbot imports (ADR 0001).
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 from dataclasses import dataclass
 from enum import StrEnum
@@ -153,8 +154,25 @@ class ConnectorCoreHandle:
     async def start(self) -> None:
         if self._closed:
             raise RuntimeError("ConnectorCoreHandle is closed and cannot be restarted")
-        await self.gateway.start()
-        await self.core.start()
+        core_attempted = False
+        try:
+            await self.gateway.start()
+            core_attempted = True
+            await self.core.start()
+        except BaseException:
+            await self._rollback(stop_core=core_attempted)
+            raise
+
+    async def _rollback(self, *, stop_core: bool) -> None:
+        """Undo a failed ``start()``: stop what may have started; the handle is then closed."""
+        self._closed = True
+        try:
+            if stop_core:
+                with contextlib.suppress(Exception):
+                    await self.core.stop()
+        finally:
+            with contextlib.suppress(Exception):
+                await self.gateway.stop()
 
     async def close(self) -> None:
         if self._closed:

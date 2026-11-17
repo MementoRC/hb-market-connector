@@ -42,8 +42,14 @@ def round_down(value: Decimal, increment: Decimal) -> Decimal:
 
     NaN, infinities and a non-positive ``increment`` (no constraint) pass unchanged.
     """
-    if not value.is_finite() or increment <= 0:
+    if not value.is_finite() or not increment.is_finite() or increment <= 0:
         return value
+    exponent = increment.adjusted()
+    if exponent <= 0 and increment == Decimal(1).scaleb(exponent):  # power of ten: exact
+        value_exponent = value.as_tuple().exponent
+        if isinstance(value_exponent, int) and value_exponent >= exponent:
+            return value  # already no finer than the increment
+        return value.quantize(increment, rounding=ROUND_DOWN)
     return (value / increment).to_integral_value(rounding=ROUND_DOWN) * increment
 
 

@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _KRAKEN_REST_URL = "https://api.kraken.com"
-_KRAKEN_SANDBOX_REST_URL = "https://demo-futures.kraken.com"
 _KRAKEN_WS_URL = "wss://ws.kraken.com"
 _KRAKEN_WS_AUTH_URL = "wss://ws-auth.kraken.com"
 
@@ -50,7 +49,7 @@ class KrakenConfig:
         api_key:    Kraken API key (public component).
         secret_key: Kraken API secret (base64-encoded private key).
         tier:       Rate-limit tier; defaults to ``STARTER``.
-        sandbox:    When ``True``, use the Kraken Futures sandbox base URL.
+        sandbox:    Unsupported: Kraken spot has no sandbox; ``True`` raises ``ValueError`` (#260).
         base_url:   Override the REST base URL (e.g. for testing).
         ws_url:     Override the public WS URL.
         ws_auth_url: Override the private WS URL.
@@ -65,13 +64,13 @@ class KrakenConfig:
     ws_auth_url: str = field(default="")
 
     def __post_init__(self) -> None:
+        if self.sandbox:
+            raise ValueError(
+                "Kraken spot has no sandbox environment; sandbox=True is not supported (see #260)"
+            )
         # Fill in URL defaults after frozen dataclass construction via object.__setattr__
         if not self.base_url:
-            object.__setattr__(
-                self,
-                "base_url",
-                _KRAKEN_SANDBOX_REST_URL if self.sandbox else _KRAKEN_REST_URL,
-            )
+            object.__setattr__(self, "base_url", _KRAKEN_REST_URL)
         if not self.ws_url:
             object.__setattr__(self, "ws_url", _KRAKEN_WS_URL)
         if not self.ws_auth_url:
@@ -93,7 +92,7 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         api_key:    Kraken API key.
         secret_key: Kraken API secret.
         tier:       Rate-limit tier profile (default ``STARTER``).
-        sandbox:    Use sandbox REST URL when ``True``.
+        sandbox:    Unsupported: ``True`` raises ``ValueError`` (no Kraken spot sandbox, #260).
     """
 
     @property

@@ -61,7 +61,7 @@ class KrakenConnectorBridge:
         api_key:    Kraken API key.
         secret_key: Kraken API secret.
         tier:       Rate-limit tier profile (default ``STARTER``).
-        sandbox:    Use sandbox REST URL when ``True``.
+        sandbox:    Unsupported: ``True`` raises ``ValueError`` (no Kraken spot sandbox, #260).
     """
 
     def __init__(

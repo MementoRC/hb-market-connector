@@ -61,11 +61,6 @@ class TestGatewayInstantiation:
         assert urlparse(cfg.base_url).hostname == "api.kraken.com"
         assert urlparse(cfg.ws_url).hostname == "ws.kraken.com"
 
-    def test_config_sandbox_url(self) -> None:
-        cfg = KrakenConfig(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET, sandbox=True)
-        hostname = urlparse(cfg.base_url).hostname or ""
-        assert "demo" in hostname or "sandbox" in hostname or "futures" in hostname
-
     async def test_start_calls_rest_and_ws(self) -> None:
         gw = KrakenGateway(api_key=_DUMMY_KEY, secret_key=_DUMMY_SECRET)
         gw._rest = AsyncMock()

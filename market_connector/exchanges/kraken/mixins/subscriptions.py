@@ -22,6 +22,22 @@ if TYPE_CHECKING:
     from market_connector.exchanges.kraken.mixins.protocols import HasReady, HasWs
 
 
+async def _register_route(
+    ws: Any,
+    channel: str,
+    pair: str | None,
+    handler: Callable[[Any], None],
+    message: dict[str, Any],
+) -> None:
+    """Register the route and send the subscribe frame; drop the route if the send fails."""
+    ws.subscribe(channel, pair, handler)
+    try:
+        await ws.send(message)
+    except BaseException:
+        ws.unsubscribe(channel, pair)
+        raise
+
+
 class SubscriptionsMixin:
     """Mixin providing WebSocket channel subscription helpers for Kraken.
 
@@ -81,13 +97,16 @@ class SubscriptionsMixin:
 
         @asynccontextmanager
         async def _ctx() -> AsyncGenerator[None, None]:
-            self._ws.subscribe(channel, trading_pair, _handler)
-            await self._ws.send(
+            await _register_route(
+                self._ws,
+                channel,
+                trading_pair,
+                _handler,
                 {
                     "event": "subscribe",
                     "pair": [trading_pair],
                     "subscription": {"name": "book", "depth": depth},
-                }
+                },
             )
             try:
                 yield
@@ -135,13 +154,16 @@ class SubscriptionsMixin:
 
         @asynccontextmanager
         async def _ctx() -> AsyncGenerator[None, None]:
-            self._ws.subscribe(channel, trading_pair, _handler)
-            await self._ws.send(
+            await _register_route(
+                self._ws,
+                channel,
+                trading_pair,
+                _handler,
                 {
                     "event": "subscribe",
                     "pair": [trading_pair],
                     "subscription": {"name": "trade"},
-                }
+                },
             )
             try:
                 yield
@@ -194,12 +216,12 @@ class SubscriptionsMixin:
 
         @asynccontextmanager
         async def _ctx() -> AsyncGenerator[None, None]:
-            self._ws.subscribe(channel, None, _handler)
-            await self._ws.send(
-                {
-                    "event": "subscribe",
-                    "subscription": {"name": "ownTrades"},
-                }
+            await _register_route(
+                self._ws,
+                channel,
+                None,
+                _handler,
+                {"event": "subscribe", "subscription": {"name": "ownTrades"}},
             )
             try:
                 yield
@@ -251,12 +273,12 @@ class SubscriptionsMixin:
 
         @asynccontextmanager
         async def _ctx() -> AsyncGenerator[None, None]:
-            self._ws.subscribe(channel, None, _handler)
-            await self._ws.send(
-                {
-                    "event": "subscribe",
-                    "subscription": {"name": "openOrders"},
-                }
+            await _register_route(
+                self._ws,
+                channel,
+                None,
+                _handler,
+                {"event": "subscribe", "subscription": {"name": "openOrders"}},
             )
             try:
                 yield

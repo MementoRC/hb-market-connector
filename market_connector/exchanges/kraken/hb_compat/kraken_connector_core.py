@@ -99,6 +99,16 @@ class LostOrderError(Exception):
     """An order whose AddOrder response was lost is on neither OpenOrders nor ClosedOrders."""
 
 
+_ABANDON_WAIT = 0.05  # final wait for cancelled tasks before stop() abandons stuck ones
+_MAX_RETRY_EXPONENT = 30  # keeps the retry backoff finite after many consecutive failures
+
+
+def _pair_set(trading_pairs: Iterable[str]) -> set[str]:
+    if isinstance(trading_pairs, str):
+        raise TypeError("trading_pairs must be an iterable of pairs, not a str")
+    return set(trading_pairs)
+
+
 _MAX_FINISHED_ORDERS = 1000
 _QUERY_ORDERS_BATCH = 50  # txids per QueryOrders request
 _TRIGGERED_ORDER_ERROR = "EOrder:Invalid Order ID"
@@ -132,6 +142,11 @@ class KrakenConnectorCore:
         own_trades_ws: Keep an ownTrades WS subscription alive while started.
         ws_reconnect_delay: Initial backoff before resubscribing; doubles up to
             ``ws_reconnect_delay_max`` and resets after a successful subscription.
+        refresh_retry_delay: Initial wait before retrying a failed periodic refresh; doubles
+            per consecutive failure, capped at that refresh's interval.
+
+    Raises:
+        ValueError: An interval or delay option is not > 0.
     """
 
     def __init__(
@@ -151,7 +166,20 @@ class KrakenConnectorCore:
         own_trades_ws: bool = True,
         ws_reconnect_delay: float = 1.0,
         ws_reconnect_delay_max: float = 60.0,
+        refresh_retry_delay: float = 5.0,
     ) -> None:
+        for name, value in (
+            ("status_poll_interval", status_poll_interval),
+            ("trading_rules_refresh_interval", trading_rules_refresh_interval),
+            ("balance_refresh_interval", balance_refresh_interval),
+            ("price_refresh_interval", price_refresh_interval),
+            ("ws_reconnect_delay", ws_reconnect_delay),
+            ("ws_reconnect_delay_max", ws_reconnect_delay_max),
+            ("refresh_retry_delay", refresh_retry_delay),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be > 0, got {value}")
+        self._retry_delay = refresh_retry_delay
         self._rules_interval = trading_rules_refresh_interval
         self._balance_interval = (
             status_poll_interval if balance_refresh_interval is None else balance_refresh_interval
@@ -268,33 +296,42 @@ class KrakenConnectorCore:
         task, self._poll_task = self._poll_task, None
         loops, self._loop_tasks = self._loop_tasks, []
         stopping = [t for t in (task, *loops) if t is not None]
-        for t in stopping:
-            t.cancel()
-        if stopping:
-            await asyncio.wait(stopping, timeout=self._stop_grace)
-        self._user_stream_up = False
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._stop_grace
-        while (live := self._live_tasks()) and (remaining := deadline - loop.time()) > 0:
+        for t in stopping:
+            t.cancel()
+        while (live := self._live_tasks() | {t for t in stopping if not t.done()}) and (
+            remaining := deadline - loop.time()
+        ) > 0:
             await asyncio.wait(live, timeout=remaining)
-        leftover = self._live_tasks()
+        self._user_stream_up = False
+        leftover = self._live_tasks() | {t for t in stopping if not t.done()}
         for pending in leftover:
             pending.cancel()
         if leftover:
-            await asyncio.gather(*leftover, return_exceptions=True)
+            _, stuck = await asyncio.wait(leftover, timeout=_ABANDON_WAIT)
+            if stuck:
+                logger.warning("stop(): abandoning %d task(s) that ignore cancellation", len(stuck))
 
     def _live_tasks(self) -> set[asyncio.Task[Any]]:
         return {t for t in self._tasks if not t.done()}
 
     async def _periodic(self, refresh: Callable[[], Awaitable[None]], interval: float) -> None:
+        failures = 0
         while True:
             try:
                 await refresh()
+                failures = 0
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
+                failures += 1
                 logger.warning("periodic refresh %s failed", refresh.__name__, exc_info=True)
-            await asyncio.sleep(interval)
+            if failures:
+                backoff = self._retry_delay * 2 ** min(failures - 1, _MAX_RETRY_EXPONENT)
+                await asyncio.sleep(min(backoff, interval))
+            else:
+                await asyncio.sleep(interval)
 
     async def _refresh_prices(self) -> None:
         pairs = self._tracked | {o.trading_pair for o in self.in_flight_orders.values()}
@@ -319,12 +356,12 @@ class KrakenConnectorCore:
             delay = min(delay * 2, self._ws_delay_max)
 
     def track_pairs(self, trading_pairs: Iterable[str]) -> None:
-        """Include ``trading_pairs`` in the periodic price refresh."""
-        self._tracked |= set(trading_pairs)
+        """Include ``trading_pairs`` in the periodic price refresh (a bare ``str``: TypeError)."""
+        self._tracked |= _pair_set(trading_pairs)
 
     def untrack_pairs(self, trading_pairs: Iterable[str]) -> None:
         """Drop ``trading_pairs`` from the periodic price refresh (unknown pairs ignored)."""
-        self._tracked -= set(trading_pairs)
+        self._tracked -= _pair_set(trading_pairs)
 
     @property
     def tracked_pairs(self) -> frozenset[str]:
@@ -332,7 +369,10 @@ class KrakenConnectorCore:
 
     async def _poll_loop(self) -> None:
         while True:
-            await self._poll_once()
+            try:
+                await self._poll_once()
+            except Exception:  # noqa: BLE001
+                logger.warning("status poll failed", exc_info=True)
             await asyncio.sleep(self._poll_interval)
 
     async def _poll_once(self) -> None:

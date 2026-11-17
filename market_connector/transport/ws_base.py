@@ -108,6 +108,7 @@ class WsConnectorBase:
     async def disconnect(self) -> None:
         """Disconnect and cancel all background tasks."""
         self._connected = False
+        self._dropped.set()  # wake wait_disconnect() waiters
         self._routing_table.clear()
         for task in (self._listen_task, self._heartbeat_task, self._refresh_task):
             if task is not None and not task.done():
@@ -192,18 +193,19 @@ class WsConnectorBase:
                         self._route_message(msg)
                     except Exception:
                         logger.exception("Error processing WS frame")
+            except Exception:  # noqa: S110
+                pass  # a failed connection is handled like a clean close, below
+            if not self._connected:
+                break
+            logger.warning("WS connection lost, reconnecting in %.1fs", delay)
+            self._dropped.set()
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, self._max_reconnect_delay)
+            try:
+                await self.connect()
+                delay = self._reconnect_delay
             except Exception:
-                if not self._connected:
-                    break
-                logger.warning("WS connection lost, reconnecting in %.1fs", delay)
-                self._dropped.set()
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, self._max_reconnect_delay)
-                try:
-                    await self.connect()
-                    delay = self._reconnect_delay
-                except Exception:
-                    logger.exception("WS reconnect failed")
+                logger.exception("WS reconnect failed")
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic pings to keep the connection alive."""

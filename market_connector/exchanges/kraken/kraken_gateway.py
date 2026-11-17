@@ -157,6 +157,10 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         await self._ws.connect()
         self._started = True
 
+    async def wait_ws_disconnect(self) -> None:
+        """Return when the private WebSocket connection drops."""
+        await self._ws.wait_disconnect()
+
     async def stop(self) -> None:
         """Gracefully close WebSocket and REST connections (also after a partial start)."""
         if not (self._opened or self._started):

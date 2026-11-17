@@ -32,7 +32,6 @@ Notes:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 import uuid
 from decimal import Decimal
@@ -69,7 +68,7 @@ from market_connector.hb_compat.order_events import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping
+    from collections.abc import Awaitable, Callable, Iterable, Mapping
 
     from data_type_primitives.in_flight_order import TradeUpdate
 
@@ -126,6 +125,13 @@ class KrakenConnectorCore:
         unknown_order_grace: Seconds (on ``clock``, from order creation) an UNKNOWN order
             absent from Kraken's open and closed orders stays tracked before it is failed;
             a found order is adopted at once.
+        trading_rules_refresh_interval: Seconds between AssetPairs refreshes.
+        balance_refresh_interval: Seconds between balance refreshes (None: status poll interval).
+        price_refresh_interval: Seconds between ticker refreshes of tracked and in-flight
+            pairs (None: status poll interval).
+        own_trades_ws: Keep an ownTrades WS subscription alive while started.
+        ws_reconnect_delay: Initial backoff before resubscribing; doubles up to
+            ``ws_reconnect_delay_max`` and resets after a successful subscription.
     """
 
     def __init__(
@@ -139,7 +145,26 @@ class KrakenConnectorCore:
         cancel_only_backoff: float = 10.0,
         cancel_only_backoff_max: float = 300.0,
         unknown_order_grace: float = 0.0,
+        trading_rules_refresh_interval: float = 1800.0,
+        balance_refresh_interval: float | None = None,
+        price_refresh_interval: float | None = None,
+        own_trades_ws: bool = True,
+        ws_reconnect_delay: float = 1.0,
+        ws_reconnect_delay_max: float = 60.0,
     ) -> None:
+        self._rules_interval = trading_rules_refresh_interval
+        self._balance_interval = (
+            status_poll_interval if balance_refresh_interval is None else balance_refresh_interval
+        )
+        self._price_interval = (
+            status_poll_interval if price_refresh_interval is None else price_refresh_interval
+        )
+        self._own_trades_ws = own_trades_ws
+        self._ws_delay = ws_reconnect_delay
+        self._ws_delay_max = ws_reconnect_delay_max
+        self._user_stream_up = False
+        self._tracked: set[str] = set()
+        self._loop_tasks: list[asyncio.Task[None]] = []
         self._clock = clock
         self._unknown_grace = unknown_order_grace
         self._created_at: dict[str, float] = {}  # cid -> clock() at creation
@@ -187,19 +212,23 @@ class KrakenConnectorCore:
         * ``trading_rule_initialized``: same trigger.
         * ``account_balance``: True after a successful ``update_balances``.
         * ``status_polling_initialized``: True only while the ``start()`` poller is live.
+        * ``user_stream_initialized``: only with ``own_trades_ws``; True while the ownTrades
+          subscription is up (False during a drop / backoff and after ``stop()``).
 
         Rules and balances flags survive ``stop()`` and failed refreshes (the cache stays).
         The adapter maps these keys onto its own status dict. There is deliberately no
-        user-stream or order-book key: the core does not own the WebSocket, and order
-        books are cached on demand per pair.
+        order-book key: order books are cached on demand per pair.
         """
         polling = self._poll_task is not None and not self._poll_task.done()
-        return {
+        status = {
             "symbols_mapping_initialized": self._rules_loaded,
             "trading_rule_initialized": self._rules_loaded,
             "account_balance": self._balances_loaded,
             "status_polling_initialized": polling,
         }
+        if self._own_trades_ws:
+            status["user_stream_initialized"] = self._user_stream_up
+        return status
 
     @property
     def ready(self) -> bool:
@@ -211,21 +240,39 @@ class KrakenConnectorCore:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start the status-polling task (idempotent)."""
+        """Start the self-driving loops: refreshes, status poll, ownTrades WS (idempotent).
+
+        Rules, balances and prices refresh at once and then every interval; a failed
+        refresh is logged and retried on the next tick.
+        """
         if self._poll_task is None or self._poll_task.done():
             self._poll_task = asyncio.get_running_loop().create_task(self._poll_loop())
+        if any(not t.done() for t in self._loop_tasks):
+            return
+        loop = asyncio.get_running_loop()
+        self._loop_tasks = [
+            loop.create_task(self._periodic(self.update_trading_rules, self._rules_interval)),
+            loop.create_task(self._periodic(self.update_balances, self._balance_interval)),
+            loop.create_task(self._periodic(self._refresh_prices, self._price_interval)),
+        ]
+        if self._own_trades_ws:
+            self._loop_tasks.append(loop.create_task(self._own_trades_loop()))
 
     async def stop(self) -> None:
-        """Stop polling and drain background tasks; none outlives the call (idempotent).
+        """Stop all loops and drain background tasks; none outlives the call (idempotent).
 
+        Loops and the ownTrades subscription are cancelled (waiting at most ``stop_grace``).
         In-flight create/cancel tasks get ``stop_grace`` seconds to finish, the rest is
         cancelled. A create cancelled mid-AddOrder stays tracked: its outcome is unknown.
         """
         task, self._poll_task = self._poll_task, None
-        if task is not None:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        loops, self._loop_tasks = self._loop_tasks, []
+        stopping = [t for t in (task, *loops) if t is not None]
+        for t in stopping:
+            t.cancel()
+        if stopping:
+            await asyncio.wait(stopping, timeout=self._stop_grace)
+        self._user_stream_up = False
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._stop_grace
         while (live := self._live_tasks()) and (remaining := deadline - loop.time()) > 0:
@@ -238,6 +285,50 @@ class KrakenConnectorCore:
 
     def _live_tasks(self) -> set[asyncio.Task[Any]]:
         return {t for t in self._tasks if not t.done()}
+
+    async def _periodic(self, refresh: Callable[[], Awaitable[None]], interval: float) -> None:
+        while True:
+            try:
+                await refresh()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.warning("periodic refresh %s failed", refresh.__name__, exc_info=True)
+            await asyncio.sleep(interval)
+
+    async def _refresh_prices(self) -> None:
+        pairs = self._tracked | {o.trading_pair for o in self.in_flight_orders.values()}
+        await self.update_prices(sorted(pairs))
+
+    async def _own_trades_loop(self) -> None:
+        """Keep the ownTrades subscription alive: resubscribe after a drop, with backoff."""
+        delay = self._ws_delay
+        while True:
+            try:
+                async with await self._gateway.subscribe_own_trades(self.on_own_trades):
+                    self._user_stream_up = True
+                    delay = self._ws_delay
+                    await self._gateway.wait_ws_disconnect()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.warning("ownTrades subscription failed", exc_info=True)
+            finally:
+                self._user_stream_up = False
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, self._ws_delay_max)
+
+    def track_pairs(self, trading_pairs: Iterable[str]) -> None:
+        """Include ``trading_pairs`` in the periodic price refresh."""
+        self._tracked |= set(trading_pairs)
+
+    def untrack_pairs(self, trading_pairs: Iterable[str]) -> None:
+        """Drop ``trading_pairs`` from the periodic price refresh (unknown pairs ignored)."""
+        self._tracked -= set(trading_pairs)
+
+    @property
+    def tracked_pairs(self) -> frozenset[str]:
+        return frozenset(self._tracked)
 
     async def _poll_loop(self) -> None:
         while True:

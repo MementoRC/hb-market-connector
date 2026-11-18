@@ -45,6 +45,37 @@ class TestUnknownBracketParentResolution:
         assert connector.fetch_order(cid).exchange_order_id == txid
         assert seen.of(base.FAILURE) == []
 
+    async def test_filled_parent_in_closed_with_released_exit_in_open_is_not_mistaken(
+        self, connector: Any, rest: Any, seen: Any
+    ) -> None:
+        cid = await rec._lose_one(connector, rest, rec._LOST[0], lost_as=None)  # noqa: SLF001
+        connector._userrefs[cid] = _BRACKET_PARENT_USERREF  # noqa: SLF001
+        parent = {**base._order_info(status="closed", vol_exec="0.5", side="buy")}  # noqa: SLF001
+        released = {**base._order_info(status="open", side="sell")}  # noqa: SLF001
+        parent["userref"] = released["userref"] = _BRACKET_PARENT_USERREF
+        rest.closed_orders["OPARENT"] = parent
+        rest.open_orders["OEXIT"] = released
+
+        await connector._resolve_unknown_orders()  # noqa: SLF001
+
+        assert connector.fetch_order(cid).exchange_order_id == "OPARENT"
+        assert seen.of(base.FAILURE) == []
+
+    async def test_exit_listed_before_partially_filled_parent_in_open_is_not_adopted(
+        self, connector: Any, rest: Any, seen: Any
+    ) -> None:
+        cid = await rec._lose_one(connector, rest, rec._LOST[0], lost_as=None)  # noqa: SLF001
+        connector._userrefs[cid] = _BRACKET_PARENT_USERREF  # noqa: SLF001
+        released = {**base._order_info(status="open", side="sell")}  # noqa: SLF001
+        parent = {**base._order_info(status="open", vol_exec="0.2", side="buy")}  # noqa: SLF001
+        parent["userref"] = released["userref"] = _BRACKET_PARENT_USERREF
+        rest.open_orders["OEXIT"] = released  # iterated first
+        rest.open_orders["OPARENT"] = parent
+
+        await connector._resolve_unknown_orders()  # noqa: SLF001
+
+        assert connector.fetch_order(cid).exchange_order_id == "OPARENT"
+
     async def test_parent_absent_is_failed_once(self, connector: Any, rest: Any, seen: Any) -> None:
         cid = await rec._lose_one(connector, rest, rec._LOST[0], lost_as=None)  # noqa: SLF001
         connector._userrefs[cid] = _BRACKET_PARENT_USERREF  # noqa: SLF001

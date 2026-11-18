@@ -20,8 +20,8 @@ import pytest
 from market_connector.exchanges.kraken.hb_compat import kraken_connector_core as core_mod
 from market_connector.exchanges.kraken.linked_order_codec import KrakenUserrefLinkCodec
 from tests.exchanges.kraken.unit import test_kraken_connector_core_211 as base
-from tests.exchanges.kraken.unit import test_userref_recovery_214 as rec
 from tests.exchanges.kraken.unit import test_private_request_wire_215 as wire
+from tests.exchanges.kraken.unit import test_userref_recovery_214 as rec
 
 # Fixtures reused as-is (pytest discovers them by module attribute).
 bare_connector, bus, connector = base.bare_connector, base.bus, base.connector

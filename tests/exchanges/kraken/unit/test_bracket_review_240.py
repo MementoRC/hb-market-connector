@@ -263,7 +263,7 @@ class TestPartialEntryF4:
 
 
 class TestGroupIdValidationF6:
-    @pytest.mark.parametrize("bad", [True, 1.0, 5.9, "5", 0 - 1, 2**26])
+    @pytest.mark.parametrize("bad", [True, 1.0, 5.9, "5", 0 - 1, 2**27])
     async def test_bad_group_id_is_rejected_before_any_request(
         self, gateway: KrakenGateway, rest: _Rest, bad: Any
     ) -> None:

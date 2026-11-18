@@ -71,6 +71,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable, Mapping
 
     from data_type_primitives.in_flight_order import TradeUpdate
+    from event_bus import EventKey
 
     from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
     from market_connector.exchanges.kraken.schemas.rest import OrderInfo
@@ -669,7 +670,8 @@ class KrakenConnectorCore:
     # ------------------------------------------------------------------
 
     def _emit(self, event: object) -> None:
-        self._bus.publish(MARKET_EVENT_IDS[type(event).__name__], event)  # type: ignore[arg-type]
+        key: EventKey = MARKET_EVENT_IDS[type(event).__name__]
+        self._bus.publish(key, event)
 
     def _set_state(
         self, order: InFlightOrder, state: OrderState, timestamp: float, txid: str | None = None

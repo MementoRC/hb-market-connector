@@ -209,7 +209,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.6.1-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-64:
@@ -390,7 +390,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-arm64:
@@ -571,7 +571,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       win-64:
@@ -753,7 +753,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
   coinbase:
@@ -937,7 +937,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.6.1-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-64:
@@ -1111,7 +1111,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-arm64:
@@ -1285,7 +1285,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       win-64:
@@ -1460,7 +1460,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
   default:
@@ -1647,7 +1647,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.6.1-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-64:
@@ -1824,7 +1824,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-arm64:
@@ -2001,7 +2001,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       win-64:
@@ -2179,7 +2179,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
   ib-async-next:
@@ -2376,7 +2376,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.6.1-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-64:
@@ -2560,7 +2560,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-arm64:
@@ -2744,7 +2744,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       win-64:
@@ -2930,7 +2930,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
   interactive-brokers:
@@ -3117,7 +3117,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.6.1-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-64:
@@ -3294,7 +3294,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-arm64:
@@ -3471,7 +3471,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       win-64:
@@ -3649,7 +3649,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
   kraken:
@@ -3833,7 +3833,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.6.1-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-64:
@@ -4007,7 +4007,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-arm64:
@@ -4181,7 +4181,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       win-64:
@@ -4356,7 +4356,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
   py312:
@@ -4540,7 +4540,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.6.1-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-64:
@@ -4714,7 +4714,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-arm64:
@@ -4888,7 +4888,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       win-64:
@@ -5063,7 +5063,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
   quality-ci:
@@ -5254,7 +5254,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.6.1-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-64:
@@ -5435,7 +5435,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       osx-arm64:
@@ -5616,7 +5616,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
       win-64:
@@ -5798,7 +5798,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: git+https://github.com/MementoRC/hb-data-type-primitives.git?rev=v0.13.0#c1f78e530cc7ca4925e25c14dca6f7922c917f2f
-      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+      - pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
       - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
       - pypi: git+https://github.com/MementoRC/hb-rate-limit.git?rev=v0.5.0#b63332a00e6e7d817a8d6741fc31afc52a2450a0
 packages:
@@ -6477,7 +6477,7 @@ packages:
   license: Apache-2.0
   license_family: APACHE
   purls:
-  - pkg:pypi/msgpack?source=compressed-mapping
+  - pkg:pypi/msgpack?source=hash-mapping
   run_exports: {}
   size: 121408
   timestamp: 1793105655215
@@ -7374,7 +7374,7 @@ packages:
   license: BSD-3-Clause
   license_family: BSD
   purls:
-  - pkg:pypi/gitpython?source=hash-mapping
+  - pkg:pypi/gitpython?source=compressed-mapping
   run_exports: {}
   size: 186188
   timestamp: 1792007726948
@@ -7995,7 +7995,7 @@ packages:
   license: MIT
   license_family: MIT
   purls:
-  - pkg:pypi/pluggy?source=hash-mapping
+  - pkg:pypi/pluggy?source=compressed-mapping
   run_exports: {}
   size: 30111
   timestamp: 1792063298993
@@ -9351,7 +9351,7 @@ packages:
   license: Apache-2.0
   license_family: APACHE
   purls:
-  - pkg:pypi/msgpack?source=hash-mapping
+  - pkg:pypi/msgpack?source=compressed-mapping
   run_exports: {}
   size: 110643
   timestamp: 1793105772452
@@ -9669,7 +9669,7 @@ packages:
   license: MIT
   license_family: MIT
   purls:
-  - pkg:pypi/ukkonen?source=hash-mapping
+  - pkg:pypi/ukkonen?source=compressed-mapping
   run_exports: {}
   size: 18573
   timestamp: 1793037205293
@@ -11638,7 +11638,7 @@ packages:
   license: MIT
   license_family: MIT
   purls:
-  - pkg:pypi/ukkonen?source=hash-mapping
+  - pkg:pypi/ukkonen?source=compressed-mapping
   run_exports: {}
   size: 19043
   timestamp: 1793037114476
@@ -11772,9 +11772,9 @@ packages:
   requires_dist:
   - pydantic>=2.0,<3
   requires_python: '>=3.12'
-- pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.2.0#efa7a314829933233c19ab32f5daf25ca165c6c3
+- pypi: git+https://github.com/MementoRC/hb-event-bus.git?rev=v0.4.0#4991e765995b98f9e085fe776f08afe4c5da9fc6
   name: hb-event-bus
-  version: 0.2.0
+  version: 0.4.0
   requires_python: '>=3.12'
 - pypi: git+https://github.com/MementoRC/hb-logger.git?rev=v0.2.0#1969c00dd144002b5bc4884e1b37bb02142bc447
   name: hb-logger

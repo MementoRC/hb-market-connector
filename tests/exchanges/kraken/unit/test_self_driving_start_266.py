@@ -143,7 +143,7 @@ class FakeOwnTradesWs:
         self.callback = callback
         return _Subscription(self)
 
-    async def wait_ws_disconnect(self) -> None:
+    async def wait_ws_disconnect(self, generation: int | None = None) -> None:  # noqa: ARG002
         self.disconnect_waits += 1
         await self._drop.wait()
         self._drop = asyncio.Event()  # re-arm for the next connection

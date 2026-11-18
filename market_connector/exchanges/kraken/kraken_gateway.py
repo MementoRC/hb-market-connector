@@ -192,9 +192,14 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
             await self._rollback()
             raise
 
-    async def wait_ws_disconnect(self) -> None:
-        """Return when the private WebSocket connection drops."""
-        await self._ws_private.wait_disconnect()
+    @property
+    def ws_generation(self) -> int:
+        """Connection generation of the private WebSocket (bumps on every reconnect)."""
+        return self._ws_private.connection_generation
+
+    async def wait_ws_disconnect(self, generation: int | None = None) -> None:
+        """Return when the private WebSocket connection (of ``generation``, else current) drops."""
+        await self._ws_private.wait_disconnect(generation)
 
     async def stop(self) -> None:
         """Gracefully close WebSocket and REST connections (also after a partial start)."""

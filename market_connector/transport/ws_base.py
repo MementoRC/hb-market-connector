@@ -71,52 +71,101 @@ class WsConnectorBase:
         self._refresh_interval = refresh_interval
         self._ws: Any = None
         self._connected = False
+        self._closed = False  # set by disconnect(): the reconnect loop must stop for good
+        self._generation = 0  # successful connects so far
         self._dropped = asyncio.Event()  # set when the listen loop sees a drop; cleared on connect
         # Routing table: (channel, pair | None) -> handler, backed by hb-event-bus
         # (ADR 0001 Group D, issue #44).
         self._routing_table: WsRoutingTable = WsRoutingTable(name=f"ws-base:{url}")
+        self._supervisor_task: asyncio.Task[None] | None = None
         self._listen_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._refresh_task: asyncio.Task[None] | None = None
         # Management messages: SUBSCRIBE_ACK and ERROR frames land here
         self.management_messages: asyncio.Queue[NormalizedWsMessage] = asyncio.Queue()
 
-    async def connect(self) -> None:
-        """Connect to the WebSocket server and start listening.
+    @property
+    def is_connected(self) -> bool:
+        """True while a socket is open; False from drop detection until the reconnect succeeds."""
+        return self._connected and self._ws is not None
 
-        Lifecycle:
-        1. ws_auth.prepare_connection(base_url) → may rewrite URL
-        2. websockets.connect(rewritten_url) → open socket
-        3. ws_auth.on_connected(_raw_send) → auth model may send login frame
-        4. Start listen, heartbeat, and optional refresh background tasks
+    @property
+    def connection_generation(self) -> int:
+        """Number of successful connects so far; increments on every (re)connect."""
+        return self._generation
+
+    async def connect(self) -> None:
+        """Connect to the WebSocket server and start the single supervisor task.
+
+        The supervisor owns the socket afterwards and reconnects in place (one listen,
+        heartbeat and refresh task per live socket); calling connect() while it runs is a no-op.
         """
+        if self._supervisor_task is not None and not self._supervisor_task.done():
+            return
+        self._closed = False
+        await self._open()
+        self._supervisor_task = asyncio.create_task(self._supervise())
+
+    async def _open(self) -> None:
+        """Open one socket: prepare URL, dial, run auth hook, (re)start the per-socket tasks."""
         url = await self._ws_auth.prepare_connection(self._url)
         self._ws = await websockets.connect(url)
         self._connected = True
+        try:
+            await self._ws_auth.on_connected(self._raw_send)
+        except BaseException:
+            await self._discard_socket()
+            raise
+        self._generation += 1
         self._dropped.clear()
-        await self._ws_auth.on_connected(self._raw_send)
         self._listen_task = asyncio.create_task(self._listen_loop())
+        self._restart_keepalive_tasks()
+        logger.info("WS connected to %s", url)
+
+    async def _discard_socket(self) -> None:
+        self._connected = False
+        ws, self._ws = self._ws, None
+        if ws is not None:
+            with contextlib.suppress(Exception):
+                await ws.close()
+
+    def _restart_keepalive_tasks(self) -> None:
+        self._cancel_keepalive_tasks()
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         if self._refresh_interval is not None:
             self._refresh_task = asyncio.create_task(self._refresh_loop())
-        logger.info("WS connected to %s", url)
 
-    async def wait_disconnect(self) -> None:
-        """Return once the listen loop has seen the current connection drop."""
+    def _cancel_keepalive_tasks(self) -> None:
+        for task in (self._heartbeat_task, self._refresh_task):
+            if task is not None and not task.done():
+                task.cancel()
+        self._heartbeat_task = None
+        self._refresh_task = None
+
+    async def wait_disconnect(self, generation: int | None = None) -> None:
+        """Return once the given connection generation has dropped.
+
+        ``None`` means the current connection. A generation older than the current one has
+        already dropped (returns immediately), as does any wait after ``disconnect()``.
+        """
+        if generation is not None and generation < self._generation:
+            return
         await self._dropped.wait()
 
     async def disconnect(self) -> None:
-        """Disconnect and cancel all background tasks."""
+        """Disconnect, permanently stop the reconnect loop and cancel all background tasks."""
+        self._closed = True
         self._connected = False
         self._dropped.set()  # wake wait_disconnect() waiters
         self._routing_table.clear()
-        for task in (self._listen_task, self._heartbeat_task, self._refresh_task):
-            if task is not None and not task.done():
-                task.cancel()
-        if self._ws is not None:
-            with contextlib.suppress(Exception):
-                await self._ws.close()
-            self._ws = None
+        self._cancel_keepalive_tasks()
+        tasks = [self._supervisor_task, self._listen_task]
+        pending = [t for t in tasks if t is not None and not t.done()]
+        for task in pending:
+            task.cancel()
+        others = [t for t in pending if t is not asyncio.current_task()]
+        await asyncio.gather(*others, return_exceptions=True)
+        await self._discard_socket()
         logger.info("WS disconnected from %s", self._url)
 
     def subscribe(self, channel: str, pair: str | None, handler: MessageCallback) -> None:
@@ -182,30 +231,42 @@ class WsConnectorBase:
             logger.debug("UNKNOWN frame — dropped: %r", msg)
 
     async def _listen_loop(self) -> None:
-        """Listen for messages, decode, and route. Reconnects on failure."""
-        delay = self._reconnect_delay
-        while self._connected:
-            try:
-                async for raw in self._ws:
-                    try:
-                        parsed = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
-                        msg = self._decoder.decode(parsed)
-                        self._route_message(msg)
-                    except Exception:
-                        logger.exception("Error processing WS frame")
-            except Exception:  # noqa: S110
-                pass  # a failed connection is handled like a clean close, below
-            if not self._connected:
+        """Read the current socket until it ends or fails (both are a drop), routing frames."""
+        # a failed connection is handled like a clean close by the supervisor
+        with contextlib.suppress(Exception):
+            async for raw in self._ws:
+                try:
+                    parsed = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+                    self._route_message(self._decoder.decode(parsed))
+                except Exception:
+                    logger.exception("Error processing WS frame")
+
+    async def _supervise(self) -> None:
+        """Own the socket: wait for each listen task to end (a drop), then reconnect in place."""
+        while not self._closed:
+            listener = self._listen_task
+            if listener is not None:
+                await asyncio.wait({listener})
+            if self._closed:
                 break
-            logger.warning("WS connection lost, reconnecting in %.1fs", delay)
+            self._connected = False  # is_connected is False from drop detection on
             self._dropped.set()
+            self._cancel_keepalive_tasks()
+            await self._reconnect()
+
+    async def _reconnect(self) -> None:
+        """Retry with exponential backoff until a connection is open (or disconnect())."""
+        delay = self._reconnect_delay
+        while not self._closed:
+            logger.warning("WS connection lost, reconnecting in %.1fs", delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, self._max_reconnect_delay)
             try:
-                await self.connect()
-                delay = self._reconnect_delay
+                await self._open()
             except Exception:
                 logger.exception("WS reconnect failed")
+            else:
+                return
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic pings to keep the connection alive."""

@@ -343,10 +343,11 @@ class KrakenConnectorCore:
         delay = self._ws_delay
         while True:
             try:
+                generation = self._gateway.ws_generation  # before subscribing: a drop is not missed
                 async with await self._gateway.subscribe_own_trades(self.on_own_trades):
                     self._user_stream_up = True
                     delay = self._ws_delay
-                    await self._gateway.wait_ws_disconnect()
+                    await self._gateway.wait_ws_disconnect(generation)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001

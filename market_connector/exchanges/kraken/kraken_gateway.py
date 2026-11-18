@@ -165,6 +165,7 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
         self._ack_task: asyncio.Task[None] | None = None
         self._public_drain_task: asyncio.Task[None] | None = None
         self._started = False
+        self._lifecycle_lock = asyncio.Lock()  # serializes start() / stop()
         self._opened = False  # start() was attempted: REST/WS may hold resources
 
     @property
@@ -174,45 +175,52 @@ class KrakenGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMi
 
     async def start(self) -> None:
         """Validate connectivity, then open the public and private WebSocket connections."""
-        if self._started:
-            return
-        self._opened = True
-        try:
-            await self._rest.request("server_time")
-            await self._ws.connect()
-            await self._ws_private.connect()
-            self._ack_task = asyncio.create_task(
-                self._ack_gate.consume(self._ws_private.management_messages)
-            )
-            self._public_drain_task = asyncio.create_task(
-                self._ack_gate.consume(self._ws.management_messages)
-            )
-            self._started = True
-        except BaseException:
-            await self._rollback()
-            raise
+        async with self._lifecycle_lock:
+            if self._started:
+                return
+            self._opened = True
+            try:
+                await self._rest.request("server_time")
+                await self._ws.connect()
+                await self._ws_private.connect()
+                self._ack_task = asyncio.create_task(
+                    self._ack_gate.consume(self._ws_private.management_messages)
+                )
+                self._public_drain_task = asyncio.create_task(
+                    self._ack_gate.consume(self._ws.management_messages)
+                )
+                self._started = True
+            except BaseException:
+                await self._rollback()
+                raise
 
-    async def wait_ws_disconnect(self) -> None:
-        """Return when the private WebSocket connection drops."""
-        await self._ws_private.wait_disconnect()
+    @property
+    def ws_generation(self) -> int:
+        """Connection generation of the private WebSocket (bumps on every reconnect)."""
+        return self._ws_private.connection_generation
+
+    async def wait_ws_disconnect(self, generation: int | None = None) -> None:
+        """Return when the private WebSocket connection (of ``generation``, else current) drops."""
+        await self._ws_private.wait_disconnect(generation)
 
     async def stop(self) -> None:
         """Gracefully close WebSocket and REST connections (also after a partial start)."""
-        if not (self._opened or self._started):
-            return
-        self._opened = False
-        self._started = False
-        self._ack_gate.fail_all(GatewayNotStartedError("Gateway stopped"))
-        try:
-            await self._cancel_drain_tasks()
-        finally:
+        async with self._lifecycle_lock:
+            if not (self._opened or self._started):
+                return
+            self._opened = False
+            self._started = False
+            self._ack_gate.fail_all(GatewayNotStartedError("Gateway stopped"))
             try:
-                await self._ws_private.disconnect()
+                await self._cancel_drain_tasks()
             finally:
                 try:
-                    await self._ws.disconnect()
+                    await self._ws_private.disconnect()
                 finally:
-                    await self._rest.close()
+                    try:
+                        await self._ws.disconnect()
+                    finally:
+                        await self._rest.close()
 
     async def _rollback(self) -> None:
         """Undo a failed start(): every step is attempted and its error logged, never raised."""

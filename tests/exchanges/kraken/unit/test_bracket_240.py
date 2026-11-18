@@ -178,7 +178,7 @@ class TestBracketViaConditionalClose:
 
         userref = rest.bodies[0]["userref"]
         assert isinstance(userref, int)
-        assert 0 < userref <= _INT32_MAX
+        assert -_INT32_MAX - 1 <= userref <= -1  # codec userrefs are negative int32
         from market_connector.exchanges.kraken.linked_order_codec import (  # noqa: PLC0415
             KrakenUserrefLinkCodec,
         )

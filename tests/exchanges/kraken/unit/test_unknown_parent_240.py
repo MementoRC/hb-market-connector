@@ -17,7 +17,7 @@ from tests.exchanges.kraken.unit import test_userref_recovery_214 as rec
 bare_connector, bus, connector = base.bare_connector, base.bus, base.connector
 gateway, seen, rest = base.gateway, base.seen, rec.rest
 
-_BRACKET_PARENT_USERREF = 41 * 16 + 0  # shape of a group-high / leg-low int32 tag
+_BRACKET_PARENT_USERREF = -(1 + (41 << 4 | 0))  # negative int32 tag: group 41, leg 0
 
 
 class TestUnknownBracketParentResolution:

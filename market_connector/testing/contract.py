@@ -231,7 +231,9 @@ def check_linked_protocol_capabilities(gateway: object) -> list[str]:
 
     A ``SupportsBracket`` implementer must list ``LinkedMode.BRACKET`` in its
     ``order_capabilities.linked``; a ``SupportsOco`` implementer must list ``LinkedMode.OCO``.
-    Gateways implementing neither are not required to advertise anything.
+    Gateways implementing neither are not required to advertise anything. A method marked
+    ``@unsupported_linked`` (a stub that only raises ``UnsupportedOrderError``) does not count
+    as implementing its protocol.
 
     Returns:
         Human-readable failures; empty when protocols and descriptor agree.
@@ -243,6 +245,8 @@ def check_linked_protocol_capabilities(gateway: object) -> list[str]:
     failures: list[str] = []
     for protocol, mode, method in required:
         if not isinstance(gateway, protocol):
+            continue
+        if getattr(getattr(gateway, method, None), "__linked_unsupported__", False):
             continue
         caps = getattr(gateway, "order_capabilities", None)
         if caps is None or mode not in caps.linked:

@@ -5,13 +5,14 @@ from __future__ import annotations
 import math
 import time
 import uuid
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from data_type_primitives import TriggerKind, TriggerReference
 from data_type_primitives.common import OrderType as CanonicalOrderType
 
-from market_connector.capabilities import OrderCapabilities
+from market_connector.capabilities import LinkedMode, OrderCapabilities
 from market_connector.exceptions import (
     ExchangeUnavailableError,
     GatewayNotStartedError,
@@ -43,7 +44,8 @@ from market_connector.rate_limits.limiter import ensure_keyed_limit
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
-    from decimal import Decimal
+
+    from data_type_primitives import TriggerSpec
 
     from market_connector.exchanges.kraken.mixins.protocols import HasReady, HasRest
     from market_connector.primitives import OrderType, TradeType
@@ -76,15 +78,17 @@ _LIMIT_KEYS = frozenset({"STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"})
 _CL_ORD_ID_MAX_LEN = 18
 
 # Derived from _ORDER_TYPE_MAP so the descriptor cannot drift from the adapter.
-# Triggers: absolute price, percent (``price_in_percent``) and trailing distance offsets.
+# Triggers: absolute price, percent and trailing distance offsets (``TriggerSpec``).
+# Bracket is native (one conditional close per entry, #240); Kraken spot has no OCO.
 KRAKEN_ORDER_CAPABILITIES = OrderCapabilities(
     order_types=frozenset(CanonicalOrderType[name] for name in _ORDER_TYPE_MAP),
-    # RELATIVE_OFFSET is not advertised until Kraken adopts TriggerSpec (P6, #240).
-    trigger_kinds=frozenset({TriggerKind.ABSOLUTE, TriggerKind.PERCENT}),
+    trigger_kinds=frozenset(
+        {TriggerKind.ABSOLUTE, TriggerKind.PERCENT, TriggerKind.RELATIVE_OFFSET}
+    ),
     trigger_references=frozenset({TriggerReference.LAST}),
     supports_trailing=True,
-    linked=frozenset(),
-    native_linked=False,
+    linked=frozenset({LinkedMode.BRACKET}),
+    native_linked=True,
 )
 
 
@@ -165,7 +169,112 @@ def _build_price_fields(
     return fields
 
 
-def _to_kraken_side(side: TradeType | str) -> str:
+def _percent_points(fraction: Decimal) -> Decimal:
+    """Convert a ``TriggerSpec`` fraction (0.02) to Kraken percent points (2), without exponent."""
+    return Decimal(f"{(fraction * 100).normalize():f}")
+
+
+def _trailing_from_trigger(
+    key: str, price: Decimal | None, limit_price: Decimal | None, trigger: TriggerSpec
+) -> tuple[Decimal, Decimal | None, bool]:
+    """Trailing distance from ``trigger.trail``; ``trigger.value`` is ignored."""
+    trail = trigger.trail
+    if trail is None:
+        raise ValueError(f"{key} requires trigger.trail (the trailing distance)")
+    if price is not None:
+        raise ValueError(
+            f"price must be None for {key} with a trigger: the distance comes from "
+            "trigger.trail and a limit offset belongs in limit_price"
+        )
+    percent = trail.kind is TriggerKind.PERCENT
+    if percent and key == "TRAILING_STOP_LIMIT":
+        raise UnsupportedOrderError(
+            exchange="kraken",
+            order_type=key,
+            feature="percent_trailing_limit",
+            reason="percent trailing-stop-limit offset semantics are pending (#230)",
+        )
+    distance = _percent_points(trail.distance) if percent else trail.distance
+    return distance, limit_price, percent
+
+
+def _resolve_trigger(
+    key: str,
+    price: Decimal | None,
+    limit_price: Decimal | None,
+    price_in_percent: bool,
+    trigger: TriggerSpec,
+) -> tuple[Decimal | None, Decimal | None, bool]:
+    """Translate ``trigger`` into the ``(price, limit_price, price_in_percent)`` wire inputs.
+
+    For ``*_LIMIT`` types ``price`` is the limit price (HBOrder convention) and becomes
+    Kraken's ``price2``; the trigger becomes ``price``.
+    """
+    if price_in_percent:
+        raise ValueError(
+            "price_in_percent cannot be combined with a trigger; use TriggerKind.PERCENT"
+        )
+    if key not in _CONDITIONAL_KEYS and key not in _TRAILING_KEYS:
+        raise ValueError(f"trigger is only valid for conditional orders, not {key}")
+    if trigger.reference is not TriggerReference.LAST:
+        raise UnsupportedOrderError(
+            exchange="kraken",
+            order_type=key,
+            feature="trigger_reference",
+            reason=f"only {TriggerReference.LAST.name} is supported",
+        )
+    if key in _TRAILING_KEYS:
+        return _trailing_from_trigger(key, price, limit_price, trigger)
+    if trigger.trail is not None:
+        raise ValueError(f"trigger.trail is only valid for trailing order types, not {key}")
+    if trigger.kind is TriggerKind.RELATIVE_OFFSET:
+        raise UnsupportedOrderError(
+            exchange="kraken",
+            order_type=key,
+            feature="relative_offset_trigger",
+            reason="a relative-offset trigger is only supported as a trailing distance",
+        )
+    percent = trigger.kind is TriggerKind.PERCENT
+    trigger_price = _percent_points(trigger.value) if percent else trigger.value
+    if key in _LIMIT_KEYS:
+        if limit_price is not None:
+            raise ValueError(
+                f"with a trigger, price is the limit price; drop limit_price for {key}"
+            )
+        return trigger_price, price, percent
+    if price is not None:
+        raise ValueError(f"price must be None for {key} with a trigger: the trigger is the price")
+    return trigger_price, limit_price, percent
+
+
+def _order_fields(
+    order_type: object,
+    side: object,
+    amount: Decimal,
+    price: Decimal | None,
+    limit_price: Decimal | None,
+    price_in_percent: bool,
+    trigger: TriggerSpec | None,
+) -> dict[str, object]:
+    """Validate the order arguments and return the AddOrder body fields (all but ``pair``)."""
+    kraken_ordertype = _to_kraken_ordertype(order_type)
+    key = _order_type_key(order_type)
+    if trigger is not None:
+        price, limit_price, price_in_percent = _resolve_trigger(
+            key, price, limit_price, price_in_percent, trigger
+        )
+    fields: dict[str, object] = {
+        "type": _to_kraken_side(side),
+        "ordertype": kraken_ordertype,
+        "volume": str(amount),
+        **_build_price_fields(key, price, limit_price, price_in_percent),
+    }
+    if key == "LIMIT_MAKER":
+        fields["oflags"] = "post"
+    return fields
+
+
+def _to_kraken_side(side: object) -> str:
     """Translate a TradeType enum or string to a Kraken side string.
 
     Kraken expects ``"buy"`` or ``"sell"`` (lowercase).
@@ -299,6 +408,38 @@ def _add_open(owner: object, pair: str, delta: int) -> None:
     counts[pair] = max(0, counts.get(pair, 0) + delta)
 
 
+async def _send_add_order(
+    owner: Any, pair: str, body: dict[str, object], recover_id: str | int | None
+) -> str:
+    """POST an AddOrder ``body`` and return the first txid.
+
+    ``recover_id`` is the client tag (``cl_ord_id`` or ``userref``) the order can be found
+    by again. When set, a lost reply raises ``OrderOutcomeUnknownError`` carrying it;
+    without one the transport error propagates (the order is not recoverable anyway).
+    """
+    await _ensure_room(owner, pair, 1)
+    try:
+        response = await _request_keyed(owner._rest, "add_order", pair, body)
+    except OrderOutcomeUnknownError:
+        raise
+    except (httpx.TimeoutException, httpx.TransportError, ExchangeUnavailableError) as exc:
+        if recover_id is None:
+            raise
+        raise OrderOutcomeUnknownError(
+            f"AddOrder reply lost for client tag {recover_id!r}: {exc}",
+            client_order_id=str(recover_id),
+        ) from exc
+    # Error replies carry no result, so raise before validating it.
+    raise_on_kraken_error(response.raw.get("error", []))  # type: ignore[union-attr]
+    envelope = KrakenResponse[AddOrderResult].model_validate(response.raw)
+    raise_on_kraken_error(envelope.error)
+    placed = owner._order_clock()
+    for txid in envelope.result.txid:  # type: ignore[union-attr]
+        _placed_at(owner)[txid] = placed
+    _add_open(owner, pair, len(envelope.result.txid))  # type: ignore[union-attr]
+    return envelope.result.txid[0]  # type: ignore[union-attr]
+
+
 # ---------------------------------------------------------------------------
 # Mixin
 # ---------------------------------------------------------------------------
@@ -320,6 +461,7 @@ class OrdersMixin:
         price_in_percent: bool = False,
         userref: int | None = None,
         cl_ord_id: str | None = None,
+        trigger: TriggerSpec | None = None,
     ) -> str:
         """Place an order on Kraken and return the first txid.
 
@@ -344,6 +486,14 @@ class OrdersMixin:
                 18 characters or a UUID, unique among OPEN orders, mutually exclusive
                 with ``userref``. Used by linked-order emulation with
                 ``KrakenClOrdIdLinkCodec`` (#248, #255).
+            trigger: Venue-neutral trigger for conditional types, replacing the
+                ``price`` / ``price_in_percent`` / ``limit_price`` overloading (the legacy
+                arguments still work and send identical bodies). For ``*_LIMIT`` types
+                ``price`` is then the limit price (sent as ``price2``) and the trigger
+                is sent as ``price``. For trailing types the distance comes from
+                ``trigger.trail`` (``trigger.value`` is ignored) and the
+                TRAILING_STOP_LIMIT offset stays in ``limit_price``. Not combinable with
+                ``price_in_percent``.
 
         Returns:
             The first txid string from ``result.txid``.
@@ -365,46 +515,17 @@ class OrdersMixin:
                 raise ValueError("userref and cl_ord_id are mutually exclusive")
             _validate_cl_ord_id(cl_ord_id)
 
-        kraken_ordertype = _to_kraken_ordertype(order_type)
-        key = _order_type_key(order_type)
-        price_fields = _build_price_fields(key, price, limit_price, price_in_percent)
-        if key == "LIMIT_MAKER":
-            price_fields["oflags"] = "post"
+        fields = _order_fields(
+            order_type, side, amount, price, limit_price, price_in_percent, trigger
+        )
         trading_pair = await resolve_wire_pair(self, trading_pair)
 
-        body: dict[str, object] = {
-            "pair": trading_pair,
-            "type": _to_kraken_side(side),
-            "ordertype": kraken_ordertype,
-            "volume": str(amount),
-            **price_fields,
-        }
+        body: dict[str, object] = {"pair": trading_pair, **fields}
         if userref is not None:
             body["userref"] = userref
         if cl_ord_id is not None:
             body["cl_ord_id"] = cl_ord_id
-
-        await _ensure_room(self, trading_pair, 1)
-        try:
-            response = await _request_keyed(self._rest, "add_order", trading_pair, body)
-        except OrderOutcomeUnknownError:
-            raise
-        except (httpx.TimeoutException, httpx.TransportError, ExchangeUnavailableError) as exc:
-            if cl_ord_id is None:
-                raise
-            raise OrderOutcomeUnknownError(
-                f"AddOrder reply lost for cl_ord_id={cl_ord_id!r}: {exc}",
-                client_order_id=cl_ord_id,
-            ) from exc
-        # Error replies carry no result, so raise before validating it.
-        raise_on_kraken_error(response.raw.get("error", []))  # type: ignore[union-attr]
-        envelope = KrakenResponse[AddOrderResult].model_validate(response.raw)
-        raise_on_kraken_error(envelope.error)
-        placed = self._order_clock()
-        for txid in envelope.result.txid:  # type: ignore[union-attr]
-            _placed_at(self)[txid] = placed
-        _add_open(self, trading_pair, len(envelope.result.txid))  # type: ignore[union-attr]
-        return envelope.result.txid[0]  # type: ignore[union-attr]
+        return await _send_add_order(self, trading_pair, body, cl_ord_id)
 
     async def cancel_order(
         self: HasRest & HasReady,  # type: ignore[valid-type]

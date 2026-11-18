@@ -17,8 +17,8 @@ def unsupported_linked[F: Callable[..., Any]](method: F) -> F:
     """Mark a ``place_bracket`` / ``place_oco`` method as a declared-unsupported stub.
 
     Such a stub only raises ``UnsupportedOrderError``. It exists so callers get a clear
-    error rather than ``AttributeError``, so the capability contract does not demand the
-    matching ``LinkedMode`` be advertised for it.
+    error rather than ``AttributeError``. The capability contract does not demand the
+    matching ``LinkedMode`` be advertised for it and fails if it is.
     """
     method.__linked_unsupported__ = True  # type: ignore[attr-defined]
     return method

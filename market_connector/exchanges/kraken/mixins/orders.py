@@ -177,7 +177,11 @@ def _percent_points(fraction: Decimal) -> Decimal:
 def _trailing_from_trigger(
     key: str, price: Decimal | None, limit_price: Decimal | None, trigger: TriggerSpec
 ) -> tuple[Decimal, Decimal | None, bool]:
-    """Trailing distance from ``trigger.trail``; ``trigger.value`` is ignored."""
+    """Trailing distance from ``trigger.trail``; ``trigger.value`` is ignored.
+
+    A percent TRAILING_STOP_LIMIT is rejected here (offset semantics pending, #230); the
+    legacy ``price_in_percent`` path still accepts it.
+    """
     trail = trigger.trail
     if trail is None:
         raise ValueError(f"{key} requires trigger.trail (the trailing distance)")
@@ -240,6 +244,10 @@ def _resolve_trigger(
         if limit_price is not None:
             raise ValueError(
                 f"with a trigger, price is the limit price; drop limit_price for {key}"
+            )
+        if price is None:
+            raise ValueError(
+                f"{key} with a trigger needs the limit price in price (sent as price2)"
             )
         return trigger_price, price, percent
     if price is not None:
@@ -549,6 +557,8 @@ class OrdersMixin:
             GatewayNotStartedError: If the gateway is not ready.
             ValueError: Unless exactly one of ``txid`` / ``cl_ord_id`` is given;
                 raised before any request.
+            OrderNotFoundError: For an unknown or already-closed order
+                (``EOrder:Unknown order``); the open-order counter is left unchanged.
 
         The matching counter is charged the order-age penalty. The age comes from
         this process's ``place_order``; an unknown or ``cl_ord_id`` order is charged
@@ -567,8 +577,10 @@ class OrdersMixin:
         raise_on_kraken_error(envelope.error)
         if txid is not None:
             _placed_at(self).pop(txid, None)
-        _add_open(self, trading_pair, -1)
-        return envelope.result.count >= 1  # type: ignore[union-attr]
+        cancelled = envelope.result.count >= 1  # type: ignore[union-attr]
+        if cancelled:
+            _add_open(self, trading_pair, -1)
+        return cancelled
 
     async def amend_order(
         self: HasRest & HasReady,  # type: ignore[valid-type]

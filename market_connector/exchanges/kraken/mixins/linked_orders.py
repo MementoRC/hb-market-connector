@@ -13,6 +13,7 @@ AddOrder reply is resolved like any order, by userref.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -26,9 +27,17 @@ from data_type_primitives import (
 )
 
 from market_connector.capabilities import unsupported_linked
-from market_connector.exceptions import GatewayNotStartedError, UnsupportedOrderError
+from market_connector.exceptions import (
+    GatewayNotStartedError,
+    OrderNotFoundError,
+    UnsupportedOrderError,
+)
 from market_connector.exchanges.kraken.linked_order_codec import KrakenUserrefLinkCodec
-from market_connector.exchanges.kraken.mixins.orders import _order_fields, _send_add_order
+from market_connector.exchanges.kraken.mixins.orders import (
+    _add_open,
+    _order_fields,
+    _send_add_order,
+)
 from market_connector.exchanges.kraken.pairs import resolve_wire_pair
 
 if TYPE_CHECKING:
@@ -41,13 +50,14 @@ _CODEC = KrakenUserrefLinkCodec()
 _CLOSE_ORDERTYPES = frozenset(
     {"limit", "stop-loss", "take-profit", "stop-loss-limit", "take-profit-limit"}
 )
-# Kraken order status -> (leg outcome, all legs terminal, group status) after a cancel attempt.
-# A closed (filled) entry has released its conditional close, which is still working.
-_AFTER_CANCEL: dict[str, tuple[CancelOutcome, bool, LinkedCancelStatus]] = {
-    "canceled": (CancelOutcome.CANCELED, True, LinkedCancelStatus.CANCELED),
-    "expired": (CancelOutcome.CANCELED, True, LinkedCancelStatus.CANCELED),
-    "closed": (CancelOutcome.ALREADY_FILLED, False, LinkedCancelStatus.FILLED),
+# Kraken entry status -> (entry outcome, group status) after a cancel attempt. Whether the
+# group is terminal also depends on the released exit (see ``_release_exit``).
+_AFTER_CANCEL: dict[str, tuple[CancelOutcome, LinkedCancelStatus]] = {
+    "canceled": (CancelOutcome.CANCELED, LinkedCancelStatus.CANCELED),
+    "expired": (CancelOutcome.CANCELED, LinkedCancelStatus.CANCELED),
+    "closed": (CancelOutcome.ALREADY_FILLED, LinkedCancelStatus.FILLED),
 }
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -103,6 +113,15 @@ def _close_fields(entry: LegSpec, exit_leg: LegSpec) -> dict[str, object]:
             feature="partial_exit",
             reason="a conditional close covers the entry's full volume",
         )
+    if exit_leg.trade_type == entry.trade_type:
+        raise ValueError("the exit must take the opposite trade_type of the entry")
+    if exit_leg.order_type.name == "LIMIT_MAKER":
+        raise UnsupportedOrderError(
+            exchange="kraken",
+            order_type=exit_leg.order_type.name,
+            feature="post_only_exit",
+            reason="close[] carries no oflags, so a post-only exit cannot be expressed",
+        )
     fields = _leg_fields(exit_leg)
     if fields["ordertype"] not in _CLOSE_ORDERTYPES:
         raise UnsupportedOrderError(
@@ -116,9 +135,71 @@ def _close_fields(entry: LegSpec, exit_leg: LegSpec) -> dict[str, object]:
     }
 
 
+def _cancel_outcome(
+    handle: KrakenBracket,
+    entry: CancelOutcome,
+    terminal: bool,
+    status: LinkedCancelStatus,
+    residual: Decimal,
+    exit_outcome: CancelOutcome | None,
+) -> LinkedCancelOutcome:
+    """Build the outcome; the exit leg (position 1) is ``None`` when it was never released."""
+    rest: list[CancelOutcome | None] = [None] * (handle.leg_count - 1)
+    if rest:
+        rest[0] = exit_outcome
+    return LinkedCancelOutcome(
+        group_id=str(handle.group_id),
+        all_legs_terminal=terminal,
+        residual_filled=residual,
+        leg_outcomes=(entry, *rest),
+        status=status,
+    )
+
+
 def _group_id_option(options: Mapping[str, Any] | None, owner: object) -> int:
     given = (options or {}).get("group_id")
-    return _next_group_id(owner) if given is None else int(given)
+    if given is None:
+        return _next_group_id(owner)
+    if type(given) is not int:
+        raise ValueError(f"group_id must be an int, got {type(given).__name__}")
+    if not 0 <= given <= KrakenUserrefLinkCodec.GROUP_ID_MAX:
+        raise ValueError(f"group_id {given} outside 0..{KrakenUserrefLinkCodec.GROUP_ID_MAX}")
+    return given
+
+
+async def _release_exit(owner: Any, handle: KrakenBracket) -> tuple[CancelOutcome, bool]:
+    """Find and cancel the conditional close released by the entry's (partial) fill.
+
+    The released exit has its own txid and inherits the entry's userref, so it is the open
+    order with that userref other than the entry. Returns ``(exit outcome, terminal)``;
+    when no exit is found or one cannot be cancelled the group is NOT terminal and the
+    live exit txids are logged.
+    """
+    open_orders = await owner.get_open_orders(userref=handle.entry_client_id)
+    exits = [txid for txid in open_orders if txid != handle.txid]
+    if not exits:
+        _LOG.warning(
+            "bracket %s: entry %s filled but no released exit found under userref %s",
+            handle.group_id,
+            handle.txid,
+            handle.entry_client_id,
+        )
+        return CancelOutcome.UNKNOWN, False
+    live: list[str] = []
+    for txid in exits:
+        _add_open(owner, handle.pair, 1)  # released by the exchange, so not yet counted
+        try:
+            if not await owner.cancel_order(handle.pair, txid):
+                live.append(txid)
+        except OrderNotFoundError:
+            continue  # already gone (filled or cancelled meanwhile)
+        except Exception:
+            _LOG.exception("bracket %s: could not cancel exit %s", handle.group_id, txid)
+            live.append(txid)
+    if live:
+        _LOG.warning("bracket %s: exit order(s) still live: %s", handle.group_id, live)
+        return CancelOutcome.UNKNOWN, False
+    return CancelOutcome.CANCELED, True
 
 
 class LinkedOrdersMixin:
@@ -131,7 +212,10 @@ class LinkedOrdersMixin:
     ) -> KrakenBracket:
         """Place the entry with its single exit as a native conditional close.
 
-        ``options={"group_id": n}`` supplies the group id (default: allocated here).
+        ``options={"group_id": n}`` supplies the group id (a plain ``int``, default:
+        allocated here). Allocated ids are unique within this process only: the sequence
+        is seeded from the clock in milliseconds and repeats about every 18.6 hours. For
+        long-lived GTC brackets pass ``group_id`` from your own allocator.
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.
@@ -191,30 +275,35 @@ class LinkedOrdersMixin:
         )
 
     async def cancel_linked(self: Any, handle: KrakenBracket) -> LinkedCancelOutcome:
-        """Cancel the bracket's entry and report how the group ended.
+        """Cancel the bracket's entry, and its released exit if the entry (part-)filled.
 
-        Only the entry is cancelled. Once it has filled, Kraken has released the conditional
-        close as the position's protection and it is left working: the result is then
-        ``FILLED`` with ``all_legs_terminal`` False. The exit leg is reported as ``None``
-        (it never had a client id of its own).
+        Cancelling an entry that already filled answers ``EOrder:Unknown order``; that is
+        mapped through the order's status, not raised. Once the entry has filled, even
+        partly, Kraken has released the conditional close as its own order (own txid, the
+        entry's userref). It is found via ``get_open_orders(userref=...)`` and cancelled so
+        the caller can flatten the position. The result is ``all_legs_terminal=True`` only
+        if no exit can be live. If the exit is not found or cannot be cancelled it is
+        ``False`` (exit leg outcome ``UNKNOWN``, the live txids logged at WARNING).
+        ``residual_filled`` is the entry's executed volume (exit fills are not netted).
         """
-        cancelled = await self.cancel_order(handle.pair, handle.txid)
+        try:
+            cancelled = await self.cancel_order(handle.pair, handle.txid)
+        except OrderNotFoundError:
+            cancelled = False  # already filled/closed; the status below decides
         info = (await self.query_orders([handle.txid])).get(handle.txid)
         if info is None:
-            outcome, terminal, status = CancelOutcome.NOT_FOUND, True, LinkedCancelStatus.UNKNOWN
-            residual = Decimal(0)
-        else:
-            known = _AFTER_CANCEL.get(info.status)
-            outcome, terminal, status = known or (
-                CancelOutcome.UNKNOWN,
-                False,
-                LinkedCancelStatus.PENDING if cancelled else LinkedCancelStatus.UNKNOWN,
+            return _cancel_outcome(
+                handle, CancelOutcome.NOT_FOUND, True, LinkedCancelStatus.UNKNOWN, Decimal(0), None
             )
-            residual = Decimal(info.vol_exec)
-        return LinkedCancelOutcome(
-            group_id=str(handle.group_id),
-            all_legs_terminal=terminal,
-            residual_filled=residual,
-            leg_outcomes=(outcome, *([None] * (handle.leg_count - 1))),
-            status=status,
-        )
+        residual = Decimal(info.vol_exec)
+        known = _AFTER_CANCEL.get(info.status)
+        if known is None:
+            status = LinkedCancelStatus.PENDING if cancelled else LinkedCancelStatus.UNKNOWN
+            return _cancel_outcome(handle, CancelOutcome.UNKNOWN, False, status, residual, None)
+        outcome, status = known
+        if info.status != "closed" and residual <= 0:
+            return _cancel_outcome(handle, outcome, True, status, residual, None)
+        exit_outcome, terminal = await _release_exit(self, handle)
+        if not terminal and status is LinkedCancelStatus.CANCELED:
+            status = LinkedCancelStatus.FILLED
+        return _cancel_outcome(handle, outcome, terminal, status, residual, exit_outcome)

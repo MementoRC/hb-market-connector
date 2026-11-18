@@ -119,9 +119,7 @@ def _leg(
 
 def _spec(exit_leg: LegSpec | None = None) -> LinkedOrderSpec:
     entry = _leg(LegRole.ENTRY, OrderType.LIMIT, TradeType.BUY, price="50000")
-    stop = exit_leg or _leg(
-        LegRole.STOP_LOSS, OrderType.STOP_LOSS, TradeType.SELL, trigger="49000"
-    )
+    stop = exit_leg or _leg(LegRole.STOP_LOSS, OrderType.STOP_LOSS, TradeType.SELL, trigger="49000")
     return LinkedOrderSpec(kind=LinkKind.BRACKET, legs=(entry, stop))
 
 

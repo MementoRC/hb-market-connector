@@ -233,7 +233,7 @@ def check_linked_protocol_capabilities(gateway: object) -> list[str]:
     ``order_capabilities.linked``; a ``SupportsOco`` implementer must list ``LinkedMode.OCO``.
     Gateways implementing neither are not required to advertise anything. A method marked
     ``@unsupported_linked`` (a stub that only raises ``UnsupportedOrderError``) does not count
-    as implementing its protocol.
+    as implementing its protocol, and its mode must NOT be advertised (checked both ways).
 
     Returns:
         Human-readable failures; empty when protocols and descriptor agree.
@@ -246,9 +246,14 @@ def check_linked_protocol_capabilities(gateway: object) -> list[str]:
     for protocol, mode, method in required:
         if not isinstance(gateway, protocol):
             continue
-        if getattr(getattr(gateway, method, None), "__linked_unsupported__", False):
-            continue
         caps = getattr(gateway, "order_capabilities", None)
+        if getattr(getattr(gateway, method, None), "__linked_unsupported__", False):
+            if caps is not None and mode in caps.linked:
+                failures.append(
+                    f"{mode.name}: {method} is marked @unsupported_linked but "
+                    f"LinkedMode.{mode.name} is advertised in order_capabilities.linked"
+                )
+            continue
         if caps is None or mode not in caps.linked:
             failures.append(
                 f"{mode.name}: gateway implements {method} ({protocol.__name__}) but does not "

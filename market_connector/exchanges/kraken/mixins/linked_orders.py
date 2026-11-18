@@ -45,6 +45,8 @@ if TYPE_CHECKING:
 
     from data_type_primitives import LegSpec, LinkedOrderSpec
 
+    from market_connector.exchanges.kraken.schemas.rest import OrderInfo
+
 _CODEC = KrakenUserrefLinkCodec()
 # Order types Kraken accepts as ``close[ordertype]``.
 _CLOSE_ORDERTYPES = frozenset(
@@ -167,24 +169,47 @@ def _group_id_option(options: Mapping[str, Any] | None, owner: object) -> int:
     return given
 
 
-async def _release_exit(owner: Any, handle: KrakenBracket) -> tuple[CancelOutcome, bool]:
+def _exit_orders(orders: Mapping[str, OrderInfo], handle: KrakenBracket) -> dict[str, OrderInfo]:
+    """The orders under the entry's userref other than the entry: its released exit(s)."""
+    return {txid: info for txid, info in orders.items() if txid != handle.txid}
+
+
+def _filled(exits: Mapping[str, OrderInfo]) -> Decimal:
+    return sum((Decimal(info.vol_exec) for info in exits.values()), Decimal(0))
+
+
+async def _release_exit(
+    owner: Any, handle: KrakenBracket, open_exits: dict[str, OrderInfo] | None = None
+) -> tuple[CancelOutcome, bool, Decimal]:
     """Find and cancel the conditional close released by the entry's (partial) fill.
 
-    The released exit has its own txid and inherits the entry's userref, so it is the open
-    order with that userref other than the entry. Returns ``(exit outcome, terminal)``;
-    when no exit is found or one cannot be cancelled the group is NOT terminal and the
-    live exit txids are logged.
+    The released exit has its own txid and inherits the entry's userref, so it is the order
+    with that userref other than the entry. A live one is cancelled; with none open, the
+    closed orders are searched (a normally completed bracket has a filled exit there).
+    Returns ``(exit outcome, terminal, exit filled volume)``; when no exit is found or one
+    cannot be cancelled the group is NOT terminal and the live exit txids are logged.
     """
-    open_orders = await owner.get_open_orders(userref=handle.entry_client_id)
-    exits = [txid for txid in open_orders if txid != handle.txid]
-    if not exits:
+    if open_exits is None:
+        open_exits = _exit_orders(
+            await owner.get_open_orders(userref=handle.entry_client_id), handle
+        )
+    if not open_exits:
+        closed = _exit_orders(await owner.get_closed_orders(userref=handle.entry_client_id), handle)
+        if closed:
+            done = _filled(closed)
+            return (
+                (CancelOutcome.ALREADY_FILLED if done > 0 else CancelOutcome.CANCELED),
+                True,
+                done,
+            )
         _LOG.warning(
             "bracket %s: entry %s filled but no released exit found under userref %s",
             handle.group_id,
             handle.txid,
             handle.entry_client_id,
         )
-        return CancelOutcome.UNKNOWN, False
+        return CancelOutcome.UNKNOWN, False, Decimal(0)
+    exits = list(open_exits)
     live: list[str] = []
     for txid in exits:
         _add_open(owner, handle.pair, 1)  # released by the exchange, so not yet counted
@@ -198,8 +223,8 @@ async def _release_exit(owner: Any, handle: KrakenBracket) -> tuple[CancelOutcom
             live.append(txid)
     if live:
         _LOG.warning("bracket %s: exit order(s) still live: %s", handle.group_id, live)
-        return CancelOutcome.UNKNOWN, False
-    return CancelOutcome.CANCELED, True
+        return CancelOutcome.UNKNOWN, False, _filled(open_exits)
+    return CancelOutcome.CANCELED, True, _filled(open_exits)
 
 
 class LinkedOrdersMixin:
@@ -283,8 +308,10 @@ class LinkedOrdersMixin:
         entry's userref). It is found via ``get_open_orders(userref=...)`` and cancelled so
         the caller can flatten the position. The result is ``all_legs_terminal=True`` only
         if no exit can be live. If the exit is not found or cannot be cancelled it is
-        ``False`` (exit leg outcome ``UNKNOWN``, the live txids logged at WARNING).
-        ``residual_filled`` is the entry's executed volume (exit fills are not netted).
+        ``False`` (exit leg outcome ``UNKNOWN``, the live txids logged at WARNING). When
+        no open exit exists the closed orders are searched, so a bracket whose exit already
+        filled or was cancelled is terminal. ``residual_filled`` is the net exposure: the
+        entry's executed volume minus the executed volume of its exit(s).
         """
         try:
             cancelled = await self.cancel_order(handle.pair, handle.txid)
@@ -292,8 +319,21 @@ class LinkedOrdersMixin:
             cancelled = False  # already filled/closed; the status below decides
         info = (await self.query_orders([handle.txid])).get(handle.txid)
         if info is None:
+            # An unknown entry does not prove its exit is gone: look for a live one.
+            open_exits = _exit_orders(
+                await self.get_open_orders(userref=handle.entry_client_id), handle
+            )
+            exit_outcome = None
+            terminal = True
+            if open_exits:
+                exit_outcome, terminal, _ = await _release_exit(self, handle, open_exits)
             return _cancel_outcome(
-                handle, CancelOutcome.NOT_FOUND, True, LinkedCancelStatus.UNKNOWN, Decimal(0), None
+                handle,
+                CancelOutcome.NOT_FOUND,
+                terminal,
+                LinkedCancelStatus.UNKNOWN,
+                Decimal(0),
+                exit_outcome,
             )
         residual = Decimal(info.vol_exec)
         known = _AFTER_CANCEL.get(info.status)
@@ -303,7 +343,9 @@ class LinkedOrdersMixin:
         outcome, status = known
         if info.status != "closed" and residual <= 0:
             return _cancel_outcome(handle, outcome, True, status, residual, None)
-        exit_outcome, terminal = await _release_exit(self, handle)
+        exit_outcome, terminal, exit_filled = await _release_exit(self, handle)
         if not terminal and status is LinkedCancelStatus.CANCELED:
             status = LinkedCancelStatus.FILLED
-        return _cancel_outcome(handle, outcome, terminal, status, residual, exit_outcome)
+        return _cancel_outcome(
+            handle, outcome, terminal, status, residual - exit_filled, exit_outcome
+        )

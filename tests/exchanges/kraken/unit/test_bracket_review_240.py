@@ -73,6 +73,8 @@ class _Rest:
             raw = {"error": [], "result": self.queried}
         elif endpoint_name == "open_orders":
             raw = {"error": [], "result": {"open": self.open}}
+        elif endpoint_name == "closed_orders":  # exit lookup falls back here when none is open
+            raw = {"error": [], "result": {"closed": {}, "count": 0}}
         else:
             raise AssertionError(f"unexpected endpoint {endpoint_name}")
         return Response(raw=raw, status_code=200, headers=httpx.Headers(), _endpoint=endpoint_name)

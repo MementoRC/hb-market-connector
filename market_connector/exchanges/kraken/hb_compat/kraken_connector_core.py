@@ -106,6 +106,25 @@ _ABANDON_WAIT = 0.05  # final wait for cancelled tasks before stop() abandons st
 _MAX_RETRY_EXPONENT = 30  # keeps the retry backoff finite after many consecutive failures
 
 
+def _pick_request_match(order: InFlightOrder, found: dict[str, OrderInfo]) -> str | None:
+    """The txid, among orders sharing the order's userref, that is the order itself.
+
+    A bracket's released exit inherits the entry's userref but takes the opposite side, so
+    only same-side orders qualify; among those the one whose volume equals the request wins,
+    then the earliest opened. Returns ``None`` when only foreign orders (e.g. the exit) exist.
+    """
+    side = order.trade_type.name.lower()
+    same_side = {t: i for t, i in found.items() if i.descr.type in ("", side)}
+    if not same_side:
+        return None
+
+    def rank(txid: str) -> tuple[bool, float]:
+        info = same_side[txid]
+        return Decimal(info.vol) != order.amount, info.opentm
+
+    return min(same_side, key=rank)
+
+
 def _pair_set(trading_pairs: Iterable[str]) -> set[str]:
     if isinstance(trading_pairs, str):
         raise TypeError("trading_pairs must be an iterable of pairs, not a str")
@@ -598,14 +617,14 @@ class KrakenConnectorCore:
         userref = self._userrefs.get(cid)
         if userref is None:
             return
-        found = await self._gateway.get_open_orders(userref=userref)
-        if not found:
-            found = await self._gateway.get_closed_orders(userref=userref)
+        found = _pick_request_match(
+            order, await self._gateway.get_open_orders(userref=userref)
+        ) or _pick_request_match(order, await self._gateway.get_closed_orders(userref=userref))
         # The lookups awaited: AddOrder may have completed or the order been finished meanwhile.
         if order.exchange_order_id is not None or cid not in self.in_flight_orders:
             return
         if found:
-            self._on_placed(order, next(iter(found)))
+            self._on_placed(order, found)
         elif cid in self._submitting:  # a live AddOrder request may still land
             return
         elif self._clock() - self._created_at.get(cid, float("-inf")) >= self._unknown_grace:

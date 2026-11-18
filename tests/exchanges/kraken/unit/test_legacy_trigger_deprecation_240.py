@@ -12,14 +12,13 @@ from __future__ import annotations
 import asyncio
 import warnings
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from data_type_primitives import TrailSpec, TriggerKind, TriggerSpec
 from data_type_primitives.common import OrderType
 
 from market_connector.exchanges.kraken.hb_compat.kraken_bridge import KrakenConnectorBridge
-from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
 from market_connector.primitives import TradeType
 from tests.exchanges.kraken.unit.test_kraken_connector_core_211 import (  # noqa: F401
     _PAIR,
@@ -32,6 +31,9 @@ from tests.exchanges.kraken.unit.test_kraken_connector_core_211 import (  # noqa
     rest,
     seen,
 )
+
+if TYPE_CHECKING:
+    from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
 
 _MATCH = r"(?s)TriggerSpec.*#241"
 _AMOUNT = Decimal("0.5")

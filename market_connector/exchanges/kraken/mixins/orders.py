@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import time
 import uuid
+import warnings
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -74,6 +75,7 @@ _TRAILING_KEYS = frozenset({"TRAILING_STOP", "TRAILING_STOP_LIMIT"})
 _CONDITIONAL_KEYS = frozenset(_ORDER_TYPE_MAP) - {"MARKET", "LIMIT", "LIMIT_MAKER"} - _TRAILING_KEYS
 # Conditional types that also carry a limit price (sent as ``price2``).
 _LIMIT_KEYS = frozenset({"STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"})
+_TRIGGERED_KEYS = _CONDITIONAL_KEYS | _TRAILING_KEYS
 # Kraken cl_ord_id: ASCII up to this many characters, or a UUID.
 _CL_ORD_ID_MAX_LEN = 18
 
@@ -96,6 +98,11 @@ def _order_type_key(order_type: object) -> str:
     """Name-based key for any OrderType enum (hummingbot or local) or string."""
     name = getattr(order_type, "name", None)
     return name.upper() if isinstance(name, str) else str(order_type).upper().replace("-", "_")
+
+
+def is_triggered_order_type(order_type: object) -> bool:
+    """True for the conditional and trailing types (the ones a ``trigger`` applies to)."""
+    return _order_type_key(order_type) in _TRIGGERED_KEYS
 
 
 def _to_kraken_ordertype(order_type: object) -> str:
@@ -515,6 +522,51 @@ class OrdersMixin:
                 lost (timeout or transport error). The outcome is unknown; resolve it
                 with ``get_open_orders`` / ``get_closed_orders(cl_ord_id=...)``. Any
                 other exception means the order was definitely not placed.
+
+        Warns:
+            DeprecationWarning: A triggered type placed without ``trigger`` (legacy
+                ``price`` / ``limit_price`` / ``price_in_percent`` trigger arguments);
+                removal in #241. The request body is unchanged.
+        """
+        if trigger is None and is_triggered_order_type(order_type):
+            warnings.warn(
+                "Placing a triggered Kraken order through the overloaded price / limit_price / "
+                "price_in_percent arguments is deprecated; pass trigger=TriggerSpec(...) "
+                "instead. The legacy arguments will be removed in #241.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return await self._place_order_compat(  # type: ignore[no-any-return]
+            trading_pair,
+            order_type,
+            side,
+            amount,
+            price,
+            limit_price=limit_price,
+            price_in_percent=price_in_percent,
+            userref=userref,
+            cl_ord_id=cl_ord_id,
+            trigger=trigger,
+        )
+
+    async def _place_order_compat(
+        self: HasRest & HasReady,  # type: ignore[valid-type]
+        trading_pair: str,
+        order_type: OrderType | str,
+        side: TradeType | str,
+        amount: Decimal,
+        price: Decimal | None = None,
+        *,
+        limit_price: Decimal | None = None,
+        price_in_percent: bool = False,
+        userref: int | None = None,
+        cl_ord_id: str | None = None,
+        trigger: TriggerSpec | None = None,
+    ) -> str:
+        """``place_order`` without the legacy-argument deprecation warning.
+
+        Entry point for the hb_compat bridge/core, whose public contract still carries the
+        legacy trigger arguments (removal: #241). Same semantics and wire body.
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")

@@ -543,7 +543,7 @@ class KrakenConnectorCore:
             price = None if order.order_type is OrderType.MARKET else order.price
             if price is not None and price.is_nan():
                 price = None
-            txid = await self._gateway.place_order(
+            txid = await self._gateway._place_order_compat(
                 trading_pair=wire_pair,
                 order_type=order.order_type.name,  # the gateway maps order types by name
                 side=order.trade_type.name.lower(),

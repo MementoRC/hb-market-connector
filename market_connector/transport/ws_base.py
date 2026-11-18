@@ -73,6 +73,7 @@ class WsConnectorBase:
         self._connected = False
         self._closed = False  # set by disconnect(): the reconnect loop must stop for good
         self._generation = 0  # successful connects so far
+        self._lifecycle_lock = asyncio.Lock()  # serializes connect() / disconnect()
         self._dropped = asyncio.Event()  # set when the listen loop sees a drop; cleared on connect
         # Routing table: (channel, pair | None) -> handler, backed by hb-event-bus
         # (ADR 0001 Group D, issue #44).
@@ -100,22 +101,23 @@ class WsConnectorBase:
         The supervisor owns the socket afterwards and reconnects in place (one listen,
         heartbeat and refresh task per live socket); calling connect() while it runs is a no-op.
         """
-        if self._supervisor_task is not None and not self._supervisor_task.done():
-            return
-        self._closed = False
-        await self._open()
-        self._supervisor_task = asyncio.create_task(self._supervise())
+        async with self._lifecycle_lock:
+            if self._supervisor_task is not None and not self._supervisor_task.done():
+                return
+            self._closed = False
+            await self._open()
+            self._supervisor_task = asyncio.create_task(self._supervise())
 
     async def _open(self) -> None:
         """Open one socket: prepare URL, dial, run auth hook, (re)start the per-socket tasks."""
         url = await self._ws_auth.prepare_connection(self._url)
         self._ws = await websockets.connect(url)
-        self._connected = True
         try:
             await self._ws_auth.on_connected(self._raw_send)
         except BaseException:
             await self._discard_socket()
             raise
+        self._connected = True  # only once the auth hook has succeeded
         self._generation += 1
         self._dropped.clear()
         self._listen_task = asyncio.create_task(self._listen_loop())
@@ -130,17 +132,23 @@ class WsConnectorBase:
                 await ws.close()
 
     def _restart_keepalive_tasks(self) -> None:
-        self._cancel_keepalive_tasks()
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         if self._refresh_interval is not None:
             self._refresh_task = asyncio.create_task(self._refresh_loop())
 
-    def _cancel_keepalive_tasks(self) -> None:
-        for task in (self._heartbeat_task, self._refresh_task):
-            if task is not None and not task.done():
-                task.cancel()
+    async def _stop_keepalive_tasks(self) -> None:
+        """Cancel the heartbeat/refresh tasks and wait until they are gone.
+
+        An outer cancellation of the awaiting task still propagates.
+        """
+        tasks = [t for t in (self._heartbeat_task, self._refresh_task) if t is not None]
         self._heartbeat_task = None
         self._refresh_task = None
+        pending = [t for t in tasks if not t.done()]
+        for task in pending:
+            task.cancel()
+        others = [t for t in pending if t is not asyncio.current_task()]
+        await asyncio.gather(*others, return_exceptions=True)
 
     async def wait_disconnect(self, generation: int | None = None) -> None:
         """Return once the given connection generation has dropped.
@@ -154,19 +162,20 @@ class WsConnectorBase:
 
     async def disconnect(self) -> None:
         """Disconnect, permanently stop the reconnect loop and cancel all background tasks."""
-        self._closed = True
-        self._connected = False
-        self._dropped.set()  # wake wait_disconnect() waiters
-        self._routing_table.clear()
-        self._cancel_keepalive_tasks()
-        tasks = [self._supervisor_task, self._listen_task]
-        pending = [t for t in tasks if t is not None and not t.done()]
-        for task in pending:
-            task.cancel()
-        others = [t for t in pending if t is not asyncio.current_task()]
-        await asyncio.gather(*others, return_exceptions=True)
-        await self._discard_socket()
-        logger.info("WS disconnected from %s", self._url)
+        async with self._lifecycle_lock:
+            self._closed = True
+            self._connected = False
+            self._dropped.set()  # wake wait_disconnect() waiters
+            self._routing_table.clear()
+            tasks = [self._supervisor_task, self._listen_task]
+            pending = [t for t in tasks if t is not None and not t.done()]
+            for task in pending:
+                task.cancel()
+            others = [t for t in pending if t is not asyncio.current_task()]
+            await asyncio.gather(*others, return_exceptions=True)
+            await self._stop_keepalive_tasks()
+            await self._discard_socket()
+            logger.info("WS disconnected from %s", self._url)
 
     def subscribe(self, channel: str, pair: str | None, handler: MessageCallback) -> None:
         """Register a handler for (channel, pair) routing key.
@@ -251,7 +260,8 @@ class WsConnectorBase:
                 break
             self._connected = False  # is_connected is False from drop detection on
             self._dropped.set()
-            self._cancel_keepalive_tasks()
+            await self._stop_keepalive_tasks()
+            await self._discard_socket()  # best-effort close of the dead socket
             await self._reconnect()
 
     async def _reconnect(self) -> None:

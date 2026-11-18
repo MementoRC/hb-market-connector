@@ -58,7 +58,6 @@ from market_connector.exchanges.kraken.hb_compat.kraken_core_support import (
     update_from_rest,
     update_from_ws,
 )
-from market_connector.exchanges.kraken.linked_order_codec import CORE_USERREF_MAX
 from market_connector.exchanges.kraken.schemas.enums import KrakenOrderState
 from market_connector.exchanges.kraken.specs import KRAKEN_SYMBOL_MAPPER
 from market_connector.hb_compat.logging import get_logger
@@ -91,9 +90,9 @@ KRAKEN_ORDER_STATE_MAP: Mapping[KrakenOrderState, OrderState] = {
 
 
 _UNRESOLVED: frozenset[OrderState] = frozenset({OrderState.PENDING_CREATE, OrderState.UNKNOWN})
-# Kraken userref is a signed int32. The per-order counter stays below the link-codec marker
-# bit (#240) so a counter userref never decodes as a linked-order tag.
-_USERREF_MAX = CORE_USERREF_MAX
+# Kraken userref is a signed int32. The per-order counter only produces non-negative values
+# (0..2**31-2); linked-order tags (#240) live in negative space, so they never collide.
+_USERREF_MAX = 2**31 - 1
 _LIMIT_PRICE_TYPES: frozenset[OrderType] = frozenset(
     {OrderType.STOP_LOSS_LIMIT, OrderType.TAKE_PROFIT_LIMIT, OrderType.TRAILING_STOP_LIMIT}
 )
@@ -499,7 +498,7 @@ class KrakenConnectorCore:
         return client_order_id
 
     def _assign_userref(self, client_order_id: str) -> None:
-        """Give the order the next int32 ``userref`` (1..2**30-1, wrapping)."""
+        """Give the order the next int32 ``userref`` (1..2**31-2, wrapping)."""
         self._userref_counter = self._userref_counter % _USERREF_MAX + 1
         self._userrefs[client_order_id] = self._userref_counter
         self._userref_to_cid[self._userref_counter] = client_order_id

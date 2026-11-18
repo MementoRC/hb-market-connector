@@ -214,7 +214,7 @@ class LinkedOrdersMixin:
 
         ``options={"group_id": n}`` supplies the group id (a plain ``int``, default:
         allocated here). Allocated ids are unique within this process only: the sequence
-        is seeded from the clock in milliseconds and repeats about every 18.6 hours. For
+        is seeded from the clock in milliseconds and repeats about every 37 hours. For
         long-lived GTC brackets pass ``group_id`` from your own allocator.
 
         Raises:

@@ -2,8 +2,8 @@
 
 Source of truth: ``market_connector/exchanges/kraken/mixins/orders.py`` ``_ORDER_TYPE_MAP`` --
 MARKET, LIMIT, LIMIT_MAKER (post-only), STOP_LOSS, TAKE_PROFIT, STOP_LOSS_LIMIT,
-TAKE_PROFIT_LIMIT (#209/#212), TRAILING_STOP, TRAILING_STOP_LIMIT (#223). Kraken has no
-bracket/OCO placement today (P6 #240 adds conditional close), so ``linked`` is empty.
+TAKE_PROFIT_LIMIT (#209/#212), TRAILING_STOP, TRAILING_STOP_LIMIT (#223). Kraken
+brackets via native conditional close (P6 #240) and has no OCO, so ``linked`` is BRACKET only.
 
 Contract hook: ``validate_placement(gateway)`` drives the real ``place_order`` with a fake REST.
 Kraken currently raises ValueError for unknown types; the contract requires
@@ -21,6 +21,7 @@ import pytest
 from data_type_primitives import TriggerKind, TriggerReference
 from data_type_primitives.common import OrderType
 
+from market_connector.capabilities import LinkedMode
 from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
 from market_connector.primitives import TradeType
 from market_connector.protocols import HasCapabilities
@@ -90,9 +91,9 @@ class TestKrakenCapabilities:
         assert TriggerKind.ABSOLUTE in caps.trigger_kinds
         assert caps.trigger_references == frozenset({TriggerReference.LAST})
 
-    def test_no_linked_orders_yet(self, gateway: KrakenGateway) -> None:
-        assert gateway.order_capabilities.linked == frozenset()
-        assert gateway.order_capabilities.native_linked is False
+    def test_bracket_native_no_oco(self, gateway: KrakenGateway) -> None:
+        assert gateway.order_capabilities.linked == frozenset({LinkedMode.BRACKET})
+        assert gateway.order_capabilities.native_linked is True
 
 
 class TestKrakenCapabilityContract(OrderCapabilitiesContractBase):

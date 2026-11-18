@@ -68,7 +68,8 @@ class TestDependencyContract:
 
         from event_bus import EventKey
 
-        args = typing.get_args(EventKey)
+        alias = getattr(EventKey, "__value__", EventKey)
+        args = typing.get_args(alias)
         assert int in args
         assert str in args
 

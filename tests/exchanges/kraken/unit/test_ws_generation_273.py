@@ -102,6 +102,7 @@ class _GenWs:
 
     async def wait_ws_disconnect(self, generation: int | None = None) -> None:
         self.wait_args.append(generation)
+        await asyncio.sleep(0.01)  # a real wait never returns synchronously
         if generation is not None and generation < self.generation:
             return
         await self._drop.wait()

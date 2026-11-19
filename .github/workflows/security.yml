@@ -1,0 +1,19 @@
+name: Security
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  schedule:
+    - cron: '0 2 * * 0'   # weekly, Sunday 02:00 UTC (preserves existing cadence)
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  security:
+    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-security.yml@0ca97504ab812f21c3ae45411423f8675f8188e6 # v4.4.1
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    secrets: inherit  # pragma: allowlist secret

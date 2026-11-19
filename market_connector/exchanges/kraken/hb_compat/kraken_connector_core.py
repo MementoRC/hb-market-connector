@@ -90,7 +90,9 @@ KRAKEN_ORDER_STATE_MAP: Mapping[KrakenOrderState, OrderState] = {
 
 
 _UNRESOLVED: frozenset[OrderState] = frozenset({OrderState.PENDING_CREATE, OrderState.UNKNOWN})
-_USERREF_MAX = 2**31 - 1  # Kraken userref is a signed int32
+# Kraken userref is a signed int32. The per-order counter only produces non-negative values
+# (0..2**31-2); linked-order tags (#240) live in negative space, so they never collide.
+_USERREF_MAX = 2**31 - 1
 _LIMIT_PRICE_TYPES: frozenset[OrderType] = frozenset(
     {OrderType.STOP_LOSS_LIMIT, OrderType.TAKE_PROFIT_LIMIT, OrderType.TRAILING_STOP_LIMIT}
 )
@@ -102,6 +104,25 @@ class LostOrderError(Exception):
 
 _ABANDON_WAIT = 0.05  # final wait for cancelled tasks before stop() abandons stuck ones
 _MAX_RETRY_EXPONENT = 30  # keeps the retry backoff finite after many consecutive failures
+
+
+def _pick_request_match(order: InFlightOrder, found: dict[str, OrderInfo]) -> str | None:
+    """The txid, among orders sharing the order's userref, that is the order itself.
+
+    A bracket's released exit inherits the entry's userref but takes the opposite side, so
+    only same-side orders qualify; among those the one whose volume equals the request wins,
+    then the earliest opened. Returns ``None`` when only foreign orders (e.g. the exit) exist.
+    """
+    side = order.trade_type.name.lower()
+    same_side = {t: i for t, i in found.items() if i.descr.type in ("", side)}
+    if not same_side:
+        return None
+
+    def rank(txid: str) -> tuple[bool, float]:
+        info = same_side[txid]
+        return Decimal(info.vol) != order.amount, info.opentm
+
+    return min(same_side, key=rank)
 
 
 def _pair_set(trading_pairs: Iterable[str]) -> set[str]:
@@ -496,7 +517,7 @@ class KrakenConnectorCore:
         return client_order_id
 
     def _assign_userref(self, client_order_id: str) -> None:
-        """Give the order the next int32 ``userref`` (1..2**31-1, wrapping)."""
+        """Give the order the next int32 ``userref`` (1..2**31-2, wrapping)."""
         self._userref_counter = self._userref_counter % _USERREF_MAX + 1
         self._userrefs[client_order_id] = self._userref_counter
         self._userref_to_cid[self._userref_counter] = client_order_id
@@ -522,7 +543,7 @@ class KrakenConnectorCore:
             price = None if order.order_type is OrderType.MARKET else order.price
             if price is not None and price.is_nan():
                 price = None
-            txid = await self._gateway.place_order(
+            txid = await self._gateway._place_order_compat(
                 trading_pair=wire_pair,
                 order_type=order.order_type.name,  # the gateway maps order types by name
                 side=order.trade_type.name.lower(),
@@ -596,14 +617,14 @@ class KrakenConnectorCore:
         userref = self._userrefs.get(cid)
         if userref is None:
             return
-        found = await self._gateway.get_open_orders(userref=userref)
-        if not found:
-            found = await self._gateway.get_closed_orders(userref=userref)
+        found = _pick_request_match(
+            order, await self._gateway.get_open_orders(userref=userref)
+        ) or _pick_request_match(order, await self._gateway.get_closed_orders(userref=userref))
         # The lookups awaited: AddOrder may have completed or the order been finished meanwhile.
         if order.exchange_order_id is not None or cid not in self.in_flight_orders:
             return
         if found:
-            self._on_placed(order, next(iter(found)))
+            self._on_placed(order, found)
         elif cid in self._submitting:  # a live AddOrder request may still land
             return
         elif self._clock() - self._created_at.get(cid, float("-inf")) >= self._unknown_grace:

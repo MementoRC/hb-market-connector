@@ -38,6 +38,7 @@ from market_connector.exchanges.kraken.hb_compat.kraken_startup_cleanup import (
     reconcile_stale_orders,
 )
 from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
+from market_connector.exchanges.kraken.mixins.orders import is_triggered_order_type
 from market_connector.exchanges.kraken.schemas.enums import KrakenAPITier
 from market_connector.hb_compat.logging import get_logger
 
@@ -173,7 +174,14 @@ class KrakenConnectorBridge:
             The first txid string from the Kraken API response.
         """
         extra: dict[str, Any] = {} if userref is None else {"userref": userref}
-        return await self._gateway.place_order(
+        # Triggered types go through the non-warning entry point (the bridge's legacy
+        # arguments are its public contract until #241); other types use the public one.
+        place = (
+            self._gateway._place_order_compat
+            if is_triggered_order_type(order_type)
+            else self._gateway.place_order
+        )
+        return await place(
             trading_pair=trading_pair,
             order_type=order_type,
             side=side,

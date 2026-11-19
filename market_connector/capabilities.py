@@ -4,11 +4,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from data_type_primitives import TriggerKind, TriggerReference
     from data_type_primitives.common import OrderType
+
+
+def unsupported_linked[F: Callable[..., Any]](method: F) -> F:
+    """Mark a ``place_bracket`` / ``place_oco`` method as a declared-unsupported stub.
+
+    Such a stub only raises ``UnsupportedOrderError``. It exists so callers get a clear
+    error rather than ``AttributeError``. The capability contract does not demand the
+    matching ``LinkedMode`` be advertised for it and fails if it is.
+    """
+    method.__linked_unsupported__ = True  # type: ignore[attr-defined]
+    return method
 
 
 class LinkedMode(Enum):

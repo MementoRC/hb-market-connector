@@ -128,7 +128,7 @@ async def test_query_orders_requests_trades(core: Any, rest: StrictRest, seen: R
     await core._poll_once()
     bodies = rest.bodies("query_orders")
     assert bodies
-    assert all(str(b.get("trades", "")).lower() in {"true", "1"} for b in bodies)
+    assert all(b.get("trades") == "true" for b in bodies)  # urlencode(True) would send "True"
 
 
 async def test_rest_books_fills_then_completes(core: Any, rest: StrictRest, seen: Recorder) -> None:

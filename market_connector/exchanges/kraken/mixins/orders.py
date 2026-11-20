@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import time
 import uuid
@@ -42,6 +44,8 @@ from market_connector.exchanges.kraken.specs import (
     KRAKEN_RATE_LIMIT_SPEC,
 )
 from market_connector.rate_limits.limiter import ensure_keyed_limit
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -92,6 +96,9 @@ KRAKEN_ORDER_CAPABILITIES = OrderCapabilities(
     linked=frozenset({LinkedMode.BRACKET}),
     native_linked=True,
 )
+
+
+QUERY_TRADES_MAX_IDS = 20  # Kraken's QueryTrades limit per call
 
 
 def _order_type_key(order_type: object) -> str:
@@ -837,7 +844,10 @@ class OrdersMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        response = await self._rest.request("query_orders", data={"txid": ",".join(txids)})
+        # "true" as a string: the form-encoded body is not bool-converted (True -> "True").
+        response = await self._rest.request(
+            "query_orders", data={"txid": ",".join(txids), "trades": "true"}
+        )
         raw = response.raw
         raise_on_kraken_error(raw.get("error", []))
         result_dict: dict[str, object] = raw.get("result", {})
@@ -861,8 +871,21 @@ class OrdersMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        response = await self._rest.request("query_trades", data={"txid": ",".join(txids)})
-        raw = response.raw
-        raise_on_kraken_error(raw.get("error", []))
-        result_dict: dict[str, object] = raw.get("result", {})
-        return {txid: TradeInfo.model_validate(info) for txid, info in result_dict.items()}
+        trades: dict[str, TradeInfo] = {}
+        for start in range(0, len(txids), QUERY_TRADES_MAX_IDS):
+            chunk = txids[start : start + QUERY_TRADES_MAX_IDS]
+            try:
+                response = await self._rest.request("query_trades", data={"txid": ",".join(chunk)})
+                raw = response.raw
+                raise_on_kraken_error(raw.get("error", []))
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                if not trades:
+                    raise
+                # keep the chunks already fetched; the caller re-requests what is missing
+                logger.warning("query_trades chunk at %d failed; returning partial", start)
+                break
+            result_dict: dict[str, object] = raw.get("result", {})
+            trades.update({t: TradeInfo.model_validate(i) for t, i in result_dict.items()})
+        return trades

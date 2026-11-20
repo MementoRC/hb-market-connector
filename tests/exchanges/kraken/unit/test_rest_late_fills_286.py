@@ -293,26 +293,49 @@ async def test_cancel_during_hold_is_noop(
     assert rest.bodies("cancel_order") == []
 
 
-async def test_ws_and_rest_same_trade_booked_once(
-    core: Any, rest: StrictRest, seen: Recorder
-) -> None:
-    await base._place(core, seen)
-    _trade(rest, "T1", "0.2")
-    _put(rest, status="open", vol_exec="0.2", cost="5400", price="27000", trades=("T1",))
-    await core._poll_once()  # REST books T1
-    assert len(seen.of(base.FILLED)) == 1
-
+def _deliver_ws(core: Any) -> None:
     core.on_own_trades(
         base._ws_trades("T1", vol="0.2", price="27000", cost="5400", fee="0.1", time="1700000000.5")
     )
+
+
+async def _deliver_rest(core: Any, rest: StrictRest) -> None:
+    _trade(rest, "T1", "0.2")
+    _put(rest, status="open", vol_exec="0.2", cost="5400", price="27000", trades=("T1",))
     await core._poll_once()
+
+
+@pytest.mark.parametrize("ws_first", [True, False], ids=["ws_then_rest", "rest_then_ws"])
+async def test_ws_and_rest_same_trade_booked_once(
+    core: Any, rest: StrictRest, seen: Recorder, ws_first: bool
+) -> None:
+    cid = await base._place(core, seen)
+    if ws_first:
+        _deliver_ws(core)
+    else:
+        await _deliver_rest(core, rest)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    order = core.fetch_order(cid)
     assert len(seen.of(base.FILLED)) == 1
+    amount, fills = order.executed_amount_base, dict(order.order_fills)
+    assert amount == Decimal("0.2")
+
+    if ws_first:
+        await _deliver_rest(core, rest)
+    else:
+        _deliver_ws(core)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert len(seen.of(base.FILLED)) == 1
+    assert core.fetch_order(cid).executed_amount_base == amount
+    assert dict(core.fetch_order(cid).order_fills) == fills
 
 
 async def test_hold_is_bounded_by_wait(
     core: Any, rest: StrictRest, seen: Recorder, clock: FakeClock
 ) -> None:
-    n = 10
+    n = _HARD
     for i in range(1, n + 1):
         core.buy(base._PAIR, base._AMOUNT, base.OrderType.LIMIT, base._PRICE)
         await seen.wait(base.BUY_CREATED, i)
@@ -325,3 +348,32 @@ async def test_hold_is_bounded_by_wait(
     clock.now += _WAIT + 1
     await core._poll_once()
     assert len(seen.of(base.BUY_COMPLETED)) == n
+
+
+async def test_held_set_is_capped_at_hard_limit(
+    core: Any,
+    rest: StrictRest,
+    seen: Recorder,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    for i in range(1, _HARD + 2):
+        core.buy(base._PAIR, base._AMOUNT, base.OrderType.LIMIT, base._PRICE)
+        await seen.wait(base.BUY_CREATED, i)
+    for i in range(1, _HARD + 1):
+        rest.orders[f"OTXID-{i}"] = base._order_info(
+            status="closed", vol_exec="0.5", cost="13500", price="27000"
+        )
+    await core._poll_once()
+    assert len(core._held) == _HARD
+    assert _terminals(seen) == 0
+
+    extra = f"OTXID-{_HARD + 1}"
+    rest.orders[extra] = base._order_info(
+        status="closed", vol_exec="0.5", cost="13500", price="27000"
+    )
+    with caplog.at_level(logging.WARNING, logger=_LOGGER):
+        await core._poll_once()
+    assert len(core._held) <= _HARD
+    assert len(seen.of(base.BUY_COMPLETED)) == 1  # the over-cap order finishes immediately
+    assert core.late_trade_drops == 1
+    assert any(r.levelno == logging.WARNING and extra in r.getMessage() for r in caplog.records)

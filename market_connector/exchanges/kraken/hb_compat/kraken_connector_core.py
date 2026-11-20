@@ -704,7 +704,10 @@ class KrakenConnectorCore:
             return True
         if outcome == _FILLS_OK and order.executed_amount_base >= Decimal(info.vol_exec):
             return True
-        if cid in self.in_flight_orders:
+        # at the cap the order is not held: the status poll then finishes it via _fills_reconciled
+        if cid in self.in_flight_orders and (
+            cid in self._held or len(self._held) < self._max_finished_hard
+        ):
             since = self._held[cid][0] if cid in self._held else self._clock()
             canceled = info.model_copy(update={"status": KrakenOrderState.CANCELED.value})
             self._held[cid] = (since, canceled)

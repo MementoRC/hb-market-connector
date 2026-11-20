@@ -86,7 +86,8 @@ async def core(gateway: KrakenGateway, bus: EventBus, seen: Recorder, clock: Fak
 
 async def _finish_one(core: Any, seen: Recorder, n: int) -> tuple[str, str]:
     """Place order #n (txid OTXID-n) and fully fill it over WS. Returns (cid, txid)."""
-    cid = await base._place(core, seen)
+    cid = core.buy(base._PAIR, base._AMOUNT, base.OrderType.LIMIT, base._PRICE)
+    await seen.wait(base.BUY_CREATED, n)  # nth Created event: AddOrder #n has returned
     txid = f"OTXID-{n}"
     assert core.client_order_id_for_txid(txid) == cid
     core.on_own_trades(_trade(txid, f"TF-{n}"))

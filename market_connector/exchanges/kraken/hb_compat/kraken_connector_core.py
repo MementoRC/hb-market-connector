@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections import OrderedDict
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -131,6 +132,11 @@ def _pair_set(trading_pairs: Iterable[str]) -> set[str]:
     return set(trading_pairs)
 
 
+def _monotonic() -> float:
+    """Default clock; resolves ``time.monotonic`` per call (patchable in tests)."""
+    return time.monotonic()
+
+
 _MAX_FINISHED_ORDERS = 1000
 _QUERY_ORDERS_BATCH = 50  # txids per QueryOrders request
 _TRIGGERED_ORDER_ERROR = "EOrder:Invalid Order ID"
@@ -178,7 +184,7 @@ class KrakenConnectorCore:
         event_bus: EventBus,
         status_poll_interval: float = 10.0,
         stop_grace: float = 5.0,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = _monotonic,
         cancel_only_backoff: float = 10.0,
         cancel_only_backoff_max: float = 300.0,
         unknown_order_grace: float = 0.0,
@@ -189,7 +195,24 @@ class KrakenConnectorCore:
         ws_reconnect_delay: float = 1.0,
         ws_reconnect_delay_max: float = 60.0,
         refresh_retry_delay: float = 5.0,
+        max_finished_orders: int = _MAX_FINISHED_ORDERS,
+        finished_order_grace_s: float = 600.0,
+        max_finished_orders_hard: int = 10_000,
     ) -> None:
+        if not max_finished_orders_hard >= max_finished_orders >= 1:
+            raise ValueError(
+                "need max_finished_orders_hard >= max_finished_orders >= 1, got "
+                f"{max_finished_orders_hard} / {max_finished_orders}"
+            )
+        if finished_order_grace_s < 0:
+            raise ValueError(f"finished_order_grace_s must be >= 0, got {finished_order_grace_s}")
+        self._max_finished = max_finished_orders
+        self._finished_grace = finished_order_grace_s
+        self._max_finished_hard = max_finished_orders_hard
+        self._finished_at: dict[str, float] = {}  # cid -> clock() at finish
+        self._evicted_txids: OrderedDict[str, str] = OrderedDict()  # txid -> cid tombstones
+        self._late_seen: OrderedDict[tuple[str, str], None] = OrderedDict()
+        self._late_trade_drops = 0
         for name, value in (
             ("status_poll_interval", status_poll_interval),
             ("trading_rules_refresh_interval", trading_rules_refresh_interval),
@@ -240,7 +263,7 @@ class KrakenConnectorCore:
         self._cancel_requested: set[str] = set()  # cancel asked before the txid was known
         self._cancelling: set[str] = set()  # CancelOrder in flight
         self._syncing_fills: set[str] = set()  # QueryTrades in flight
-        self._pending_trades = PendingTrades()
+        self._pending_trades = PendingTrades(on_drop=self._on_pending_drop)
         self.trading_rules: dict[str, TradingRules] = {}
         self._wire_pairs: dict[str, str] = {}
         self._prices: dict[str, dict[PriceType, Decimal]] = {}
@@ -672,7 +695,7 @@ class KrakenConnectorCore:
         self._txid_to_cid[txid] = cid
         self._set_state(order, OrderState.OPEN, now, txid)
         self._emit(created_event(order, txid, now))
-        for trade_id, detail in self._pending_trades.pop_for(txid, time.monotonic()):
+        for trade_id, detail in self._pending_trades.pop_for(txid, self._clock()):
             self._apply_ws_trade(order, trade_id, detail)
         if cid in self._cancel_requested and cid in self.in_flight_orders:
             self._cancel_requested.discard(cid)
@@ -717,14 +740,62 @@ class KrakenConnectorCore:
         self._limit_prices.pop(cid, None)
         self._created_at.pop(cid, None)
         self._set_state(order, state, time.time())
+        now = self._clock()
         self._finished[cid] = order
-        while len(self._finished) > _MAX_FINISHED_ORDERS:
-            self._forget(self._finished.pop(next(iter(self._finished))))
+        self._finished_at[cid] = now
+        while len(self._finished) > self._max_finished:
+            oldest = next(iter(self._finished))
+            over_hard = len(self._finished) > self._max_finished_hard
+            if not over_hard and now - self._finished_at[oldest] < self._finished_grace:
+                break
+            if over_hard and now - self._finished_at[oldest] < self._finished_grace:
+                logger.warning(
+                    "evicting finished order %s inside its grace period (hard cap %d reached)",
+                    oldest,
+                    self._max_finished_hard,
+                )
+            self._forget(self._finished.pop(oldest))
         return True
 
     def _forget(self, order: InFlightOrder) -> None:
-        if order.exchange_order_id is not None:
-            self._txid_to_cid.pop(order.exchange_order_id, None)
+        cid = order.client_order_id
+        self._finished_at.pop(cid, None)
+        txid = order.exchange_order_id
+        if txid is not None:
+            self._txid_to_cid.pop(txid, None)
+            self._evicted_txids[txid] = cid
+            while len(self._evicted_txids) > self._max_finished_hard:
+                self._evicted_txids.popitem(last=False)
+
+    @property
+    def late_trade_drops(self) -> int:
+        """Late WS trades that could not be booked (evicted order or expired buffer)."""
+        return self._late_trade_drops
+
+    def _on_pending_drop(self, key: tuple[str, str], detail: OwnTradeDetail, reason: str) -> None:
+        self._late_trade_drops += 1
+        logger.warning(
+            "buffered trade %s for unmatched order %s dropped (%s); not booked",
+            key[1],
+            detail.ordertxid,
+            reason,
+        )
+
+    def _note_evicted_trade(self, trade_id: str, detail: OwnTradeDetail) -> None:
+        txid = detail.ordertxid
+        key = (txid, trade_id)
+        if key in self._late_seen:
+            return
+        self._late_seen[key] = None
+        while len(self._late_seen) > self._max_finished_hard:
+            self._late_seen.popitem(last=False)
+        self._late_trade_drops += 1
+        logger.warning(
+            "late trade for evicted order %s (trade %s, client order %s) not booked",
+            txid,
+            trade_id,
+            self._evicted_txids[txid],
+        )
 
     def _fail(self, order: InFlightOrder, exc: Exception) -> None:
         if not self._finish(order, OrderState.FAILED):
@@ -776,10 +847,12 @@ class KrakenConnectorCore:
         for trade_id, detail in event.trades.items():
             cid = self._txid_to_cid.get(detail.ordertxid)
             order = self.fetch_order(cid) if cid else None
-            if order is None:
-                self._pending_trades.add(trade_id, detail, time.monotonic())
-            else:
+            if order is not None:
                 self._apply_ws_trade(order, trade_id, detail)
+            elif detail.ordertxid in self._evicted_txids:
+                self._note_evicted_trade(trade_id, detail)
+            else:
+                self._pending_trades.add(trade_id, detail, self._clock())
 
     def _apply_ws_trade(self, order: InFlightOrder, trade_id: str, detail: OwnTradeDetail) -> None:
         self._record_fill(order, update_from_ws(order, trade_id, detail))

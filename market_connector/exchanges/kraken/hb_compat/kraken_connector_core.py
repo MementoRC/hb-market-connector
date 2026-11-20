@@ -1004,6 +1004,8 @@ class KrakenConnectorCore:
             return True
         now = self._clock()
         since = held[0] if held is not None else now
+        if held is None and len(self._held) >= self._max_finished_hard:
+            since = float("-inf")  # held set is full: finish now rather than grow it
         if now - since < self._terminal_fill_wait:
             self._held[cid] = (since, info)
             return False

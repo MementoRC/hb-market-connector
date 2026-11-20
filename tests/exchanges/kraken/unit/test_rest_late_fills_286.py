@@ -89,17 +89,15 @@ async def core(gateway: KrakenGateway, bus: EventBus, seen: Recorder, clock: Fak
     return c
 
 
-def _trade(tid: str, vol: str) -> None:
+def _trade(rest: StrictRest, tid: str, vol: str) -> None:
     cost = str(Decimal(vol) * 27000)
-    base_rest = _trade.rest  # type: ignore[attr-defined]
-    base_rest.trades[tid] = base._trade_info(
+    rest.trades[tid] = base._trade_info(
         vol=vol, price="27000", cost=cost, fee="0.1", time=1700000000.5
     )
 
 
 def _put(rest: StrictRest, **kw: Any) -> None:
     rest.orders[_TXID] = base._order_info(**kw)
-    _trade.rest = rest  # type: ignore[attr-defined]
 
 
 def _terminals(seen: Recorder) -> int:
@@ -113,8 +111,8 @@ def _queries_for(rest: StrictRest, txid: str) -> int:
 async def _underfilled_closed(core: Any, rest: StrictRest, seen: Recorder, status: str) -> str:
     """Order placed; poll sees ``status`` with vol_exec 0.5 but only trade T1 (0.2) listed."""
     cid = await base._place(core, seen)
-    _trade("T1", "0.25")
-    _trade("T2", "0.25")
+    _trade(rest, "T1", "0.25")
+    _trade(rest, "T2", "0.25")
     _put(rest, status=status, vol_exec="0.5", cost="13500", price="27000", trades=("T1",))
     await core._poll_once()
     return cid
@@ -135,8 +133,8 @@ async def test_query_orders_requests_trades(core: Any, rest: StrictRest, seen: R
 
 async def test_rest_books_fills_then_completes(core: Any, rest: StrictRest, seen: Recorder) -> None:
     cid = await base._place(core, seen)
-    _trade("T1", "0.2")
-    _trade("T2", "0.3")
+    _trade(rest, "T1", "0.2")
+    _trade(rest, "T2", "0.3")
     _put(rest, status="closed", vol_exec="0.5", cost="13500", price="27000", trades=("T1", "T2"))
     await core._poll_once()
 
@@ -153,7 +151,7 @@ async def test_query_trades_chunked_to_20(core: Any, rest: StrictRest, seen: Rec
     await base._place(core, seen)
     ids = tuple(f"T-{i:02d}" for i in range(45))
     for tid in ids:
-        _trade(tid, "0.01")
+        _trade(rest, tid, "0.01")
     _put(rest, status="open", vol_exec="0.45", cost="12150", price="27000", trades=ids)
     await core._poll_once()
 
@@ -222,8 +220,8 @@ async def test_reconcile_expiry_is_surfaced(
 
 async def test_underfilled_cancel_reconciles(core: Any, rest: StrictRest, seen: Recorder) -> None:
     await base._place(core, seen)
-    _trade("T1", "0.1")
-    _trade("T2", "0.1")
+    _trade(rest, "T1", "0.1")
+    _trade(rest, "T2", "0.1")
     _put(rest, status="canceled", vol_exec="0.2", cost="5400", price="27000", trades=("T1",))
     await core._poll_once()
     assert len(seen.of(base.FILLED)) == 1
@@ -248,7 +246,7 @@ async def test_cancel_expiry_emits_cancelled_with_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     await base._place(core, seen)
-    _trade("T1", "0.1")
+    _trade(rest, "T1", "0.1")
     _put(rest, status="canceled", vol_exec="0.2", cost="5400", price="27000", trades=("T1",))
     await core._poll_once()
     assert _terminals(seen) == 0
@@ -264,8 +262,8 @@ async def test_fully_booked_closed_completes_without_hold(
     core: Any, rest: StrictRest, seen: Recorder
 ) -> None:
     await base._place(core, seen)
-    _trade("T1", "0.25")
-    _trade("T2", "0.25")
+    _trade(rest, "T1", "0.25")
+    _trade(rest, "T2", "0.25")
     _put(rest, status="closed", vol_exec="0.5", cost="13500", price="27000", trades=("T1", "T2"))
     await core._poll_once()
     assert len(seen.of(base.BUY_COMPLETED)) == 1  # same poll, no hold
@@ -299,7 +297,7 @@ async def test_ws_and_rest_same_trade_booked_once(
     core: Any, rest: StrictRest, seen: Recorder
 ) -> None:
     await base._place(core, seen)
-    _trade("T1", "0.2")
+    _trade(rest, "T1", "0.2")
     _put(rest, status="open", vol_exec="0.2", cost="5400", price="27000", trades=("T1",))
     await core._poll_once()  # REST books T1
     assert len(seen.of(base.FILLED)) == 1

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from data_type_primitives import TriggerKind, TriggerSpec
 
 from market_connector import exceptions as exc_mod
 from market_connector.exceptions import GatewayNotStartedError
@@ -32,7 +33,7 @@ class TestUnsupportedOrderTypes:
 
     def test_unknown_order_type_raises_unsupported_order_error(self) -> None:
         order = SimpleNamespace(
-            order_type="WEIRD", side=TradeType.BUY, amount=Decimal(1), price=None, stop_price=None
+            order_type="WEIRD", side=TradeType.BUY, amount=Decimal(1), price=None, trigger=None
         )
         with pytest.raises(exc_mod.UnsupportedOrderError) as exc:
             _hb_to_ib_order(order)  # type: ignore[arg-type]
@@ -45,13 +46,13 @@ class TestMalformedInputStaysValueError:
         with pytest.raises(ValueError, match="price"):
             _hb_to_ib_order(order)
 
-    def test_market_with_stop_price(self) -> None:
-        with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="trigger"):
+    def test_market_with_trigger(self) -> None:
+        with pytest.raises(ValueError, match="trigger"):
             HBOrder(
                 order_type=OrderType.MARKET,
                 side=TradeType.BUY,
                 amount=Decimal(1),
-                stop_price=Decimal(5),
+                trigger=TriggerSpec(kind=TriggerKind.ABSOLUTE, value=Decimal(5)),
             )
 
     def test_stop_loss_without_trigger(self) -> None:

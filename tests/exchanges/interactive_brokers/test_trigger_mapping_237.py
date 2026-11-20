@@ -1,8 +1,7 @@
 """Acceptance tests for issue #237: IB STP / STP LMT built from ``trigger``.
 
-An order built from ``trigger=TriggerSpec(ABSOLUTE, X)`` must map to an IB order
-identical to the one built from the deprecated ``stop_price=X`` (wire behaviour
-unchanged).
+An order built from ``trigger=TriggerSpec(ABSOLUTE, X)`` maps to an IB STP / STP LMT
+order with ``auxPrice=X``.
 """
 
 from __future__ import annotations
@@ -39,47 +38,28 @@ def _from_trigger(order_type: OrderType, price: Decimal | None, **extra: Any) ->
     )
 
 
-def _from_stop_price(order_type: OrderType, price: Decimal | None, **extra: Any) -> HBOrder:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        return HBOrder(
-            order_type=order_type,
-            side=TradeType.SELL,
-            amount=Decimal("10"),
-            price=price,
-            stop_price=STOP,
-            **extra,
-        )
-
-
 @pytest.mark.parametrize(("order_type", "price", "ib_type"), _CASES)
-class TestTriggerMapsLikeStopPrice:
-    def test_aux_and_lmt_price_identical(
-        self, order_type: OrderType, price: Decimal | None, ib_type: str
-    ):
+class TestTriggerMapping:
+    def test_aux_and_lmt_price(self, order_type: OrderType, price: Decimal | None, ib_type: str):
         via_trigger = _hb_to_ib_order(_from_trigger(order_type, price))
-        via_stop_price = _hb_to_ib_order(_from_stop_price(order_type, price))
         assert via_trigger.orderType == ib_type
-        assert via_trigger.auxPrice == via_stop_price.auxPrice == float(STOP)
-        assert via_trigger.lmtPrice == via_stop_price.lmtPrice
+        assert via_trigger.auxPrice == float(STOP)
+        if price is not None:
+            assert via_trigger.lmtPrice == float(price)
 
-    def test_whole_order_identical(
+    def test_mapping_is_deterministic(
         self, order_type: OrderType, price: Decimal | None, ib_type: str
     ):
-        via_trigger = _hb_to_ib_order(_from_trigger(order_type, price))
-        via_stop_price = _hb_to_ib_order(_from_stop_price(order_type, price))
+        first = _hb_to_ib_order(_from_trigger(order_type, price))
+        second = _hb_to_ib_order(_from_trigger(order_type, price))
         # ib_async.Order.__eq__ is identity, so compare field by field.
-        assert vars(via_trigger) == vars(via_stop_price)
+        assert vars(first) == vars(second)
 
-    def test_tif_and_outside_rth_identical(
-        self, order_type: OrderType, price: Decimal | None, ib_type: str
-    ):
+    def test_tif_and_outside_rth(self, order_type: OrderType, price: Decimal | None, ib_type: str):
         extra: dict[str, Any] = {"time_in_force": "GTC", "outside_rth": True}
         via_trigger = _hb_to_ib_order(_from_trigger(order_type, price, **extra))
-        via_stop_price = _hb_to_ib_order(_from_stop_price(order_type, price, **extra))
-        assert via_trigger.tif == via_stop_price.tif == "GTC"
-        assert via_trigger.outsideRth is via_stop_price.outsideRth is True
-        assert vars(via_trigger) == vars(via_stop_price)
+        assert via_trigger.tif == "GTC"
+        assert via_trigger.outsideRth is True
 
     def test_mapping_from_trigger_emits_no_deprecation_warning(
         self, order_type: OrderType, price: Decimal | None, ib_type: str

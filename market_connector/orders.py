@@ -2,7 +2,7 @@
 
 HBOrder is the input type passed to ExecutionGateway.place_order and the
 transport-level _hb_to_ib_order mapper. It carries the fields that
-describe a placement request (including time-in-force, outside-RTH and stop price);
+describe a placement request (including time-in-force, outside-RTH and trigger);
 exchange-specific connectors consume it and produce connector-native
 order objects.
 
@@ -13,14 +13,10 @@ OrderType and TradeType are re-exported here so callers can do:
 
 from __future__ import annotations
 
-import warnings
 from decimal import Decimal  # noqa: TCH003
 from enum import StrEnum
-from pathlib import Path
-from typing import Any
 
-import pydantic
-from data_type_primitives import TriggerKind, TriggerSpec
+from data_type_primitives import TriggerSpec  # noqa: TC002
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from market_connector.hb_compat.primitives import coerce_order_type, coerce_trade_type, to_canonical
@@ -29,8 +25,6 @@ from market_connector.primitives import OrderType, TradeType
 __all__ = ["HBOrder", "OrderType", "TimeInForce", "TradeType"]
 
 _CONDITIONAL_TYPES = frozenset({OrderType.STOP_LOSS, OrderType.STOP_LOSS_LIMIT})
-# Skip pydantic/this-module frames so the DeprecationWarning points at the HBOrder(...) caller.
-_WARN_SKIP_PREFIXES = (str(Path(pydantic.__file__).parent), __file__)
 
 
 class TimeInForce(StrEnum):
@@ -50,7 +44,7 @@ class HBOrder(BaseModel):
     than a flat parameter list.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     order_type: OrderType
     side: TradeType
@@ -67,29 +61,9 @@ class HBOrder(BaseModel):
 
     amount: Decimal
     price: Decimal | None = None
-    # Deprecated: use ``trigger``. Mapped to an ABSOLUTE ``TriggerSpec`` on construction.
-    stop_price: Decimal | None = None
     trigger: TriggerSpec | None = None
     time_in_force: TimeInForce = TimeInForce.DAY
     outside_rth: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def _map_stop_price(cls, data: Any) -> Any:
-        if not isinstance(data, dict) or data.get("stop_price") is None:
-            return data
-        if data.get("trigger") is not None:
-            raise ValueError("specify either stop_price (deprecated) or trigger, not both")
-        warnings.warn(
-            "HBOrder.stop_price is deprecated; use trigger=TriggerSpec(kind=TriggerKind.ABSOLUTE, "
-            "value=...) instead",
-            DeprecationWarning,
-            skip_file_prefixes=_WARN_SKIP_PREFIXES,
-        )
-        return {
-            **data,
-            "trigger": TriggerSpec(kind=TriggerKind.ABSOLUTE, value=data["stop_price"]),
-        }
 
     @model_validator(mode="after")
     def _check_trigger(self) -> HBOrder:

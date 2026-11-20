@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `KrakenConnectorCore.trading_rules` now holds dtp `TradingRules` and `get_order_book` returns dtp `OrderBookSnapshot` (#265)
 
+- **BREAKING:** `HBOrder.stop_price` is removed (deprecated since 0.9.0); use `trigger=TriggerSpec(kind=TriggerKind.ABSOLUTE, value=...)`. `HBOrder` now rejects unknown fields (`extra="forbid"`) (#241).
+
 ### Fixed
 
 - Kraken spot rejects `sandbox=True` with `ValueError` (Kraken spot has no sandbox; REST previously pointed at demo-futures while WS stayed on production) (#260)

@@ -58,9 +58,9 @@ class TestEnumMembers:
 
 
 class TestHBOrderField:
-    def test_stop_price_defaults_none(self):
+    def test_trigger_defaults_none(self):
         order = HBOrder(order_type=OrderType.MARKET, side=TradeType.BUY, amount=Decimal("1"))
-        assert order.stop_price is None
+        assert order.trigger is None
 
 
 class TestStopLossMapping:
@@ -129,23 +129,23 @@ class TestValidation:
                 trigger=_trigger(),
             )
 
-    def test_market_with_stop_price_rejected(self):
-        with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="trigger"):
+    def test_market_with_trigger_rejected(self):
+        with pytest.raises(ValueError, match="trigger"):
             HBOrder(
                 order_type=OrderType.MARKET,
                 side=TradeType.BUY,
                 amount=Decimal("10"),
-                stop_price=STOP,
+                trigger=_trigger(),
             )
 
-    def test_limit_with_stop_price_rejected(self):
-        with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="trigger"):
+    def test_limit_with_trigger_rejected(self):
+        with pytest.raises(ValueError, match="trigger"):
             HBOrder(
                 order_type=OrderType.LIMIT,
                 side=TradeType.BUY,
                 amount=Decimal("10"),
                 price=Decimal("100.5"),
-                stop_price=STOP,
+                trigger=_trigger(),
             )
 
 

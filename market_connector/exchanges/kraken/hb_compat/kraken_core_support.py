@@ -28,6 +28,8 @@ from market_connector.hb_compat.order_events import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from data_type_primitives import TradingRules
     from data_type_primitives.in_flight_order import InFlightOrder
 
@@ -192,9 +194,15 @@ def filled_event(order: InFlightOrder, update: TradeUpdate) -> OrderFilledEvent:
 class PendingTrades:
     """Bounded, TTL-limited buffer of ``ownTrades`` entries for txids not yet known."""
 
-    def __init__(self, ttl: float = 60.0, max_entries: int = 1000) -> None:
+    def __init__(
+        self,
+        ttl: float = 60.0,
+        max_entries: int = 1000,
+        on_drop: Callable[[tuple[str, str], OwnTradeDetail, str], None] | None = None,
+    ) -> None:
         self._ttl = ttl
         self._max = max_entries
+        self._on_drop = on_drop
         self._items: OrderedDict[tuple[str, str], tuple[float, OwnTradeDetail]] = OrderedDict()
 
     def add(self, trade_id: str, detail: OwnTradeDetail, now: float) -> None:
@@ -203,7 +211,12 @@ class PendingTrades:
         self._items.pop(key, None)  # re-insert so insertion order matches timestamp order
         self._items[key] = (now, detail)
         while len(self._items) > self._max:
-            self._items.popitem(last=False)
+            self._drop_oldest("overflow")
+
+    def _drop_oldest(self, reason: str) -> None:
+        key, (_, detail) = self._items.popitem(last=False)
+        if self._on_drop is not None:
+            self._on_drop(key, detail, reason)
 
     def pop_for(self, txid: str, now: float) -> list[tuple[str, OwnTradeDetail]]:
         """Remove and return the live entries for ``txid`` as ``(trade_id, detail)``."""
@@ -213,4 +226,4 @@ class PendingTrades:
 
     def _expire(self, now: float) -> None:
         while self._items and now - next(iter(self._items.values()))[0] > self._ttl:
-            self._items.popitem(last=False)
+            self._drop_oldest("expired")

@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `LegSnapshot` and `SupportsLegLookup` (`get_leg`, `list_open_legs`) protocols, implemented by `KrakenGateway` via `LegLookupMixin` (#250)
 - hb_compat exchange registry (`list_exchanges` / `get_exchange`), `ExchangeDescriptor` with Kraken descriptor, `ConnectorCoreHandle` lifecycle and `ConnectorCoreProtocol`; Kraken core exposes dtp `TradingRules` / `OrderBookSnapshot` and price/size quanta (#265)
 
 ### Changed

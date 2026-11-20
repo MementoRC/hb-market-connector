@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import time
 import uuid
@@ -42,6 +44,8 @@ from market_connector.exchanges.kraken.specs import (
     KRAKEN_RATE_LIMIT_SPEC,
 )
 from market_connector.rate_limits.limiter import ensure_keyed_limit
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -870,9 +874,18 @@ class OrdersMixin:
         trades: dict[str, TradeInfo] = {}
         for start in range(0, len(txids), QUERY_TRADES_MAX_IDS):
             chunk = txids[start : start + QUERY_TRADES_MAX_IDS]
-            response = await self._rest.request("query_trades", data={"txid": ",".join(chunk)})
-            raw = response.raw
-            raise_on_kraken_error(raw.get("error", []))
+            try:
+                response = await self._rest.request("query_trades", data={"txid": ",".join(chunk)})
+                raw = response.raw
+                raise_on_kraken_error(raw.get("error", []))
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                if not trades:
+                    raise
+                # keep the chunks already fetched; the caller re-requests what is missing
+                logger.warning("query_trades chunk at %d failed; returning partial", start)
+                break
             result_dict: dict[str, object] = raw.get("result", {})
             trades.update({t: TradeInfo.model_validate(i) for t, i in result_dict.items()})
         return trades

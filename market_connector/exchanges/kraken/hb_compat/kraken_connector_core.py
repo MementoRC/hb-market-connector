@@ -220,7 +220,8 @@ class KrakenConnectorCore:
         if terminal_fill_wait_s < 0:
             raise ValueError(f"terminal_fill_wait_s must be >= 0, got {terminal_fill_wait_s}")
         self._terminal_fill_wait = terminal_fill_wait_s
-        self._held: dict[str, float] = {}  # cid -> clock() when Kraken went terminal first
+        # cid -> (clock() when Kraken went terminal first, highest-vol_exec terminal status)
+        self._held: dict[str, tuple[float, OrderInfo]] = {}
         for name, value in (
             ("status_poll_interval", status_poll_interval),
             ("trading_rules_refresh_interval", trading_rules_refresh_interval),
@@ -667,12 +668,13 @@ class KrakenConnectorCore:
         txid = order.exchange_order_id
         if txid is None:
             return
+        reconciled = True
         try:
             cancelled = await self._gateway.cancel_order(
                 trading_pair=self._wire_pair(order.trading_pair), txid=txid
             )
             if cancelled:
-                await self._sync_before_cancel(order, txid)
+                reconciled = await self._sync_before_cancel(order, txid)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -680,22 +682,33 @@ class KrakenConnectorCore:
             return
         finally:
             self._cancelling.discard(order.client_order_id)
-        if cancelled:
+        if cancelled and reconciled:
             self._cancelled(order)
 
-    async def _sync_before_cancel(self, order: InFlightOrder, txid: str) -> None:
+    async def _sync_before_cancel(self, order: InFlightOrder, txid: str) -> bool:
         """Book fills the cancel ack raced with, so they precede the 106.
 
-        Skipped while a status poll is already fetching this order's trades: that poll
-        books them (as late fills).
+        Returns ``False`` when fills may still be unbooked: the order then stays in flight
+        for the status poll (held, up to ``terminal_fill_wait_s``). Skipped while a status
+        poll is already fetching this order's trades: that poll books them (as late fills).
         """
-        if order.client_order_id in self._syncing_fills:
-            return
+        cid = order.client_order_id
+        if cid in self._syncing_fills:
+            return True
         info = (await self._gateway.query_orders([txid])).get(txid)
         if info is None:
-            return
-        if await self._sync_fills(order, info) == _FILLS_TRIGGERED:
+            return True
+        outcome = await self._sync_fills(order, info)
+        if outcome == _FILLS_TRIGGERED:
             self._synthesize_missing_fill(order, info)
+            return True
+        if outcome == _FILLS_OK and order.executed_amount_base >= Decimal(info.vol_exec):
+            return True
+        if cid in self.in_flight_orders:
+            since = self._held[cid][0] if cid in self._held else self._clock()
+            canceled = info.model_copy(update={"status": KrakenOrderState.CANCELED.value})
+            self._held[cid] = (since, canceled)
+        return False
 
     def _on_placed(self, order: InFlightOrder, txid: str) -> None:
         cid = order.client_order_id
@@ -884,11 +897,24 @@ class KrakenConnectorCore:
             await self._process_info(order, info)
 
     async def _process_info(self, order: InFlightOrder, info: OrderInfo) -> None:
-        if order.client_order_id not in self.in_flight_orders:
-            return
+        cid = order.client_order_id
+        if cid not in self.in_flight_orders or cid in self._syncing_fills:
+            return  # an overlapping processor is mid-QueryTrades; it applies its own status
         outcome = await self._sync_fills(order, info)
-        if outcome != _FILLS_ERROR and order.client_order_id in self.in_flight_orders:
+        if cid not in self.in_flight_orders:
+            return
+        if outcome == _FILLS_ERROR:
+            self._expire_held(order)
+        else:
             self._apply_status(order, info, triggered=outcome == _FILLS_TRIGGERED)
+
+    def _expire_held(self, order: InFlightOrder) -> None:
+        """Finish a held order whose wait ran out although Kraken's status is unavailable."""
+        held = self._held.get(order.client_order_id)
+        if held is None or self._clock() - held[0] < self._terminal_fill_wait:
+            return
+        info = held[1]
+        self._apply_terminal(order, info, KRAKEN_ORDER_STATE_MAP[KrakenOrderState(info.status)])
 
     async def _poll_batch(self, orders: list[InFlightOrder]) -> None:
         txids = [o.exchange_order_id for o in orders if o.exchange_order_id]
@@ -898,10 +924,14 @@ class KrakenConnectorCore:
             raise
         except Exception:  # noqa: BLE001
             logger.warning("batched status poll failed", exc_info=True)
+            for order in orders:
+                self._expire_held(order)
             return
         for order in orders:
             info = infos.get(order.exchange_order_id or "")
             if info is None:
+                if order.client_order_id in self.in_flight_orders:
+                    self._expire_held(order)
                 continue
             try:
                 await self._process_info(order, info)
@@ -964,12 +994,18 @@ class KrakenConnectorCore:
         While booked volume trails Kraken's ``vol_exec`` the order is held (kept in flight and
         polled) for up to ``terminal_fill_wait_s``; on expiry it finishes on booked amounts.
         """
+        cid = order.client_order_id
+        held = self._held.get(cid)
+        # an out-of-order (older) status must not lower the volume already seen
+        if held is not None and Decimal(held[1].vol_exec) > Decimal(info.vol_exec):
+            info = held[1]
         vol_exec = Decimal(info.vol_exec)
         if order.executed_amount_base >= vol_exec:
             return True
-        cid = order.client_order_id
         now = self._clock()
-        if now - self._held.setdefault(cid, now) < self._terminal_fill_wait:
+        since = held[0] if held is not None else now
+        if now - since < self._terminal_fill_wait:
+            self._held[cid] = (since, info)
             return False
         self._late_trade_drops += 1
         logger.warning(

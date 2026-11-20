@@ -94,6 +94,9 @@ KRAKEN_ORDER_CAPABILITIES = OrderCapabilities(
 )
 
 
+QUERY_TRADES_MAX_IDS = 20  # Kraken's QueryTrades limit per call
+
+
 def _order_type_key(order_type: object) -> str:
     """Name-based key for any OrderType enum (hummingbot or local) or string."""
     name = getattr(order_type, "name", None)
@@ -837,7 +840,10 @@ class OrdersMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        response = await self._rest.request("query_orders", data={"txid": ",".join(txids)})
+        # "true" as a string: the form-encoded body is not bool-converted (True -> "True").
+        response = await self._rest.request(
+            "query_orders", data={"txid": ",".join(txids), "trades": "true"}
+        )
         raw = response.raw
         raise_on_kraken_error(raw.get("error", []))
         result_dict: dict[str, object] = raw.get("result", {})
@@ -861,8 +867,12 @@ class OrdersMixin:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
 
-        response = await self._rest.request("query_trades", data={"txid": ",".join(txids)})
-        raw = response.raw
-        raise_on_kraken_error(raw.get("error", []))
-        result_dict: dict[str, object] = raw.get("result", {})
-        return {txid: TradeInfo.model_validate(info) for txid, info in result_dict.items()}
+        trades: dict[str, TradeInfo] = {}
+        for start in range(0, len(txids), QUERY_TRADES_MAX_IDS):
+            chunk = txids[start : start + QUERY_TRADES_MAX_IDS]
+            response = await self._rest.request("query_trades", data={"txid": ",".join(chunk)})
+            raw = response.raw
+            raise_on_kraken_error(raw.get("error", []))
+            result_dict: dict[str, object] = raw.get("result", {})
+            trades.update({t: TradeInfo.model_validate(i) for t, i in result_dict.items()})
+        return trades

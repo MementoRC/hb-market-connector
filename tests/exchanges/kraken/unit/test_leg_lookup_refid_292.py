@@ -29,6 +29,7 @@ from market_connector.transport.response import Response
 
 _PAIR = "XBTUSD"
 _TXID = "OAAAAA-AAAAA-AAAAAA"
+_ENTRY_TXID = "OBBBBB-BBBBB-BBBBBB"  # the entry the close was released from (fixture refid)
 _CODEC = KrakenUserrefLinkCodec()
 _FIXTURE = (
     Path(__file__).parent.parent / "fixtures" / "rest" / "open_orders_released_close_292.json"
@@ -92,7 +93,10 @@ def test_fixture_userref_decodes_to_group_1_leg_2() -> None:
 def test_fixture_records_released_close_fields() -> None:
     order = _open_orders()[_TXID]
 
-    assert order["refid"]
+    # Live fact (module docstring): refid is the ENTRY's txid, not the close's own. The fixture
+    # entry txid is synthetic, but the relationship (refid names another order) is pinned.
+    assert order["refid"] == _ENTRY_TXID
+    assert order["refid"] != _TXID
     assert order["userref"] == -19
     assert order["descr"]["ordertype"] == "limit"
     assert order["descr"]["close"] == ""

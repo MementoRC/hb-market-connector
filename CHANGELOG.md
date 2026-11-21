@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `LegFill` and `SupportsLegFills` (`subscribe_leg_fills`) per-leg cumulative fill push stream, implemented by `KrakenGateway` via `LegFillsMixin`; core-placed orders are keyed by their `hbot-...` client order id, gateway-placed legs by their link tag (#249)
+
 ## [0.11.0] - 2026-11-20
 
 ### Added

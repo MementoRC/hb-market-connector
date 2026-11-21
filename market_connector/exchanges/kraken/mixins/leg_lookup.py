@@ -38,15 +38,19 @@ _USERREF_CODEC = KrakenUserrefLinkCodec()
 _CL_ORD_ID_CODEC = KrakenClOrdIdLinkCodec()
 
 
-def _tag_of(info: OrderInfo) -> str | None:
+def link_tag(userref: int | None, cl_ord_id: str | None) -> str | None:
     """The leg tag of an order, else ``None`` (not link-tagged).
 
     Tagged means a negative userref (the link-codec range; a positive userref is the
     connector's own per-order counter) or a cl_ord_id. A userref wins over a cl_ord_id.
     """
-    if info.userref is not None and info.userref < 0:
-        return str(info.userref)
-    return info.cl_ord_id or None
+    if userref is not None and userref < 0:
+        return str(userref)
+    return cl_ord_id or None
+
+
+def _tag_of(info: OrderInfo) -> str | None:
+    return link_tag(info.userref, info.cl_ord_id)
 
 
 def _is_userref(key: str) -> bool:

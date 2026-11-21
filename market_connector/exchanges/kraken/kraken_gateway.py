@@ -15,6 +15,7 @@ from market_connector.exchanges.kraken.factory import (
     kraken_ws_auth_factory,
 )
 from market_connector.exchanges.kraken.mixins.accounts import AccountsMixin
+from market_connector.exchanges.kraken.mixins.leg_fills import LegFillsMixin
 from market_connector.exchanges.kraken.mixins.leg_lookup import LegLookupMixin
 from market_connector.exchanges.kraken.mixins.linked_orders import LinkedOrdersMixin
 from market_connector.exchanges.kraken.mixins.market_data import MarketDataMixin
@@ -97,14 +98,15 @@ class KrakenGateway(
     OrdersMixin,
     LinkedOrdersMixin,
     LegLookupMixin,
+    LegFillsMixin,
     AccountsMixin,
     MarketDataMixin,
     SubscriptionsMixin,
 ):
     """Kraken gateway — implements ExchangeGateway protocol via mixin composition.
 
-    MRO is: OrdersMixin → LinkedOrdersMixin → LegLookupMixin → AccountsMixin → MarketDataMixin →
-    SubscriptionsMixin.
+    MRO is: OrdersMixin → LinkedOrdersMixin → LegLookupMixin → LegFillsMixin → AccountsMixin →
+    MarketDataMixin → SubscriptionsMixin.
     This mirrors the Coinbase pattern where Orders comes first (trading priority).
 
     Args:

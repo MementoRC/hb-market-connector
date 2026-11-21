@@ -33,6 +33,7 @@ from market_connector.exceptions import (
     UnsupportedOrderError,
 )
 from market_connector.exchanges.kraken.linked_order_codec import KrakenUserrefLinkCodec
+from market_connector.exchanges.kraken.mixins.leg_fills import record_leg_placement
 from market_connector.exchanges.kraken.mixins.orders import (
     _add_open,
     _order_fields,
@@ -272,6 +273,7 @@ class LinkedOrdersMixin:
         pair = await resolve_wire_pair(self, target)
         body: dict[str, object] = {"pair": pair, **fields, **close, "userref": userref}
         txid = await _send_add_order(self, pair, body, userref)
+        record_leg_placement(self, [txid], userref, None)
         return KrakenBracket(
             group_id=group_id,
             entry_client_id=userref,

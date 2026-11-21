@@ -73,6 +73,7 @@ from market_connector.hb_compat.order_events import (
     MarketOrderFailureEvent,
     OrderCancelledEvent,
 )
+from market_connector.protocols import LegFill
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -911,6 +912,22 @@ class KrakenConnectorCore:
             return
         if order.update_with_trade_update(update):
             self._emit(filled_event(order, update))
+            self._push_leg_fill(order, update, status_id)
+
+    def _push_leg_fill(self, order: InFlightOrder, update: TradeUpdate, status_id: str) -> None:
+        """Offer the accepted fill to the gateway's leg-fill stream (#249), if it has one."""
+        emit = getattr(self._gateway, "_emit_leg_fill", None)
+        if emit is None:
+            return
+        emit(
+            LegFill(
+                client_order_id=order.client_order_id,
+                cumulative_filled=order.executed_amount_base,
+                last_price=update.fill_price,
+                timestamp=update.fill_timestamp,
+                fill_id=None if update.trade_id == status_id else update.trade_id,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Fills: WS ownTrades and REST status polling
@@ -925,8 +942,13 @@ class KrakenConnectorCore:
                 self._apply_ws_trade(order, trade_id, detail)
             elif detail.ordertxid in self._evicted_txids:
                 self._note_evicted_trade(trade_id, detail)
-            else:
+            elif not self._gateway_claims(trade_id, detail):
                 self._pending_trades.add(trade_id, detail, self._clock())
+
+    def _gateway_claims(self, trade_id: str, detail: OwnTradeDetail) -> bool:
+        """True when the gateway placed this txid itself and took the trade (#249)."""
+        claim = getattr(self._gateway, "_claim_own_trade", None)
+        return bool(claim is not None and claim(trade_id, detail))
 
     def _apply_ws_trade(self, order: InFlightOrder, trade_id: str, detail: OwnTradeDetail) -> None:
         self._record_fill(order, update_from_ws(order, trade_id, detail))

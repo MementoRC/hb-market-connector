@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -84,6 +85,8 @@ def _coerce_supported_order_type(value: object) -> OrderType:
 
 
 _MAX_CACHED_IDS = 4096
+# Upper bound (seconds) a cancel waits for an in-flight placement of the same client id.
+_PLACEMENT_WAIT_TIMEOUT_S = 30.0
 _TERMINAL_STATUSES = frozenset(
     {
         CoinbaseOrderStatus.FILLED,
@@ -171,7 +174,10 @@ class OrdersMixin:
                     self, client_id, exchange_id, product or str(body["product_id"])
                 )
         finally:
-            _placing(self).pop(client_id, None)
+            # Only drop our own registration: a concurrent placement with the same
+            # client id may have replaced it, and its event must stay reachable.
+            if _placing(self).get(client_id) is inflight:
+                del _placing(self)[client_id]
             inflight.set()
         return client_id
 
@@ -192,7 +198,9 @@ class OrdersMixin:
         pending = _placing(self).get(client_order_id)
         if pending is not None:
             # A placement for this id is in flight: wait so its exchange id is cached.
-            await pending.wait()
+            # Bounded; on timeout fall through to the normal resolution path.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(pending.wait(), timeout=_PLACEMENT_WAIT_TIMEOUT_S)
         ids = _exchange_ids(self)
         product_id = to_exchange_pair(trading_pair)
         cached = ids.get(client_order_id)

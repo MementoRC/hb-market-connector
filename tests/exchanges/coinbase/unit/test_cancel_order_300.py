@@ -129,6 +129,126 @@ async def test_cancel_unresolvable_client_id_raises_order_not_found_and_sends_no
     assert rest.cancel_bodies() == []
 
 
+async def test_cancel_mismatched_pair_raises_and_sends_no_cancel_on_lookup_path():
+    rest = _RecordingRest()
+    rest.register("list_orders", {"orders": [_order("X", "C")]})
+    rest.register("cancel_orders", _cancel_result("X"))
+    gateway = _Gateway(rest)
+
+    with pytest.raises(OrderNotFoundError):
+        await gateway.cancel_order("ETH-USD", "C")
+    assert rest.cancel_bodies() == []
+
+
+async def test_cancel_mismatched_pair_raises_on_cached_path():
+    rest = _RecordingRest()
+    gateway = _Gateway(rest)
+    client_id = await _place(rest, gateway, "X")
+    rest.register("cancel_orders", _cancel_result("X"))
+
+    with pytest.raises(OrderNotFoundError):
+        await gateway.cancel_order("ETH-USD", client_id)
+    assert rest.cancel_bodies() == []
+
+
+async def test_place_uses_success_response_order_id_when_top_level_absent():
+    rest = _RecordingRest()
+    gateway = _Gateway(rest)
+    rest.register(
+        "place_order",
+        {
+            "success": True,
+            "success_response": {
+                "order_id": "X",
+                "product_id": "BTC-USD",
+                "side": "BUY",
+                "client_order_id": "ignored",
+            },
+        },
+    )
+    client_id = await gateway.place_order(
+        "BTC-USD", OrderType.LIMIT, TradeType.BUY, Decimal("0.5"), Decimal("50000")
+    )
+    rest.register("cancel_orders", _cancel_result("X"))
+
+    assert await gateway.cancel_order("BTC-USD", client_id) is True
+    assert rest.cancel_bodies() == [{"order_ids": ["X"]}]
+    assert not any(name == "list_orders" for name, _, _ in rest.calls)
+
+
+async def test_cancel_waits_for_in_flight_placement():
+    import asyncio
+
+    rest = _RecordingRest()
+    gate = asyncio.Event()
+    original = rest.request
+
+    async def slow_request(endpoint_name, params=None, data=None, headers=None):
+        if endpoint_name == "place_order":
+            await gate.wait()
+        return await original(endpoint_name, params=params, data=data, headers=headers)
+
+    rest.request = slow_request  # type: ignore[method-assign]
+    gateway = _Gateway(rest)
+    rest.register(
+        "place_order",
+        {"success": True, "order_id": "X", "success_response": None},
+    )
+    rest.register("cancel_orders", _cancel_result("X"))
+
+    place = asyncio.create_task(
+        gateway.place_order(
+            "BTC-USD",
+            OrderType.LIMIT,
+            TradeType.BUY,
+            Decimal("0.5"),
+            Decimal("50000"),
+            client_order_id="C",
+        )
+    )
+    await asyncio.sleep(0)
+    cancel = asyncio.create_task(gateway.cancel_order("BTC-USD", "C"))
+    await asyncio.sleep(0)
+    gate.set()
+    await place
+
+    assert await cancel is True
+    assert rest.cancel_bodies() == [{"order_ids": ["X"]}]
+
+
+async def test_cancel_resolves_stop_limit_order_without_conversion():
+    rest = _RecordingRest()
+    stop = _order("X", "C")
+    stop["order_configuration"] = {
+        "stop_limit_stop_limit_gtc": {
+            "base_size": "0.5",
+            "limit_price": "50000",
+            "stop_price": "49000",
+            "stop_direction": "STOP_DIRECTION_STOP_DOWN",
+        }
+    }
+    rest.register("list_orders", {"orders": [stop]})
+    rest.register("cancel_orders", _cancel_result("X"))
+    gateway = _Gateway(rest)
+
+    assert await gateway.cancel_order("BTC-USD", "C") is True
+    assert rest.cancel_bodies() == [{"order_ids": ["X"]}]
+
+
+async def test_lookup_of_terminal_order_drops_cached_id():
+    from market_connector.exchanges.coinbase.mixins.orders import _exchange_ids
+
+    rest = _RecordingRest()
+    gateway = _Gateway(rest)
+    client_id = await _place(rest, gateway, "X")
+    filled = _order("X", client_id)
+    filled["status"] = "FILLED"
+    rest.register("list_orders", {"orders": [filled]})
+
+    await gateway.get_order_by_client_order_id(client_id)
+    assert client_id not in _exchange_ids(gateway)
+
+
 async def test_cancel_reported_failure_returns_false():
     rest = _RecordingRest()
     gateway = _Gateway(rest)

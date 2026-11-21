@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -17,10 +18,12 @@ from market_connector.exceptions import (
     UnsupportedOrderError,
 )
 from market_connector.exchanges.coinbase.converters import to_exchange_pair, to_open_order
+from market_connector.exchanges.coinbase.schemas.enums import CoinbaseOrderStatus
 from market_connector.exchanges.coinbase.schemas.rest import (
     CancelOrdersResponse,
     CreateOrderResponse,
     ListOrdersResponse,
+    Order,
 )
 from market_connector.hb_compat.primitives import (
     CanonicalOrderType,
@@ -80,12 +83,51 @@ def _coerce_supported_order_type(value: object) -> OrderType:
         raise
 
 
-def _exchange_ids(gateway: object) -> dict[str, str]:
-    """Per-gateway client_order_id -> exchange order id map (created lazily).
+_MAX_CACHED_IDS = 4096
+_TERMINAL_STATUSES = frozenset(
+    {
+        CoinbaseOrderStatus.FILLED,
+        CoinbaseOrderStatus.CANCELLED,
+        CoinbaseOrderStatus.EXPIRED,
+        CoinbaseOrderStatus.FAILED,
+    }
+)
 
-    Filled by ``place_order``; entries are dropped on successful cancel.
+
+def _exchange_ids(gateway: object) -> dict[str, tuple[str, str]]:
+    """Per-gateway client_order_id -> (exchange order id, product id) map (created lazily).
+
+    Filled by ``place_order``; entries are dropped on successful cancel, when a lookup
+    sees the order in a terminal state, and (oldest first) beyond ``_MAX_CACHED_IDS``.
     """
     return gateway.__dict__.setdefault("_exchange_order_ids", {})  # type: ignore[no-any-return]
+
+
+def _remember_exchange_id(gateway: object, client_id: str, exchange_id: str, product: str) -> None:
+    ids = _exchange_ids(gateway)
+    ids.pop(client_id, None)
+    ids[client_id] = (exchange_id, product)
+    while len(ids) > _MAX_CACHED_IDS:
+        ids.pop(next(iter(ids)))
+
+
+def _placing(gateway: object) -> dict[str, asyncio.Event]:
+    """In-flight placements by client_order_id; set when the placement resolves."""
+    return gateway.__dict__.setdefault("_placing_events", {})  # type: ignore[no-any-return]
+
+
+async def _find_raw_order(gateway: HasRest, client_order_id: str) -> Order | None:
+    """Scan the order listing (all pages) for ``client_order_id``; no conversion."""
+    params: dict[str, str] = {}
+    while True:
+        response = await gateway._rest.request("list_orders", params=dict(params))
+        parsed = ListOrdersResponse.model_validate(response.raw)
+        for order in parsed.orders:
+            if order.client_order_id == client_order_id:
+                return order
+        if not (parsed.has_next and parsed.cursor) or parsed.cursor == params.get("cursor"):
+            return None
+        params["cursor"] = parsed.cursor
 
 
 class OrdersMixin:
@@ -110,16 +152,27 @@ class OrdersMixin:
             "side": coerce_trade_type(side).value,
             "order_configuration": cfg,
         }
+        inflight = asyncio.Event()
+        _placing(self)[client_id] = inflight
         try:
-            response = await self._rest.request("place_order", data=body)
-        except (ExchangeUnavailableError, httpx.TransportError) as exc:
-            # The POST may have reached the exchange; never re-send, let the caller resolve it.
-            raise OrderOutcomeUnknownError(client_order_id=client_id) from exc
-        parsed = CreateOrderResponse.model_validate(response.raw)
-        if not parsed.success:
-            raise OrderRejectedError(parsed.failure_reason or "order rejected")
-        if parsed.order_id:
-            _exchange_ids(self)[client_id] = parsed.order_id
+            try:
+                response = await self._rest.request("place_order", data=body)
+            except (ExchangeUnavailableError, httpx.TransportError) as exc:
+                # The POST may have reached the exchange; never re-send, let the caller resolve it.
+                raise OrderOutcomeUnknownError(client_order_id=client_id) from exc
+            parsed = CreateOrderResponse.model_validate(response.raw)
+            if not parsed.success:
+                raise OrderRejectedError(parsed.failure_reason or "order rejected")
+            success = parsed.success_response
+            exchange_id = parsed.order_id or (success.order_id if success else None)
+            if exchange_id:
+                product = success.product_id if success and success.product_id else None
+                _remember_exchange_id(
+                    self, client_id, exchange_id, product or str(body["product_id"])
+                )
+        finally:
+            _placing(self).pop(client_id, None)
+            inflight.set()
         return client_id
 
     async def cancel_order(
@@ -136,13 +189,25 @@ class OrdersMixin:
         """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
+        pending = _placing(self).get(client_order_id)
+        if pending is not None:
+            # A placement for this id is in flight: wait so its exchange id is cached.
+            await pending.wait()
         ids = _exchange_ids(self)
-        exchange_id = ids.get(client_order_id)
-        if exchange_id is None:
-            found = await self.get_order_by_client_order_id(client_order_id)
-            exchange_id = found.exchange_order_id if found is not None else None
-            if exchange_id is None:
+        product_id = to_exchange_pair(trading_pair)
+        cached = ids.get(client_order_id)
+        if cached is not None:
+            exchange_id, product = cached
+        else:
+            found = await _find_raw_order(self, client_order_id)
+            if found is None:
                 raise OrderNotFoundError(f"no Coinbase order for client_order_id {client_order_id}")
+            exchange_id, product = found.order_id, found.product_id
+        if product != product_id:
+            raise OrderNotFoundError(
+                f"Coinbase order for client_order_id {client_order_id} is on {product}, "
+                f"not {product_id}"
+            )
         response = await self._rest.request("cancel_orders", data={"order_ids": [exchange_id]})
         parsed = CancelOrdersResponse.model_validate(response.raw)
         ok = any(r.success and r.order_id == exchange_id for r in parsed.results)
@@ -171,13 +236,9 @@ class OrdersMixin:
         """Find an order (any status) by ``client_order_id`` via the order listing, or None."""
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
-        params: dict[str, str] = {}
-        while True:
-            response = await self._rest.request("list_orders", params=dict(params))
-            parsed = ListOrdersResponse.model_validate(response.raw)
-            for order in parsed.orders:
-                if order.client_order_id == client_order_id:
-                    return to_open_order(order)
-            if not (parsed.has_next and parsed.cursor) or parsed.cursor == params.get("cursor"):
-                return None
-            params["cursor"] = parsed.cursor
+        order = await _find_raw_order(self, client_order_id)
+        if order is None:
+            return None
+        if order.status in _TERMINAL_STATUSES:
+            _exchange_ids(self).pop(client_order_id, None)
+        return to_open_order(order)

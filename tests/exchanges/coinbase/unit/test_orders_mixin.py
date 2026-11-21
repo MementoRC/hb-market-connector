@@ -21,6 +21,17 @@ class _TestableOrders(OrdersMixin):
         return self._started
 
 
+class _CapturingRest(MockRestClient):
+    def __init__(self):
+        super().__init__()
+        self.cancel_bodies = []
+
+    async def request(self, endpoint_name, params=None, data=None, headers=None):
+        if endpoint_name == "cancel_orders":
+            self.cancel_bodies.append(data)
+        return await super().request(endpoint_name, params=params, data=data, headers=headers)
+
+
 @pytest.mark.asyncio
 async def test_place_limit_order():
     rest = MockRestClient()
@@ -51,10 +62,27 @@ async def test_place_limit_order():
 
 @pytest.mark.asyncio
 async def test_cancel_order_returns_true():
-    rest = MockRestClient()
+    rest = _CapturingRest()
+    rest.register(
+        "place_order",
+        {
+            "success": True,
+            "order_id": "o1",
+            "success_response": {
+                "order_id": "o1",
+                "product_id": "BTC-USD",
+                "side": "BUY",
+                "client_order_id": "c1",
+            },
+        },
+    )
     rest.register("cancel_orders", {"results": [{"success": True, "order_id": "o1"}]})
     mixin = _TestableOrders(rest)
-    assert await mixin.cancel_order("BTC-USD", "c1") is True
+    client_id = await mixin.place_order(
+        "BTC-USD", OrderType.LIMIT, TradeType.BUY, Decimal("0.5"), Decimal("50000")
+    )
+    assert await mixin.cancel_order("BTC-USD", client_id) is True
+    assert rest.cancel_bodies == [{"order_ids": ["o1"]}]
 
 
 @pytest.mark.asyncio

@@ -4,10 +4,13 @@ Live fact (2026-11-21): a released Kraken conditional close carries ``refid`` = 
 txid and inherits the entry's ``userref``. Rule pinned: empty ``descr.close`` plus non-empty
 ``refid`` means leg 1, whether or not the entry is still listed.
 
-The fixture records the live order verbatim, including ``userref`` -19. That value was a
-probe value (it decodes to group 1, leg 2; our codec never puts an entry on leg 2), which
-is why the tests re-encode it to ``encode(1, 0)``, the entry's tag; assertions use group 1
-and leg 1.
+The fixture keeps the live order's shape and field values that matter (``refid`` present,
+``userref`` -19, empty ``descr.close``, ``descr.ordertype`` limit) but txid, refid, price and
+open time are synthetic, so no live account activity is published. Observed on the live
+close: ``cl_ord_id`` was ABSENT (no such key), so cl_ord_id inheritance is unobserved. The
+``userref`` -19 value was a probe value (it decodes to group 1, leg 2; our codec never
+puts an entry on leg 2), which is why the tests re-encode it to ``encode(1, 0)``, the
+entry's tag; assertions use group 1 and leg 1.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from market_connector.exchanges.kraken.linked_order_codec import KrakenUserrefLi
 from market_connector.transport.response import Response
 
 _PAIR = "XBTUSD"
-_TXID = "OIGBKR-UAU24-GK72BO"
+_TXID = "OAAAAA-AAAAA-AAAAAA"
 _CODEC = KrakenUserrefLinkCodec()
 _FIXTURE = (
     Path(__file__).parent.parent / "fixtures" / "rest" / "open_orders_released_close_292.json"
@@ -84,6 +87,16 @@ def _gateway(open_orders: dict[str, dict[str, Any]]) -> KrakenGateway:
 def test_fixture_userref_decodes_to_group_1_leg_2() -> None:
     assert _CODEC.decode(-19) == (1, 2)
     assert _GROUP == 1
+
+
+def test_fixture_records_released_close_fields() -> None:
+    order = _open_orders()[_TXID]
+
+    assert order["refid"]
+    assert order["userref"] == -19
+    assert order["descr"]["ordertype"] == "limit"
+    assert order["descr"]["close"] == ""
+    assert "cl_ord_id" not in order  # observed absent on the live close
 
 
 class TestLoneReleasedClose:

@@ -10,7 +10,8 @@ either carries a ``refid`` or shares its userref with an order that has ``descr.
 
 Known limit: live 2026-11-21 (#292) confirmed a released close carries ``refid`` = the
 entry's txid and inherits its userref, so refid classification holds even when the entry
-has left OpenOrders. Not verified: whether ``cl_ord_id`` is inherited likewise. Every
+has left OpenOrders. Observed: the live close had no ``cl_ord_id`` key (absent), so
+whether ``cl_ord_id`` is inherited is unverified (the entry carried none). Every
 snapshot carries ``venue_order_id`` (the txid) so callers can reconcile by txid.
 """
 

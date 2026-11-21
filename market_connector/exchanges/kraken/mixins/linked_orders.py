@@ -273,7 +273,7 @@ class LinkedOrdersMixin:
         pair = await resolve_wire_pair(self, target)
         body: dict[str, object] = {"pair": pair, **fields, **close, "userref": userref}
         txid = await _send_add_order(self, pair, body, userref)
-        record_leg_placement(self, [txid], userref, None)
+        record_leg_placement(self, [txid], userref, None, Decimal(entry.amount))
         return KrakenBracket(
             group_id=group_id,
             entry_client_id=userref,

@@ -617,7 +617,7 @@ class OrdersMixin:
         if cl_ord_id is not None:
             body["cl_ord_id"] = cl_ord_id
         txid = await _send_add_order(self, trading_pair, body, cl_ord_id)
-        record_leg_placement(self, [txid], userref, cl_ord_id)
+        record_leg_placement(self, [txid], userref, cl_ord_id, Decimal(amount))
         return txid
 
     async def cancel_order(

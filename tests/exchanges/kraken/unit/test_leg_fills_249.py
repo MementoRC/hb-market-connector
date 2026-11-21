@@ -455,3 +455,42 @@ class TestExportsAndProtocol:
 
     def test_gateway_satisfies_supports_leg_fills(self, gateway: KrakenGateway) -> None:  # noqa: F811
         assert isinstance(gateway, _proto("SupportsLegFills"))
+
+
+class TestZeroCumulativeNotEmitted:
+    async def test_zero_volume_gateway_trade_emits_nothing_then_real_fill_emits(
+        self,
+        core: Any,
+        gateway: KrakenGateway,  # noqa: F811
+    ) -> None:
+        sink = Sink()
+        gateway.subscribe_leg_fills(sink.on_fill)
+        await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
+
+        _ws(core, "T0", "0", "27000", seq=1)
+        await _settle()
+        assert sink.fills == []
+
+        _ws(core, "T1", "0.2", "27000", seq=2)
+        await _settle()
+
+        assert _shape(sink) == [("mcl-1-0", _D("0.2"), _D("27000"), "T1")]
+
+    async def test_zero_cumulative_fill_handed_to_hub_is_not_delivered(
+        self,
+        gateway: KrakenGateway,  # noqa: F811
+    ) -> None:
+        sink = Sink()
+        gateway.subscribe_leg_fills(sink.on_fill)
+        fill = _proto("LegFill")(
+            client_order_id="x",
+            cumulative_filled=_D("0"),
+            last_price=_D("1"),
+            timestamp=1.0,
+            fill_id="t0",
+        )
+
+        gateway._emit_leg_fill(fill)
+        await _settle()
+
+        assert sink.fills == []

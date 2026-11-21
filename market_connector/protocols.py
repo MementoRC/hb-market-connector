@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
     from contextlib import AbstractAsyncContextManager as AsyncContextManager
     from decimal import Decimal
 
@@ -128,6 +128,33 @@ class SupportsLegLookup(Protocol):
         self, target: str, *, group: str | None = None
     ) -> Sequence[LegSnapshot]:
         """Open legs on ``target``; with ``group``, only legs of that link group."""
+        ...
+
+
+@dataclass(frozen=True)
+class LegFill:
+    """One fill of a leg, with the leg's running total.
+
+    ``cumulative_filled`` is the leg's total base volume filled so far (strictly increasing
+    per ``client_order_id``); ``timestamp`` is unix seconds; ``fill_id`` is the venue trade
+    id when there is one.
+    """
+
+    client_order_id: str
+    cumulative_filled: Decimal
+    last_price: Decimal
+    timestamp: float
+    fill_id: str | None = None
+
+
+@runtime_checkable
+class SupportsLegFills(Protocol):
+    """Gateway that pushes per-leg cumulative fills to subscribers."""
+
+    def subscribe_leg_fills(
+        self, callback: Callable[[LegFill], Awaitable[None] | None]
+    ) -> Callable[[], None]:
+        """Register ``callback`` (sync or async); returns an idempotent unsubscribe."""
         ...
 
 

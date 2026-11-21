@@ -28,6 +28,7 @@ from market_connector.exchanges.kraken.age_penalties import (
     edit_penalty,
 )
 from market_connector.exchanges.kraken.errors import OpenOrdersLimitError, raise_on_kraken_error
+from market_connector.exchanges.kraken.mixins.leg_fills import record_leg_placement
 from market_connector.exchanges.kraken.pairs import resolve_wire_pair
 from market_connector.exchanges.kraken.schemas.rest import (
     AddOrderBatchResult,
@@ -615,7 +616,9 @@ class OrdersMixin:
             body["userref"] = userref
         if cl_ord_id is not None:
             body["cl_ord_id"] = cl_ord_id
-        return await _send_add_order(self, trading_pair, body, cl_ord_id)
+        txid = await _send_add_order(self, trading_pair, body, cl_ord_id)
+        record_leg_placement(self, [txid], userref, cl_ord_id, Decimal(amount))
+        return txid
 
     async def cancel_order(
         self: HasRest & HasReady,  # type: ignore[valid-type]

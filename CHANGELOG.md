@@ -10,6 +10,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kraken percent `TRAILING_STOP_LIMIT` via `trigger=TriggerSpec`: with a percent trail, `limit_price` is a signed fraction of the trigger level (0.02 = 2%), sent as signed percent `price2`; no longer raises `UnsupportedOrderError` (#280)
 - `trigger_level` / `limit_level` on Kraken `OrderInfo`, `OpenOrderDetail` and `LegSnapshot`: the absolute levels once a trigger has fired (`stopped`), else `None`; `limit_level` only for `*-limit` order types (#280)
 
+### Fixed
+
+- Coinbase `cancel_order` now sends the exchange order id to batch_cancel (map recorded by `place_order`, `get_order_by_client_order_id` fallback; `OrderNotFoundError` if unresolvable) (#300)
+
 ## [0.12.0] - 2026-11-21
 
 ### Added

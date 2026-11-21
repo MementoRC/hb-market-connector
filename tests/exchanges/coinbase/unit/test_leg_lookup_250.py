@@ -245,7 +245,9 @@ class TestGetLegExplicitStatuses:
         assert statuses and all(s == "OPEN" for s in statuses)
 
     async def test_filled_and_cancelled_found_when_omitted_status_returns_nothing(self) -> None:
-        gw = CoinbaseGateway(CoinbaseConfig(api_key="k", secret_key="raw_hmac_secret", sandbox=True))
+        gw = CoinbaseGateway(
+            CoinbaseConfig(api_key="k", secret_key="raw_hmac_secret", sandbox=True)
+        )
         gw._rest = _StrictStatusRest()  # type: ignore[assignment]
         gw._started = True
 

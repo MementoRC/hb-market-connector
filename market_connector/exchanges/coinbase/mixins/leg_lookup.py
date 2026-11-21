@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 _CODEC = CoinbaseClientOrderIdLinkCodec()
+_OPEN_STATUS = "OPEN"
+_NON_OPEN_STATUSES = ["FILLED", "CANCELLED", "EXPIRED", "FAILED", "QUEUED"]
 
 
 def _snapshot(order: Order) -> LegSnapshot:
@@ -47,17 +49,23 @@ def _snapshot(order: Order) -> LegSnapshot:
 
 class LegLookupMixin:
     async def _scan_orders(
-        self: Any, target: str, *, open_only: bool = False, client_order_id: str | None = None
+        self: Any,
+        target: str,
+        *,
+        order_status: str | list[str],
+        client_order_id: str | None = None,
     ) -> list[Order]:
-        """Orders of ``target`` across every cursor page (``get_open_orders`` reads one).
+        """Orders of ``target`` with ``order_status`` across every cursor page.
 
-        Readiness is re-checked before each page so a concurrent ``stop()`` aborts the scan
-        with ``GatewayNotStartedError`` instead of hitting a closed REST client. With
-        ``client_order_id`` the scan stops at the first match on ``target``.
+        ``get_open_orders`` reads one page. Readiness is re-checked before each page so a
+        concurrent ``stop()`` aborts the scan with ``GatewayNotStartedError`` instead of
+        hitting a closed REST client. With ``client_order_id`` the scan stops at the first
+        match on ``target``.
         """
-        params: dict[str, str] = {"product_id": to_exchange_pair(target)}
-        if open_only:
-            params["order_status"] = "OPEN"
+        params: dict[str, Any] = {
+            "product_id": to_exchange_pair(target),
+            "order_status": order_status,
+        }
         orders: list[Order] = []
         while True:
             if not self.ready:
@@ -86,21 +94,26 @@ class LegLookupMixin:
         """Look up one leg by ``client_order_id`` or ``link_tag`` (the same string).
 
         Known cost: Coinbase has no venue-side client-id filter, so this is a paginated
-        scan of ``target``'s order listing (no status filter: open and finished orders).
-        Only an order on ``target`` matches. Returns ``None`` when nothing matches or no
-        key is given.
+        scan of ``target``'s order listing. The venue documents no default for
+        ``order_status``, so statuses are requested explicitly: OPEN first, then the
+        non-OPEN set (OPEN is queried alone because combining it with other statuses is not
+        documented as supported). Only an order on ``target`` matches. Returns ``None``
+        when nothing matches or no key is given.
         """
         key = client_order_id or link_tag
         if key is None:
             return None
-        found = await self._scan_orders(target, client_order_id=key)
-        return _snapshot(found[0]) if found else None
+        for statuses in (_OPEN_STATUS, list(_NON_OPEN_STATUSES)):
+            found = await self._scan_orders(target, order_status=statuses, client_order_id=key)
+            if found:
+                return _snapshot(found[0])
+        return None
 
     async def list_open_legs(
         self: Any, target: str, *, group: str | None = None
     ) -> Sequence[LegSnapshot]:
         """Open link-tagged orders on ``target``; ``group`` keeps only that ``group_id``."""
-        legs = [_snapshot(o) for o in await self._scan_orders(target, open_only=True)]
+        legs = [_snapshot(o) for o in await self._scan_orders(target, order_status=_OPEN_STATUS)]
         return [
             leg
             for leg in legs

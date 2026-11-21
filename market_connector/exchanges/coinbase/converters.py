@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.coinbase.schemas.rest import (
     Account,
     Candle,
@@ -79,12 +80,23 @@ def to_open_order(order: Order) -> OpenOrder:
     else:
         ot, amount, price = OrderType.LIMIT, Decimal("0"), Decimal("0")
 
+    side = _SIDE_MAP.get(order.side.value)
+    if side is None:
+        raise UnsupportedOrderError(
+            exchange="coinbase",
+            feature="order side",
+            reason=(
+                f"order {order.order_id} (client_order_id={order.client_order_id}) has "
+                f"unrecognised side {order.side.value!r}; only BUY and SELL are supported"
+            ),
+        )
+
     return OpenOrder(
         client_order_id=order.client_order_id,
         exchange_order_id=order.order_id,
         trading_pair=from_exchange_pair(order.product_id),
         order_type=ot,
-        side=_SIDE_MAP[order.side.value],
+        side=side,
         amount=amount,
         price=price,
         filled_amount=Decimal(order.filled_size),

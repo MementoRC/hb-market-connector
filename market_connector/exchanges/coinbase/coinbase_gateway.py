@@ -10,6 +10,7 @@ from market_connector.capabilities import OrderCapabilities
 from market_connector.exchanges.coinbase.endpoints import ENDPOINT_REGISTRY
 from market_connector.exchanges.coinbase.factory import coinbase_signer_factory
 from market_connector.exchanges.coinbase.mixins.accounts import AccountsMixin
+from market_connector.exchanges.coinbase.mixins.leg_lookup import LegLookupMixin
 from market_connector.exchanges.coinbase.mixins.market_data import MarketDataMixin
 from market_connector.exchanges.coinbase.mixins.orders import OrdersMixin
 from market_connector.exchanges.coinbase.mixins.subscriptions import SubscriptionsMixin
@@ -37,7 +38,9 @@ COINBASE_ORDER_CAPABILITIES = OrderCapabilities(
 )
 
 
-class CoinbaseGateway(OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMixin):
+class CoinbaseGateway(
+    LegLookupMixin, OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMixin
+):
     """Coinbase Advanced Trade gateway — implements ExchangeGateway protocol."""
 
     @property

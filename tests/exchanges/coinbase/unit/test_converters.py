@@ -2,6 +2,9 @@
 
 from decimal import Decimal
 
+import pytest
+
+from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.coinbase.converters import (
     from_exchange_pair,
     to_balance,
@@ -78,6 +81,25 @@ def test_to_open_order_from_limit():
     assert result.price == Decimal("50000")
     assert result.filled_amount == Decimal("0.1")
     assert result.order_type == OrderType.LIMIT
+
+
+def test_to_open_order_unknown_side_raises_typed_error():
+    order = Order(
+        order_id="o9",
+        client_order_id="c9",
+        product_id="BTC-USD",
+        side="SOME_NEW_SIDE",
+        status="OPEN",
+        order_configuration=OrderConfiguration(
+            limit_limit_gtc=LimitGTCConfig(base_size="0.5", limit_price="50000"),
+        ),
+        filled_size="0",
+        average_filled_price="0",
+    )
+    with pytest.raises(UnsupportedOrderError, match="side") as exc:
+        to_open_order(order)
+    assert not isinstance(exc.value, KeyError)
+    assert "o9" in str(exc.value)
 
 
 def test_to_open_order_from_limit_maker():

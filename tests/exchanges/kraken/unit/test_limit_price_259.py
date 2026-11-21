@@ -284,3 +284,28 @@ class TestPerOrderLimitPrice:
         )
         await seen.wait(BUY_CREATED, count=2)
         assert sorted(b["price2"] for b in rest.bodies("add_order")) == ["26900", "26950"]
+
+
+class TestParentAdapterCallShape:
+    @pytest.mark.parametrize("side", ["buy", "sell"])
+    async def test_parent_adapter_call_shape_all_kwargs(
+        self, connector: Any, rest: FakeKrakenRest, seen: Recorder, side: str
+    ) -> None:
+        """Parent adapter (market_connector_exchange.py _create_order, CORE_ORDER_KWARGS) call shape; all four kwargs must be accepted and none may reach HBOrder (extra=forbid, #290)."""  # noqa: E501
+        _method(connector, side)(
+            _PAIR,
+            _AMOUNT,
+            OrderType.STOP_LOSS_LIMIT,
+            Decimal("95"),
+            limit_price=Decimal("94"),
+            price_in_percent=False,
+            position_action=PositionAction.OPEN,
+            expiration_ts=1_700_000_000.0,
+        )
+        await seen.wait(_created(side))
+        (body,) = rest.bodies("add_order")
+        assert body["ordertype"] == "stop-loss-limit"
+        assert body["type"] == side
+        assert body["price"] == "95"
+        assert body["price2"] == "94"
+        assert "%" not in body["price2"]

@@ -4,7 +4,15 @@ from enum import StrEnum
 
 
 class _StrValue(StrEnum):
-    """Base mixin: str(member) returns the value."""
+    """Base mixin: str(member) returns the value.
+
+    Values the venue adds later fall back to the member named ``UNKNOWN`` (when the enum
+    declares one) so a single new status/side/type cannot fail validation of a whole page.
+    """
+
+    @classmethod
+    def _missing_(cls, value: object) -> "_StrValue | None":
+        return cls.__members__.get("UNKNOWN")
 
 
 class CoinbaseOrderStatus(_StrValue):

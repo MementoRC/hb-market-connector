@@ -57,7 +57,14 @@ class TestLegSnapshot:
     def test_is_a_frozen_dataclass_with_contract_fields(self) -> None:
         assert dataclasses.is_dataclass(protocols.LegSnapshot)
         names = [f.name for f in dataclasses.fields(protocols.LegSnapshot)]
-        assert names == ["client_order_id", "link_tag", "state", "filled"]
+        assert names == [
+            "client_order_id",
+            "link_tag",
+            "state",
+            "filled",
+            "venue_order_id",
+            "group_id",
+        ]
         with pytest.raises(dataclasses.FrozenInstanceError):
             _snapshot().filled = Decimal(1)  # type: ignore[misc]
 

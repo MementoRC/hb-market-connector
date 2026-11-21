@@ -1,0 +1,7 @@
+[
+  [
+    {"O2HO5G-AVEKE-IKFLLI": {"avg_price": "62523.0", "cost": "6.2523", "descr": {"close": "", "leverage": "none", "order": "buy 0.00010000 XBTUSD @ trailing stop +50.0 -> limit +100.0", "ordertype": "trailing-stop-limit", "pair": "XBTUSD", "price": "62520.8", "price2": "62620.8", "type": "buy"}, "expiretm": null, "fee": "0.02376", "limitprice": "62470.8", "misc": "stopped", "oflags": "fciq", "opentm": "1760000000.000000", "refid": null, "starttm": null, "status": "closed", "stopprice": "62522.9", "userref": -17, "vol": "0.00010000", "vol_exec": "0.00010000"}}
+  ],
+  "openOrders",
+  {"sequence": 302}
+]

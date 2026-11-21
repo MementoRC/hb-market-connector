@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Kraken `TRAILING_STOP` / `TRAILING_STOP_LIMIT` reject a percent trail distance below 0.1% with `UnsupportedOrderError(feature="percent_trail_min")` before any request, via `trigger=TriggerSpec` and legacy `price_in_percent` (#299)
+
 ### Added
 
 - Kraken percent `TRAILING_STOP_LIMIT` via `trigger=TriggerSpec`: with a percent trail, `limit_price` is a signed fraction of the trigger level (0.02 = 2%), sent as signed percent `price2`; no longer raises `UnsupportedOrderError` (#280)

@@ -6,6 +6,7 @@ from collections import OrderedDict
 from decimal import ROUND_DOWN, Decimal
 from typing import TYPE_CHECKING
 
+from data_type_primitives import TriggerKind
 from data_type_primitives.common import TradeType
 from data_type_primitives.in_flight_order import TradeUpdate
 from data_type_primitives.trade_fee import TokenAmount, TradeFeeBase, TradeFeeSchema
@@ -30,7 +31,7 @@ from market_connector.hb_compat.order_events import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from data_type_primitives import TradingRules
+    from data_type_primitives import TradingRules, TriggerSpec
     from data_type_primitives.in_flight_order import InFlightOrder
 
     from market_connector.exchanges.kraken.schemas.rest import TradeInfo
@@ -73,6 +74,35 @@ def quantize_order(
         round_down(amount, rule.min_base_amount_increment),
         round_down(price, rule.min_price_increment),
     )
+
+
+def quantize_trigger(rule: TradingRules | None, trigger: TriggerSpec) -> TriggerSpec:
+    """Copy of ``trigger`` with ABSOLUTE value and absolute trail distance floored to the tick.
+
+    PERCENT kinds are relative and stay untouched; without a rule the trigger is unchanged.
+    """
+    if rule is None:
+        return trigger
+    tick = rule.min_price_increment
+    update: dict[str, object] = {}
+    if trigger.kind is TriggerKind.ABSOLUTE:
+        update["value"] = round_down(trigger.value, tick)
+    trail = trigger.trail
+    if trail is not None and trail.kind is TriggerKind.RELATIVE_OFFSET:
+        update["trail"] = trail.model_copy(update={"distance": round_down(trail.distance, tick)})
+    return trigger.model_copy(update=update) if update else trigger
+
+
+def trigger_event_price(trigger: TriggerSpec) -> Decimal:
+    """The price the legacy form reports for ``trigger``: trigger value or trailing distance.
+
+    PERCENT fractions are reported in percent points, as the legacy form carries them.
+    """
+    if trigger.trail is not None:
+        kind, amount = trigger.trail.kind, trigger.trail.distance
+    else:
+        kind, amount = trigger.kind, trigger.value
+    return amount * 100 if kind is TriggerKind.PERCENT else amount
 
 
 def build_trade_update(

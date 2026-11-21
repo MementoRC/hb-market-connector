@@ -39,7 +39,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from data_type_primitives import OrderBookEntry, OrderBookSnapshot, TradingRules
+from data_type_primitives import OrderBookEntry, OrderBookSnapshot, TradingRules, TriggerKind
 from data_type_primitives.common import OrderType, PositionAction, PriceType, TradeType
 from data_type_primitives.in_flight_order import InFlightOrder, OrderState, OrderUpdate
 
@@ -55,7 +55,9 @@ from market_connector.exchanges.kraken.hb_compat.kraken_core_support import (
     filled_event,
     quantize_amount,
     quantize_order,
+    quantize_trigger,
     round_down,
+    trigger_event_price,
     update_from_rest,
     update_from_ws,
 )
@@ -274,6 +276,7 @@ class KrakenConnectorCore:
         self._userref_to_cid: dict[int, str] = {}  # write-only; kept for diagnostics
         self._limit_prices: dict[str, tuple[Decimal | None, bool]] = {}  # cid -> (limit, pct)
         self._triggers: dict[str, TriggerSpec] = {}  # cid -> trigger (when given)
+        self._wire_prices: dict[str, Decimal | None] = {}  # cid -> AddOrder price (trigger=)
         self._submitting: set[str] = set()  # AddOrder request in flight
         self._cancel_requested: set[str] = set()  # cancel asked before the txid was known
         self._cancelling: set[str] = set()  # CancelOrder in flight
@@ -558,12 +561,22 @@ class KrakenConnectorCore:
             )
         elif order_type in _LIMIT_PRICE_TYPES and limit_price is None:
             raise ValueError(f"{order_type.name} requires limit_price")
-        amount, price = quantize_order(self.trading_rules.get(trading_pair), amount, price)
+        rule = self.trading_rules.get(trading_pair)
+        amount, price = quantize_order(rule, amount, price)
+        percent_limit = price_in_percent or (
+            trigger is not None and trigger.trail is not None
+            and trigger.trail.kind is TriggerKind.PERCENT
+        )  # fmt: skip
+        if rule is not None and limit_price is not None and not percent_limit:
+            limit_price = round_down(limit_price, rule.min_price_increment)
         client_order_id = f"hbot-{trade_type.name.lower()}-{uuid.uuid4().hex}"
         self._assign_userref(client_order_id)
         self._limit_prices[client_order_id] = (limit_price, price_in_percent)
         if trigger is not None:
+            trigger = quantize_trigger(rule, trigger)
             self._triggers[client_order_id] = trigger
+            self._wire_prices[client_order_id] = None if price.is_nan() else price
+            price = trigger_event_price(trigger)  # the event reports the trigger, as legacy does
         self._created_at[client_order_id] = self._clock()
         order = InFlightOrder(
             client_order_id=client_order_id,
@@ -605,6 +618,8 @@ class KrakenConnectorCore:
             price = None if order.order_type is OrderType.MARKET else order.price
             if price is not None and price.is_nan():
                 price = None
+            if cid in self._wire_prices:  # under trigger= the order price is display-only
+                price = self._wire_prices[cid]
             txid = await self._gateway._place_order_compat(
                 trading_pair=wire_pair,
                 order_type=order.order_type.name,  # the gateway maps order types by name
@@ -795,6 +810,7 @@ class KrakenConnectorCore:
         self._userref_to_cid.pop(self._userrefs.pop(cid, 0), None)
         self._limit_prices.pop(cid, None)
         self._triggers.pop(cid, None)
+        self._wire_prices.pop(cid, None)
         self._created_at.pop(cid, None)
         self._set_state(order, state, time.time())
         now = self._clock()

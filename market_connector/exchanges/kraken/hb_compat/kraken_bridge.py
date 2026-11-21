@@ -171,7 +171,9 @@ class KrakenConnectorBridge:
             order_type:   ``OrderType`` enum, conditional type, or string.
             side:         ``TradeType`` enum or string (``"buy"`` / ``"sell"``).
             amount:       Order volume as a ``Decimal``.
-            price:        Limit price, or the trigger for conditional orders.
+            price:        Limit price. With `trigger`, `price` is the limit price only for
+                          `*_LIMIT` types and must be omitted otherwise; without `trigger`
+                          (deprecated), it carries the trigger for conditional types.
             limit_price:  Limit price (Kraken ``price2``) for ``*_LIMIT`` types.
             price_in_percent: Send the trigger as a percentage offset.
             userref:      Optional int32 tag for finding the order after a lost response.

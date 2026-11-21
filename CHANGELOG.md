@@ -14,6 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - `KrakenConnectorCore.buy/sell` and `KrakenConnectorBridge.place_order` now emit the gateway's `DeprecationWarning` (removal in #241) for a triggered order type placed without `trigger=`; this reverses the #240 hb_compat silence. Request bodies and events are unchanged (#288)
+- `KrakenConnectorCore` floors absolute trigger values, absolute trail distances and `limit_price` (legacy and `trigger=` forms) to the pair's price tick; under `trigger=` the created event reports the quantized trigger, matching the legacy form; `trigger` added to `ConnectorCoreProtocol.buy/sell` (#288 / PR #294 review)
 - `KrakenConnectorCore.trading_rules` now holds dtp `TradingRules` and `get_order_book` returns dtp `OrderBookSnapshot` (#265)
 
 - **BREAKING:** `HBOrder.stop_price` is removed (deprecated since 0.9.0); use `trigger=TriggerSpec(kind=TriggerKind.ABSOLUTE, value=...)`. `HBOrder` now rejects unknown fields (`extra="forbid"`) (#241).

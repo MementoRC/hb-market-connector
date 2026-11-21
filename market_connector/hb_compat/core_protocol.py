@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from decimal import Decimal
     from types import TracebackType
 
-    from data_type_primitives import OrderBookSnapshot, TradingRules
+    from data_type_primitives import OrderBookSnapshot, TradingRules, TriggerSpec
     from data_type_primitives.common import OrderType, PositionAction, PriceType
     from data_type_primitives.in_flight_order import InFlightOrder
 
@@ -70,6 +70,7 @@ class ConnectorCoreProtocol(Protocol):
         price_in_percent: bool = ...,
         position_action: PositionAction | None = ...,
         expiration_ts: float | None = ...,
+        trigger: TriggerSpec | None = None,
     ) -> str: ...
 
     def sell(
@@ -83,6 +84,7 @@ class ConnectorCoreProtocol(Protocol):
         price_in_percent: bool = ...,
         position_action: PositionAction | None = ...,
         expiration_ts: float | None = ...,
+        trigger: TriggerSpec | None = None,
     ) -> str: ...
 
     def cancel(self, trading_pair: str, client_order_id: str) -> str: ...

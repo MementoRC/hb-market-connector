@@ -20,10 +20,14 @@ Contract (agreed with strategy-framework; this package must not import it, ADR 0
 
 Kraken semantics pinned here:
 
-* The leg's ``client_order_id`` is the EXACT string the placing call returned, never
-  ``str(userref)``: for core-placed orders the ``hbot-<side>-<uuid>`` id ``buy``/``sell``
-  returned; for ``KrakenGateway.place_order`` orders the value ``place_order`` returned
-  (today the first txid, NOT the ``cl_ord_id``; the tests assert against the return value).
+* The leg's ``client_order_id`` has two forms:
+
+  - core-placed (``KrakenConnectorCore.buy``/``sell``): the EXACT ``hbot-<side>-<uuid>``
+    string the call returned, never ``str(userref)``;
+  - gateway-placed (``KrakenGateway.place_order``): the leg's link tag, the same rule as
+    #250/#289 ``get_leg`` (``mixins/leg_lookup.py``): the ``cl_ord_id`` when present, else
+    ``str(userref)`` for a negative link userref. It is NOT the txid ``place_order``
+    returns, and equals ``LegSnapshot.client_order_id`` from ``get_leg``.
 * Each trade booked for such an order (WS ``ownTrades`` via ``core.on_own_trades`` or REST
   QueryOrders+QueryTrades via ``core._poll_once``) emits exactly one LegFill:
   ``cumulative_filled`` is the running total base volume (strictly increasing),
@@ -274,25 +278,31 @@ class TestNoDuplicateEmission:
 
 
 class TestGatewayPlaced:
-    async def test_two_partial_fills_use_exact_place_order_return_as_cid(
+    async def test_two_partial_fills_keyed_by_cl_ord_id_link_tag(
         self,
         core: Any,
         gateway: KrakenGateway,  # noqa: F811
+        rest: FakeKrakenRest,  # noqa: F811
     ) -> None:
         sink = Sink()
         gateway.subscribe_leg_fills(sink.on_fill)
-        cid = await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
+        txid = await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
 
         _ws(core, "T1", "0.2", "27000", seq=1)
         await _settle()
         _ws(core, "T2", "0.3", "27010", seq=2)
         await _settle()
 
+        assert txid != "mcl-1-0"  # the link tag, not the txid place_order returned
         assert _shape(sink) == [
-            (cid, _D("0.2"), _D("27000"), "T1"),
-            (cid, _D("0.5"), _D("27010"), "T2"),
+            ("mcl-1-0", _D("0.2"), _D("27000"), "T1"),
+            ("mcl-1-0", _D("0.5"), _D("27010"), "T2"),
         ]
-        assert not cid.startswith("hbot-")
+
+        rest.open_orders[txid] = {**base._order_info(status="open"), "cl_ord_id": "mcl-1-0"}
+        leg = await gateway.get_leg(base._PAIR, client_order_id="mcl-1-0")
+        assert leg is not None
+        assert {f.client_order_id for f in sink.fills} == {leg.client_order_id}
 
     async def test_same_trade_delivered_twice_emits_once(
         self,
@@ -301,16 +311,16 @@ class TestGatewayPlaced:
     ) -> None:
         sink = Sink()
         gateway.subscribe_leg_fills(sink.on_fill)
-        cid = await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
+        await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
 
         _ws(core, "T1", "0.2", "27000", seq=1)
         await _settle()
         _ws(core, "T1", "0.2", "27000", seq=2)
         await _settle()
 
-        assert _shape(sink) == [(cid, _D("0.2"), _D("27000"), "T1")]
+        assert _shape(sink) == [("mcl-1-0", _D("0.2"), _D("27000"), "T1")]
 
-    async def test_negative_link_userref_without_cl_ord_id_uses_exact_return(
+    async def test_negative_link_userref_without_cl_ord_id_keyed_by_str_userref(
         self,
         core: Any,
         gateway: KrakenGateway,  # noqa: F811
@@ -318,14 +328,14 @@ class TestGatewayPlaced:
     ) -> None:
         sink = Sink()
         gateway.subscribe_leg_fills(sink.on_fill)
-        cid = await _gateway_placed(gateway, userref=-5)
+        txid = await _gateway_placed(gateway, userref=-5)
 
         assert rest.bodies("add_order")[0]["userref"] == -5
         _ws(core, "T1", "0.2", "27000")
         await _settle()
 
-        assert _shape(sink) == [(cid, _D("0.2"), _D("27000"), "T1")]
-        assert cid != "-5"
+        assert txid != "-5"
+        assert _shape(sink) == [("-5", _D("0.2"), _D("27000"), "T1")]
 
 
 class TestGatewayLegIsNotBuffered:
@@ -337,7 +347,7 @@ class TestGatewayLegIsNotBuffered:
         """A gateway-placed txid is claimed by the leg-fill hub: the core must not buffer it."""
         sink = Sink()
         gateway.subscribe_leg_fills(sink.on_fill)
-        cid = await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
+        await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
 
         for n in range(1, 201):
             _ws(core, f"T{n}", "0.001", "27000", seq=n)
@@ -346,7 +356,7 @@ class TestGatewayLegIsNotBuffered:
         buffered = [key for key in core._pending_trades._items if key[0] == _TXID]
         assert buffered == []
         assert len(sink.fills) == 200
-        assert {f.client_order_id for f in sink.fills} == {cid}
+        assert {f.client_order_id for f in sink.fills} == {"mcl-1-0"}
         cumulative = [f.cumulative_filled for f in sink.fills]
         assert all(a < b for a, b in zip(cumulative, cumulative[1:], strict=False))
         assert cumulative[-1] == _D("0.2")

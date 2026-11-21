@@ -24,7 +24,23 @@ if TYPE_CHECKING:
 
 _CODEC = CoinbaseClientOrderIdLinkCodec()
 _OPEN_STATUS = "OPEN"
-_NON_OPEN_STATUSES = ["FILLED", "CANCELLED", "EXPIRED", "FAILED", "QUEUED"]
+
+# Active statuses must each be requested ALONE. Live-confirmed 2026-11-21 against
+# GET /api/v3/brokerage/orders/historical/batch: combining any of them with another status
+# (e.g. OPEN+FILLED) returns HTTP 400 INVALID_ARGUMENT "Cannot pass multiple statuses when
+# requesting active orders (OPEN, PENDING, QUEUED, EDIT_QUEUED, or CANCEL_QUEUED)".
+_ACTIVE_STATUSES = frozenset({"OPEN", "PENDING", "QUEUED", "EDIT_QUEUED", "CANCEL_QUEUED"})
+# Terminal statuses may be combined with each other (FILLED+CANCELLED live-confirmed 200).
+_TERMINAL_STATUSES = ["FILLED", "CANCELLED", "EXPIRED", "FAILED"]
+# get_leg query order; each entry is one request (scanned over all pages), first match wins.
+_GET_LEG_QUERIES: tuple[str | list[str], ...] = (
+    _OPEN_STATUS,
+    _TERMINAL_STATUSES,
+    "PENDING",
+    "QUEUED",
+    "CANCEL_QUEUED",
+    "EDIT_QUEUED",
+)
 
 
 def _snapshot(order: Order) -> LegSnapshot:
@@ -95,16 +111,21 @@ class LegLookupMixin:
 
         Known cost: Coinbase has no venue-side client-id filter, so this is a paginated
         scan of ``target``'s order listing. The venue documents no default for
-        ``order_status``, so statuses are requested explicitly: OPEN first, then the
-        non-OPEN set (OPEN is queried alone because combining it with other statuses is not
-        documented as supported). Only an order on ``target`` matches. Returns ``None``
-        when nothing matches or no key is given.
+        ``order_status``, so statuses are requested explicitly, stopping at the first match:
+        OPEN alone, then the terminal set (FILLED, CANCELLED, EXPIRED, FAILED), then PENDING,
+        QUEUED, CANCEL_QUEUED and EDIT_QUEUED each alone (the venue rejects an active status
+        combined with any other with HTTP 400, see ``_ACTIVE_STATUSES``). Only an order on
+        ``target`` matches. Returns ``None`` when nothing matches or no key is given.
         """
         key = client_order_id or link_tag
         if key is None:
             return None
-        for statuses in (_OPEN_STATUS, list(_NON_OPEN_STATUSES)):
-            found = await self._scan_orders(target, order_status=statuses, client_order_id=key)
+        for statuses in _GET_LEG_QUERIES:
+            found = await self._scan_orders(
+                target,
+                order_status=list(statuses) if isinstance(statuses, list) else statuses,
+                client_order_id=key,
+            )
             if found:
                 return _snapshot(found[0])
         return None

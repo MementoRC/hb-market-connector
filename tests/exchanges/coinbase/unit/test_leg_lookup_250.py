@@ -260,7 +260,8 @@ class _StrictStatusRest(_FakeRest):
 class TestGetLegExplicitStatuses:
     """The venue documents no default for ``order_status``: ``get_leg`` must ask explicitly.
 
-    OPEN is queried alone (not known to combine with other statuses), then the non-OPEN set.
+    Active statuses (OPEN, PENDING, QUEUED, EDIT_QUEUED, CANCEL_QUEUED) are each queried alone
+    (the live venue returns 400 otherwise); the terminal statuses go in one combined query.
     """
 
     async def test_sends_open_then_terminal_status_queries(self, gateway: CoinbaseGateway) -> None:

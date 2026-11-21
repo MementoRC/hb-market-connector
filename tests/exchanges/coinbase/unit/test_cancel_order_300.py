@@ -3,6 +3,9 @@
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
+from market_connector.exceptions import OrderNotFoundError
 from market_connector.exchanges.coinbase.mixins.orders import OrdersMixin
 from market_connector.primitives import OrderType, TradeType
 from market_connector.testing.mock_transport import MockRestClient
@@ -115,13 +118,14 @@ async def test_cancel_on_fresh_gateway_resolves_across_two_pages():
     assert rest.cancel_bodies() == [{"order_ids": ["X"]}]
 
 
-async def test_cancel_unresolvable_client_id_returns_false_and_sends_no_cancel():
+async def test_cancel_unresolvable_client_id_raises_order_not_found_and_sends_no_cancel():
     rest = _RecordingRest()
     rest.register("list_orders", {"orders": [_order("Y", "other")]})
     rest.register("cancel_orders", _cancel_result("Y"))
     gateway = _Gateway(rest)
 
-    assert await gateway.cancel_order("BTC-USD", "C") is False
+    with pytest.raises(OrderNotFoundError):
+        await gateway.cancel_order("BTC-USD", "C")
     assert rest.cancel_bodies() == []
 
 

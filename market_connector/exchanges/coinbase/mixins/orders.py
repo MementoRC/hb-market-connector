@@ -11,6 +11,7 @@ import httpx
 from market_connector.exceptions import (
     ExchangeUnavailableError,
     GatewayNotStartedError,
+    OrderNotFoundError,
     OrderOutcomeUnknownError,
     OrderRejectedError,
     UnsupportedOrderError,
@@ -79,6 +80,14 @@ def _coerce_supported_order_type(value: object) -> OrderType:
         raise
 
 
+def _exchange_ids(gateway: object) -> dict[str, str]:
+    """Per-gateway client_order_id -> exchange order id map (created lazily).
+
+    Filled by ``place_order``; entries are dropped on successful cancel.
+    """
+    return gateway.__dict__.setdefault("_exchange_order_ids", {})  # type: ignore[no-any-return]
+
+
 class OrdersMixin:
     async def place_order(
         self: HasRest & HasReady,  # type: ignore[valid-type]
@@ -109,6 +118,8 @@ class OrdersMixin:
         parsed = CreateOrderResponse.model_validate(response.raw)
         if not parsed.success:
             raise OrderRejectedError(parsed.failure_reason or "order rejected")
+        if parsed.order_id:
+            _exchange_ids(self)[client_id] = parsed.order_id
         return client_id
 
     async def cancel_order(
@@ -116,15 +127,28 @@ class OrdersMixin:
         trading_pair: str,
         client_order_id: str,
     ) -> bool:
+        """Cancel by client order id; Coinbase batch_cancel needs the exchange order id.
+
+        The exchange id comes from the map filled by ``place_order`` (entry dropped on
+        successful cancel), else from ``get_order_by_client_order_id``. Raises
+        ``OrderNotFoundError`` (sending nothing) when it cannot be resolved. Returns True
+        only if the exchange reports success for that id.
+        """
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
-        # NOTE: Coinbase /orders/batch_cancel expects exchange order IDs, not client_order_ids.
-        # This implementation accepts client_order_id directly for the simple case where the
-        # caller tracks the mapping. A follow-up should add a client→exchange ID map
-        # populated by place_order and consumed here.
-        response = await self._rest.request("cancel_orders", data={"order_ids": [client_order_id]})
+        ids = _exchange_ids(self)
+        exchange_id = ids.get(client_order_id)
+        if exchange_id is None:
+            found = await self.get_order_by_client_order_id(client_order_id)
+            exchange_id = found.exchange_order_id if found is not None else None
+            if exchange_id is None:
+                raise OrderNotFoundError(f"no Coinbase order for client_order_id {client_order_id}")
+        response = await self._rest.request("cancel_orders", data={"order_ids": [exchange_id]})
         parsed = CancelOrdersResponse.model_validate(response.raw)
-        return all(r.success for r in parsed.results)
+        ok = any(r.success and r.order_id == exchange_id for r in parsed.results)
+        if ok:
+            ids.pop(client_order_id, None)
+        return ok
 
     async def get_open_orders(
         self: HasRest & HasReady,  # type: ignore[valid-type]

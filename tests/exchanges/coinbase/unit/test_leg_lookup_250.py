@@ -88,11 +88,13 @@ class _FakeRest:
         self.calls.append((endpoint_name, params))
         if endpoint_name != "list_orders":
             raise AssertionError(f"unexpected endpoint {endpoint_name}")
+        wanted = params.get("order_status")
+        statuses = [wanted] if isinstance(wanted, str) else wanted
         rows = [
             o
             for o in _ORDERS
             if params.get("product_id") in (None, o["product_id"])
-            and params.get("order_status") in (None, o["status"])
+            and (statuses is None or o["status"] in statuses)
         ]
         start = int(params.get("cursor", "0"))
         end = start + _PAGE
@@ -203,6 +205,64 @@ class TestGetLegFinishedOrders:
         assert snap is not None
         assert snap.state is OrderState.CANCELED
         assert snap.filled == _D("0.1")
+
+
+class _StrictStatusRest(_FakeRest):
+    """Like venues where an omitted ``order_status`` is NOT 'all statuses': no filter -> nothing."""
+
+    async def request(self, endpoint_name: str, **kwargs: Any) -> Response:
+        if not (kwargs.get("params") or {}).get("order_status"):
+            return Response(
+                raw={"orders": [], "has_next": False, "cursor": ""},
+                status_code=200,
+                headers=httpx.Headers(),
+                _endpoint=endpoint_name,
+            )
+        return await super().request(endpoint_name, **kwargs)
+
+
+class TestGetLegExplicitStatuses:
+    """The venue documents no default for ``order_status``: ``get_leg`` must ask explicitly.
+
+    OPEN is queried alone (not known to combine with other statuses), then the non-OPEN set.
+    """
+
+    async def test_sends_open_then_terminal_status_queries(self, gateway: CoinbaseGateway) -> None:
+        assert await gateway.get_leg(_PAIR, client_order_id="nope") is None
+
+        statuses = [c[1]["order_status"] for c in gateway._rest.calls]  # type: ignore[attr-defined]
+        assert "OPEN" in statuses
+        terminal = [s for s in statuses if s != "OPEN"]
+        assert terminal and all(s == terminal[0] for s in terminal)
+        assert terminal[0] == ["FILLED", "CANCELLED", "EXPIRED", "FAILED", "QUEUED"]
+        assert statuses.index("OPEN") < statuses.index(terminal[0])
+        assert all(c[1]["product_id"] == _PAIR for c in gateway._rest.calls)  # type: ignore[attr-defined]
+
+    async def test_open_leg_found_without_terminal_query(self, gateway: CoinbaseGateway) -> None:
+        assert await gateway.get_leg(_PAIR, client_order_id=_E5) is not None
+
+        statuses = [c[1]["order_status"] for c in gateway._rest.calls]  # type: ignore[attr-defined]
+        assert statuses and all(s == "OPEN" for s in statuses)
+
+    async def test_filled_and_cancelled_found_when_omitted_status_returns_nothing(self) -> None:
+        gw = CoinbaseGateway(CoinbaseConfig(api_key="k", secret_key="raw_hmac_secret", sandbox=True))
+        gw._rest = _StrictStatusRest()  # type: ignore[assignment]
+        gw._started = True
+
+        filled = await gw.get_leg(_PAIR, client_order_id=_DONE)
+        cancelled = await gw.get_leg(_PAIR, client_order_id=_CXL)
+
+        assert filled is not None
+        assert filled.state is OrderState.FILLED
+        assert cancelled is not None
+        assert cancelled.state is OrderState.CANCELED
+        assert cancelled.filled == _D("0.1")
+
+    async def test_list_open_legs_still_sends_open_only(self, gateway: CoinbaseGateway) -> None:
+        await gateway.list_open_legs(_PAIR)
+
+        statuses = {c[1]["order_status"] for c in gateway._rest.calls}  # type: ignore[attr-defined]
+        assert statuses == {"OPEN"}
 
 
 class TestGetLegArguments:

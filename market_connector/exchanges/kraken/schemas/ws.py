@@ -29,9 +29,14 @@ data paths while keeping type annotations for IDE support.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from market_connector.exchanges.kraken.schemas.rest import effective_levels
+
+if TYPE_CHECKING:
+    from decimal import Decimal
 
 
 class _Base(BaseModel):
@@ -273,6 +278,24 @@ class OpenOrderDetail(BaseModel):
     cost: str = "0"
     fee: str = "0"
     avg_price: str = "0"
+    misc: str = ""
+    descr: Any = None
+
+    def _levels(self) -> tuple[Decimal | None, Decimal | None]:
+        descr = self.descr if isinstance(self.descr, dict) else {}
+        return effective_levels(
+            self.misc, descr.get("ordertype"), descr.get("price"), descr.get("price2")
+        )
+
+    @property
+    def trigger_level(self) -> Decimal | None:
+        """Absolute trigger level once the trigger fired (``stopped``), else ``None``."""
+        return self._levels()[0]
+
+    @property
+    def limit_level(self) -> Decimal | None:
+        """Absolute limit level once the trigger fired (``stopped``), else ``None``."""
+        return self._levels()[1]
 
 
 class OpenOrdersEvent(BaseModel):

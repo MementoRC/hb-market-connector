@@ -1,0 +1,52 @@
+{
+  "txid": "O2HO5G-AVEKE-IKFLLI",
+  "pre_trigger": {
+    "userref": -17,
+    "status": "open",
+    "opentm": 1760000000.0,
+    "misc": "",
+    "oflags": "fciq",
+    "descr": {
+      "pair": "XBTUSD",
+      "type": "buy",
+      "ordertype": "trailing-stop-limit",
+      "price": "+50.0",
+      "price2": "+100.0",
+      "leverage": "none",
+      "order": "buy 0.00010000 XBTUSD @ trailing stop +50.0 -> limit +100.0",
+      "close": ""
+    },
+    "vol": "0.00010000",
+    "vol_exec": "0.00000000",
+    "cost": "0.00000",
+    "fee": "0.00000",
+    "price": "0.00000",
+    "stopprice": "62522.2",
+    "limitprice": "62472.2"
+  },
+  "post_trigger": {
+    "userref": -17,
+    "status": "closed",
+    "opentm": 1760000000.0,
+    "closetm": 1760000100.0,
+    "misc": "stopped",
+    "oflags": "fciq",
+    "descr": {
+      "pair": "XBTUSD",
+      "type": "buy",
+      "ordertype": "trailing-stop-limit",
+      "price": "62520.8",
+      "price2": "62620.8",
+      "leverage": "none",
+      "order": "buy 0.00010000 XBTUSD @ trailing stop +50.0 -> limit +100.0",
+      "close": ""
+    },
+    "vol": "0.00010000",
+    "vol_exec": "0.00010000",
+    "cost": "6.2523",
+    "fee": "0.02376",
+    "price": "62523.0",
+    "stopprice": "62522.9",
+    "limitprice": "62470.8"
+  }
+}

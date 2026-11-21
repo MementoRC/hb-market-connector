@@ -16,6 +16,7 @@ Pydantic v2 conventions used throughout:
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -225,6 +226,31 @@ class OrderDescription(_Base):
     close: str | None = None  # conditional-close text on a bracket entry
 
 
+def _finite_decimal(value: Any) -> Decimal | None:
+    try:
+        parsed = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def effective_levels(
+    misc: Any, ordertype: Any, price: Any, price2: Any
+) -> tuple[Decimal | None, Decimal | None]:
+    """Absolute ``(trigger_level, limit_level)`` of an order whose trigger has fired.
+
+    Only when ``stopped`` is one of the comma-separated ``misc`` flags are ``descr.price`` /
+    ``descr.price2`` absolute levels (before that they are relative offsets). The two levels
+    are parsed independently (unparseable gives ``None`` for that level only), and
+    ``limit_level`` is set only for order types with a limit leg (``ordertype`` ending in
+    ``-limit``).
+    """
+    if not isinstance(misc, str) or "stopped" not in misc.split(","):
+        return None, None
+    has_limit_leg = isinstance(ordertype, str) and ordertype.endswith("-limit")
+    return _finite_decimal(price), _finite_decimal(price2) if has_limit_leg else None
+
+
 class OrderInfo(_Base):
     refid: str | None = None
     userref: int | None = None
@@ -241,6 +267,20 @@ class OrderInfo(_Base):
     price: str = "0"
     misc: str = ""
     trades: list[str] = Field(default_factory=list)
+
+    def _levels(self) -> tuple[Decimal | None, Decimal | None]:
+        d = self.descr
+        return effective_levels(self.misc, d.ordertype, d.price, d.price2)
+
+    @property
+    def trigger_level(self) -> Decimal | None:
+        """Absolute trigger level once the trigger fired (``stopped``), else ``None``."""
+        return self._levels()[0]
+
+    @property
+    def limit_level(self) -> Decimal | None:
+        """Absolute limit level once fired (``stopped``), only for ``*-limit`` order types."""
+        return self._levels()[1]
 
 
 # OpenOrders / QueryOrders result: {order_id: OrderInfo}

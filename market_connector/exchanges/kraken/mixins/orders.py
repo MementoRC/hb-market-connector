@@ -74,7 +74,8 @@ _ORDER_TYPE_MAP: dict[str, str] = {
     "TRAILING_STOP_LIMIT": "trailing-stop-limit",
 }
 
-# Trailing types: ``price`` is the trail distance, ``price2`` (limit) a signed offset.
+# Trailing types: ``price`` is the trail distance, ``price2`` (limit) a signed offset
+# relative to the trigger level at the moment it fires.
 _TRAILING_KEYS = frozenset({"TRAILING_STOP", "TRAILING_STOP_LIMIT"})
 # Conditional types whose ``price`` is the trigger.
 _CONDITIONAL_KEYS = frozenset(_ORDER_TYPE_MAP) - {"MARKET", "LIMIT", "LIMIT_MAKER"} - _TRAILING_KEYS
@@ -194,8 +195,9 @@ def _trailing_from_trigger(
 ) -> tuple[Decimal, Decimal | None, bool]:
     """Trailing distance from ``trigger.trail``; ``trigger.value`` is ignored.
 
-    A percent TRAILING_STOP_LIMIT is rejected here (offset semantics pending, #230); the
-    legacy ``price_in_percent`` path still accepts it.
+    For a percent trail, ``limit_price`` of TRAILING_STOP_LIMIT is a signed fraction of the
+    trigger level (0.02 = 2%), converted like the distance. Kraken applies the offset to the
+    trigger level at the moment it fires (live #230).
     """
     trail = trigger.trail
     if trail is None:
@@ -206,15 +208,10 @@ def _trailing_from_trigger(
             "trigger.trail and a limit offset belongs in limit_price"
         )
     percent = trail.kind is TriggerKind.PERCENT
-    if percent and key == "TRAILING_STOP_LIMIT":
-        raise UnsupportedOrderError(
-            exchange="kraken",
-            order_type=key,
-            feature="percent_trailing_limit",
-            reason="percent trailing-stop-limit offset semantics are pending (#230)",
-        )
-    distance = _percent_points(trail.distance) if percent else trail.distance
-    return distance, limit_price, percent
+    if not percent:
+        return trail.distance, limit_price, False
+    offset = None if limit_price is None else _percent_points(limit_price)
+    return _percent_points(trail.distance), offset, True
 
 
 def _resolve_trigger(
@@ -529,7 +526,9 @@ class OrdersMixin:
             price: Limit price for LIMIT; the trigger (Kraken ``price``) for
                 conditional types.
             limit_price: Kraken ``price2``; required for ``*_LIMIT`` types only. For
-                TRAILING_STOP_LIMIT it is a signed offset from the trigger.
+                TRAILING_STOP_LIMIT it is a signed offset from the trigger level at the
+                moment it fires; with a percent ``trigger.trail`` it is a signed fraction
+                (0.02 = 2%).
             price_in_percent: Send the trigger as ``#<price>%`` (conditional), or the
                 trail distance/offset as ``+<d>%`` (trailing).
             userref: Optional int32 client tag (Kraken ``userref``); lets the order be

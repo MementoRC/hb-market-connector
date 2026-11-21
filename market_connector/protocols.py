@@ -102,6 +102,8 @@ class LegSnapshot:
 
     ``venue_order_id`` is the exchange's own order id (lets callers reconcile by it);
     ``group_id`` is the link group the leg belongs to, when it can be decoded.
+    ``trigger_level`` / ``limit_level`` are the absolute levels a trailing trigger resolved to
+    when it fired (``None`` before that, or when the venue does not report them).
     """
 
     client_order_id: str
@@ -110,6 +112,8 @@ class LegSnapshot:
     filled: Decimal
     venue_order_id: str | None = None
     group_id: str | None = None
+    trigger_level: Decimal | None = None
+    limit_level: Decimal | None = None
 
 
 @runtime_checkable

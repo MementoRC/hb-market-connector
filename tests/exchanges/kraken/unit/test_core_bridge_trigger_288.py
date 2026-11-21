@@ -26,7 +26,6 @@ import pytest
 from data_type_primitives import TrailSpec, TriggerKind, TriggerSpec
 from data_type_primitives.common import OrderType
 
-from market_connector.exceptions import UnsupportedOrderError
 from market_connector.exchanges.kraken.hb_compat.kraken_bridge import KrakenConnectorBridge
 from tests.exchanges.kraken.unit.test_kraken_connector_core_211 import (  # noqa: F401
     _AMOUNT,
@@ -206,16 +205,20 @@ class TestLegacyStillWorksAndWarns:
 
 
 class TestValidationParity:
-    async def test_percent_trailing_stop_limit_rejected(
-        self, entry: _Entry, rest: FakeKrakenRest
+    @pytest.mark.parametrize(("limit_fraction", "price2"), [("-0.005", "-0.5%"), ("0.01", "+1%")])
+    async def test_percent_trailing_stop_limit_accepted(
+        self, entry: _Entry, rest: FakeKrakenRest, limit_fraction: str, price2: str
     ) -> None:
+        """#280: percent trail + signed-fraction ``limit_price`` is sent as ``+N%`` / ``±M%``."""
         trigger = _trail(TriggerKind.PERCENT, "0.02")
-        with pytest.raises(UnsupportedOrderError):
-            await entry.place(
-                OrderType.TRAILING_STOP_LIMIT, limit_price=_D("-0.5"), trigger=trigger
-            )
-        await asyncio.sleep(0.05)
-        assert rest.bodies("add_order") == []
+        await entry.place(
+            OrderType.TRAILING_STOP_LIMIT, limit_price=_D(limit_fraction), trigger=trigger
+        )
+        (body,) = rest.bodies("add_order")
+        assert body["ordertype"] == "trailing-stop-limit"
+        assert body["price"] == "+2%"
+        assert body["price2"] == price2
+        assert "oflags" not in body
 
     async def test_trigger_on_limit_order_rejected(
         self, entry: _Entry, rest: FakeKrakenRest

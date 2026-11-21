@@ -8,9 +8,10 @@ A bracket's released conditional close shares the entry's userref on the wire. I
 classified as leg 1 (effective tag ``encode(group, 1)``) when it has no ``descr.close`` and
 either carries a ``refid`` or shares its userref with an order that has ``descr.close``.
 
-Limitation: a lone released close with an empty ``refid`` (its entry not in the fetched set)
-is indistinguishable from leg 0. Every snapshot carries ``venue_order_id`` (the txid) so
-callers can reconcile by txid.
+Known limit: live 2026-11-21 (#292) confirmed a released close carries ``refid`` = the
+entry's txid and inherits its userref, so refid classification holds even when the entry
+has left OpenOrders. Not verified: whether ``cl_ord_id`` is inherited likewise. Every
+snapshot carries ``venue_order_id`` (the txid) so callers can reconcile by txid.
 """
 
 from __future__ import annotations

@@ -810,8 +810,9 @@ class OrdersMixin:
     ) -> dict[str, OrderInfo]:
         """Return closed orders keyed by txid, optionally filtered by ``userref`` or ``cl_ord_id``.
 
-        Unwraps ``result.closed`` of ``/0/private/ClosedOrders``. Only the first page
-        is returned.
+        Unwraps ``result.closed`` of ``/0/private/ClosedOrders``. A ``userref`` or
+        ``cl_ord_id`` filter is applied by Kraken itself, so the result is restricted by
+        the filter, not by page (``ofs`` is deprecated and not used).
 
         Raises:
             GatewayNotStartedError: If the gateway is not ready.

@@ -36,9 +36,11 @@ from market_connector.protocols import (
     ExchangeGateway,
     ExecutionGateway,
     HasCapabilities,
+    LegSnapshot,
     MarketDataGateway,
     OcoHandle,
     SupportsBracket,
+    SupportsLegLookup,
     SupportsOco,
 )
 
@@ -51,6 +53,8 @@ __all__ = [
     "MarketDataGateway",
     "SupportsBracket",
     "SupportsOco",
+    "SupportsLegLookup",
+    "LegSnapshot",
     "BracketHandle",
     "OcoHandle",
     # Capabilities

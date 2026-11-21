@@ -222,6 +222,7 @@ class OrderDescription(_Base):
     price2: str = "0"
     leverage: str = "none"
     order: str = ""
+    close: str | None = None  # conditional-close text on a bracket entry
 
 
 class OrderInfo(_Base):

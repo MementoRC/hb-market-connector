@@ -6,14 +6,15 @@ never on a concrete connector class.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
     from contextlib import AbstractAsyncContextManager as AsyncContextManager
     from decimal import Decimal
 
-    from data_type_primitives import LinkedCancelOutcome, LinkedOrderSpec
+    from data_type_primitives import LinkedCancelOutcome, LinkedOrderSpec, OrderState
 
     from market_connector.capabilities import OrderCapabilities
     from market_connector.contracts.instrument import InstrumentRef
@@ -93,6 +94,41 @@ class SupportsBracket(Protocol):
     ) -> BracketHandle: ...
 
     async def cancel_linked(self, handle: BracketHandle) -> LinkedCancelOutcome: ...
+
+
+@dataclass(frozen=True)
+class LegSnapshot:
+    """Point-in-time state of one leg of a linked order, found by id or link tag.
+
+    ``venue_order_id`` is the exchange's own order id (lets callers reconcile by it);
+    ``group_id`` is the link group the leg belongs to, when it can be decoded.
+    """
+
+    client_order_id: str
+    link_tag: str | None
+    state: OrderState
+    filled: Decimal
+    venue_order_id: str | None = None
+    group_id: str | None = None
+
+
+@runtime_checkable
+class SupportsLegLookup(Protocol):
+    """Gateway that finds legs of linked orders by client id or link tag."""
+
+    async def get_leg(
+        self,
+        target: str,
+        *,
+        client_order_id: str | None = None,
+        link_tag: str | None = None,
+    ) -> LegSnapshot | None: ...
+
+    async def list_open_legs(
+        self, target: str, *, group: str | None = None
+    ) -> Sequence[LegSnapshot]:
+        """Open legs on ``target``; with ``group``, only legs of that link group."""
+        ...
 
 
 @runtime_checkable

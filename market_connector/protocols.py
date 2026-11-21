@@ -98,12 +98,18 @@ class SupportsBracket(Protocol):
 
 @dataclass(frozen=True)
 class LegSnapshot:
-    """Point-in-time state of one leg of a linked order, found by id or link tag."""
+    """Point-in-time state of one leg of a linked order, found by id or link tag.
+
+    ``venue_order_id`` is the exchange's own order id (lets callers reconcile by it);
+    ``group_id`` is the link group the leg belongs to, when it can be decoded.
+    """
 
     client_order_id: str
     link_tag: str | None
     state: OrderState
     filled: Decimal
+    venue_order_id: str | None = None
+    group_id: str | None = None
 
 
 @runtime_checkable
@@ -118,7 +124,11 @@ class SupportsLegLookup(Protocol):
         link_tag: str | None = None,
     ) -> LegSnapshot | None: ...
 
-    async def list_open_legs(self, target: str) -> Sequence[LegSnapshot]: ...
+    async def list_open_legs(
+        self, target: str, *, group: str | None = None
+    ) -> Sequence[LegSnapshot]:
+        """Open legs on ``target``; with ``group``, only legs of that link group."""
+        ...
 
 
 @runtime_checkable

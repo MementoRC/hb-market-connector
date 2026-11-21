@@ -69,6 +69,19 @@ def build_pair_tables(
     return rules, wire_pairs
 
 
+def pair_names(owner: HasRest, wire_pair: str) -> frozenset[str]:
+    """Names a Kraken order's ``descr.pair`` may use for *wire_pair* (altname + internal key).
+
+    The internal key (``XXBTZUSD``) is known only once ``AssetPairs`` was loaded by
+    ``resolve_wire_pair``; no request is made here.
+    """
+    internal: dict[str, str] = getattr(owner, "_wire_pair_internal", None) or {}
+    names = {wire_pair.replace("/", "")}
+    if wire_pair in internal:
+        names.add(internal[wire_pair].replace("/", ""))
+    return frozenset(names)
+
+
 async def resolve_wire_pair(owner: HasRest, pair: str) -> str:
     """Kraken wire pair for *pair*.
 
@@ -92,7 +105,11 @@ async def resolve_wire_pair(owner: HasRest, pair: str) -> str:
                 response = await owner._rest.request("asset_pairs")
                 envelope = KrakenResponse[dict[str, AssetPairInfo]].model_validate(response.raw)
                 raise_on_kraken_error(envelope.error)
-                table = build_pair_tables(envelope.result or {})[1]
+                pairs = envelope.result or {}
+                table = build_pair_tables(pairs)[1]
+                owner._wire_pair_internal = {  # type: ignore[attr-defined]
+                    info.altname: key for key, info in pairs.items() if info.altname
+                }
                 owner._wire_pair_map = table  # type: ignore[attr-defined]
     try:
         return table[pair]

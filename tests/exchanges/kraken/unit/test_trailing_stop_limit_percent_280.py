@@ -145,6 +145,8 @@ class TestPercentTrailingStopLimitPayload:
         assert "oflags" not in body
         assert "e" not in body["price"].lower()
         assert "e" not in body["price2"].lower()
+        assert body["price"] == "+0.00002%"
+        assert body["price2"] == "-0.00005%"
 
     async def test_absolute_trail_path_unchanged(
         self, gateway: KrakenGateway, rest: _RecordingRest
@@ -313,3 +315,73 @@ class TestLegSnapshotLevels:
         )
         assert snap.trigger_level == _D("62520.8")
         assert snap.limit_level == _D("62620.8")
+
+
+# ---------------------------------------------------------------------------
+# C. limit_level only for order types that have a limit leg
+# ---------------------------------------------------------------------------
+
+_NO_LIMIT_CASES = [
+    pytest.param("trailing-stop", "62520.8", "0.00000", id="trailing-stop-zero5"),
+    pytest.param("stop-loss", "60000.0", "0", id="stop-loss-zero"),
+    pytest.param("take-profit", "70000.0", "0", id="take-profit-zero"),
+    pytest.param("stop-loss", "60000.0", None, id="stop-loss-absent-price2"),
+]
+
+
+def _stopped_order(ordertype: str, price: str, price2: str | None) -> dict[str, Any]:
+    descr: dict[str, Any] = {**_POST["descr"], "ordertype": ordertype, "price": price}
+    if price2 is None:
+        descr.pop("price2")
+    else:
+        descr["price2"] = price2
+    return {**_POST, "descr": descr, "misc": "stopped"}
+
+
+def _ws_frame(order: dict[str, Any]) -> list[Any]:
+    return [[{_TXID: order}], "openOrders", {"sequence": 1}]
+
+
+class TestLimitLevelOnlyForLimitTypes:
+    @pytest.mark.parametrize(("ordertype", "price", "price2"), _NO_LIMIT_CASES)
+    def test_rest_limit_level_none_without_limit_leg(
+        self, ordertype: str, price: str, price2: str | None
+    ) -> None:
+        info = OrderInfo.model_validate(_stopped_order(ordertype, price, price2))
+        assert info.trigger_level == _D(price)
+        assert info.limit_level is None
+
+    @pytest.mark.parametrize(("ordertype", "price", "price2"), _NO_LIMIT_CASES)
+    def test_ws_limit_level_none_without_limit_leg(
+        self, ordertype: str, price: str, price2: str | None
+    ) -> None:
+        raw = _ws_frame(_stopped_order(ordertype, price, price2))
+        order = OpenOrdersEvent.from_raw_frame(raw).orders[_TXID]
+        assert order.trigger_level == _D(price)
+        assert order.limit_level is None
+
+    @pytest.mark.parametrize(("ordertype", "price", "price2"), _NO_LIMIT_CASES)
+    async def test_leg_limit_level_none_without_limit_leg(
+        self, ordertype: str, price: str, price2: str | None
+    ) -> None:
+        order = _stopped_order(ordertype, price, price2)
+        snap = await _gateway_serving(order).get_leg(_PAIR, link_tag=str(_USERREF))
+        assert snap is not None
+        assert snap.trigger_level == _D(price)
+        assert snap.limit_level is None
+
+    def test_rest_stop_loss_limit_keeps_limit_level(self) -> None:
+        info = OrderInfo.model_validate(_stopped_order("stop-loss-limit", "60000.0", "59900.0"))
+        assert info.trigger_level == _D("60000.0")
+        assert info.limit_level == _D("59900.0")
+
+    def test_ws_stop_loss_limit_keeps_limit_level(self) -> None:
+        raw = _ws_frame(_stopped_order("stop-loss-limit", "60000.0", "59900.0"))
+        order = OpenOrdersEvent.from_raw_frame(raw).orders[_TXID]
+        assert order.limit_level == _D("59900.0")
+
+    async def test_leg_stop_loss_limit_keeps_limit_level(self) -> None:
+        order = _stopped_order("stop-loss-limit", "60000.0", "59900.0")
+        snap = await _gateway_serving(order).get_leg(_PAIR, link_tag=str(_USERREF))
+        assert snap is not None
+        assert snap.limit_level == _D("59900.0")

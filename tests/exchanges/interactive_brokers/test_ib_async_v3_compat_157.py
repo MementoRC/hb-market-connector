@@ -287,7 +287,7 @@ def _abs(value: Decimal) -> TriggerSpec:
     return TriggerSpec(kind=TriggerKind.ABSOLUTE, value=value)
 
 
-def test_stop_order_carries_exact_decimal_quantity_and_stop_price() -> None:
+def test_stop_order_carries_exact_decimal_quantity_and_stop_trigger() -> None:
     order = _hb_to_ib_order(_hb(OrderType.STOP_LOSS, trigger=_abs(_STOP)))
 
     assert _exact(order.totalQuantity) == _QTY

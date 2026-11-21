@@ -41,7 +41,8 @@ class _Rest:
         self.on_request = on_request
 
     async def request(self, endpoint_name: str, **kwargs: Any) -> Response:
-        body = self.pages[self.n]
+        # get_leg issues a second (non-OPEN) query when the first finds nothing: serve it empty.
+        body = self.pages[self.n] if self.n < len(self.pages) else {"orders": []}
         self.n += 1
         if self.on_request is not None:
             self.on_request()

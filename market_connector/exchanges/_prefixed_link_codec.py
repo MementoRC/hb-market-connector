@@ -27,11 +27,6 @@ class PrefixedLinkIdCodec:
     LEG_INDEX_MAX = 15
     GROUP_ID_MAX: int | None = None
 
-    @property
-    def max_group_id(self) -> int | None:
-        """Largest encodable group id (``GROUP_ID_MAX``); ``None`` when unbounded."""
-        return self.GROUP_ID_MAX
-
     def encode(self, group_id: int, leg_index: int) -> str:
         for name, value in (("group_id", group_id), ("leg_index", leg_index)):
             if isinstance(value, bool) or not isinstance(value, int):

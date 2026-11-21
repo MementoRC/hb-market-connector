@@ -37,7 +37,12 @@ __all__ = ["KrakenClOrdIdLinkCodec", "KrakenUserrefLinkCodec"]
 class KrakenClOrdIdLinkCodec(PrefixedLinkIdCodec):
     """Encode/decode (group_id, leg_index) as a Kraken ``cl_ord_id`` (<= 18 chars)."""
 
-    GROUP_ID_MAX = 99_999_999_999
+    GROUP_ID_MAX: int = 99_999_999_999
+
+    @property
+    def max_group_id(self) -> int:
+        """Largest encodable group id (``GROUP_ID_MAX``)."""
+        return self.GROUP_ID_MAX
 
 
 class KrakenUserrefLinkCodec:

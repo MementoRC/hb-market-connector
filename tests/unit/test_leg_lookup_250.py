@@ -64,6 +64,8 @@ class TestLegSnapshot:
             "filled",
             "venue_order_id",
             "group_id",
+            "trigger_level",
+            "limit_level",
         ]
         with pytest.raises(dataclasses.FrozenInstanceError):
             _snapshot().filled = Decimal(1)  # type: ignore[misc]

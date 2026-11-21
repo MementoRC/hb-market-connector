@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Kraken percent `TRAILING_STOP_LIMIT` via `trigger=TriggerSpec`: with a percent trail, `limit_price` is a signed fraction of the trigger level (0.02 = 2%), sent as signed percent `price2`; no longer raises `UnsupportedOrderError` (#280)
+- `trigger_level` / `limit_level` on Kraken `OrderInfo`, `OpenOrderDetail` and `LegSnapshot`: the absolute levels once a trigger has fired (`stopped`), else `None` (#280)
+
 ## [0.12.0] - 2026-11-21
 
 ### Added

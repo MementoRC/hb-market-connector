@@ -16,6 +16,7 @@ Pydantic v2 conventions used throughout:
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -225,6 +226,24 @@ class OrderDescription(_Base):
     close: str | None = None  # conditional-close text on a bracket entry
 
 
+def effective_levels(misc: Any, price: Any, price2: Any) -> tuple[Decimal | None, Decimal | None]:
+    """Absolute ``(trigger_level, limit_level)`` of an order whose trigger has fired.
+
+    Only when ``stopped`` is one of the comma-separated ``misc`` flags are ``descr.price`` /
+    ``descr.price2`` absolute levels (before that they are relative offsets). Unparseable
+    values give ``(None, None)``.
+    """
+    if not isinstance(misc, str) or "stopped" not in misc.split(","):
+        return None, None
+    try:
+        trigger, limit = Decimal(str(price)), Decimal(str(price2))
+    except InvalidOperation:
+        return None, None
+    if not (trigger.is_finite() and limit.is_finite()):
+        return None, None
+    return trigger, limit
+
+
 class OrderInfo(_Base):
     refid: str | None = None
     userref: int | None = None
@@ -241,6 +260,16 @@ class OrderInfo(_Base):
     price: str = "0"
     misc: str = ""
     trades: list[str] = Field(default_factory=list)
+
+    @property
+    def trigger_level(self) -> Decimal | None:
+        """Absolute trigger level once the trigger fired (``stopped``), else ``None``."""
+        return effective_levels(self.misc, self.descr.price, self.descr.price2)[0]
+
+    @property
+    def limit_level(self) -> Decimal | None:
+        """Absolute limit level once the trigger fired (``stopped``), else ``None``."""
+        return effective_levels(self.misc, self.descr.price, self.descr.price2)[1]
 
 
 # OpenOrders / QueryOrders result: {order_id: OrderInfo}

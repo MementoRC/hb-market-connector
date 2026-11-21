@@ -100,6 +100,8 @@ def _snapshot(txid: str, info: OrderInfo, tag: str, *, open_order: bool) -> LegS
         filled=filled,
         venue_order_id=txid,
         group_id=_group_of(info, tag),
+        trigger_level=info.trigger_level,
+        limit_level=info.limit_level,
     )
 
 

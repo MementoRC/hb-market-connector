@@ -9,9 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `LegSnapshot` and `SupportsLegLookup` (`get_leg`, `list_open_legs`) protocols, implemented by `KrakenGateway` via `LegLookupMixin` (#250)
 - hb_compat exchange registry (`list_exchanges` / `get_exchange`), `ExchangeDescriptor` with Kraken descriptor, `ConnectorCoreHandle` lifecycle and `ConnectorCoreProtocol`; Kraken core exposes dtp `TradingRules` / `OrderBookSnapshot` and price/size quanta (#265)
+- `KrakenConnectorCore.buy/sell` and `KrakenConnectorBridge.place_order` accept `trigger: TriggerSpec | None`, forwarded to the gateway with the same validation and argument convention as `KrakenGateway.place_order`; invalid arguments raise synchronously before anything is tracked or sent (#288)
 
 ### Changed
 
+- `KrakenConnectorCore.buy/sell` and `KrakenConnectorBridge.place_order` now emit the gateway's `DeprecationWarning` (removal in #241) for a triggered order type placed without `trigger=`; this reverses the #240 hb_compat silence. Request bodies and events are unchanged (#288)
 - `KrakenConnectorCore.trading_rules` now holds dtp `TradingRules` and `get_order_book` returns dtp `OrderBookSnapshot` (#265)
 
 - **BREAKING:** `HBOrder.stop_price` is removed (deprecated since 0.9.0); use `trigger=TriggerSpec(kind=TriggerKind.ABSOLUTE, value=...)`. `HBOrder` now rejects unknown fields (`extra="forbid"`) (#241).

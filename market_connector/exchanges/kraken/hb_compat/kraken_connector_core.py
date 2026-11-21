@@ -59,6 +59,10 @@ from market_connector.exchanges.kraken.hb_compat.kraken_core_support import (
     update_from_rest,
     update_from_ws,
 )
+from market_connector.exchanges.kraken.mixins.orders import (
+    validate_order_args,
+    warn_legacy_trigger,
+)
 from market_connector.exchanges.kraken.schemas.enums import KrakenOrderState
 from market_connector.exchanges.kraken.specs import KRAKEN_SYMBOL_MAPPER
 from market_connector.hb_compat.logging import get_logger
@@ -71,6 +75,7 @@ from market_connector.hb_compat.order_events import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable, Mapping
 
+    from data_type_primitives import TriggerSpec
     from data_type_primitives.in_flight_order import TradeUpdate
     from event_bus import EventKey
 
@@ -268,6 +273,7 @@ class KrakenConnectorCore:
         self._userrefs: dict[str, int] = {}  # cid -> userref
         self._userref_to_cid: dict[int, str] = {}  # write-only; kept for diagnostics
         self._limit_prices: dict[str, tuple[Decimal | None, bool]] = {}  # cid -> (limit, pct)
+        self._triggers: dict[str, TriggerSpec] = {}  # cid -> trigger (when given)
         self._submitting: set[str] = set()  # AddOrder request in flight
         self._cancel_requested: set[str] = set()  # cancel asked before the txid was known
         self._cancelling: set[str] = set()  # CancelOrder in flight
@@ -451,6 +457,7 @@ class KrakenConnectorCore:
         price_in_percent: bool = False,
         position_action: PositionAction | None = None,
         expiration_ts: float | None = None,
+        trigger: TriggerSpec | None = None,
     ) -> str:
         """Track a BUY order and send it in the background; returns the client order id.
 
@@ -458,10 +465,16 @@ class KrakenConnectorCore:
         ``ValueError``). ``position_action`` (a ``PositionAction`` or None, else
         ``TypeError``) and ``expiration_ts`` are accepted for ``ExchangePyBase`` parity
         and not forwarded; any other keyword raises ``TypeError``.
+
+        ``trigger`` follows ``KrakenGateway.place_order``: for ``*_LIMIT`` types ``price``
+        is the limit price and ``limit_price`` must be omitted (except the signed offset
+        of TRAILING_STOP_LIMIT); trailing types take the distance from ``trigger.trail``.
+        Invalid arguments raise synchronously, before anything is tracked or sent. A
+        triggered type without ``trigger`` emits the gateway's ``DeprecationWarning`` (#241).
         """
         return self._create(
             TradeType.BUY, trading_pair, amount, order_type, price,
-            limit_price, price_in_percent, position_action,
+            limit_price, price_in_percent, position_action, trigger,
         )  # fmt: skip
 
     def sell(
@@ -475,11 +488,12 @@ class KrakenConnectorCore:
         price_in_percent: bool = False,
         position_action: PositionAction | None = None,
         expiration_ts: float | None = None,
+        trigger: TriggerSpec | None = None,
     ) -> str:
         """Track a SELL order and send it in the background; returns the client order id."""
         return self._create(
             TradeType.SELL, trading_pair, amount, order_type, price,
-            limit_price, price_in_percent, position_action,
+            limit_price, price_in_percent, position_action, trigger,
         )  # fmt: skip
 
     def cancel(self, trading_pair: str, client_order_id: str) -> str:
@@ -526,16 +540,30 @@ class KrakenConnectorCore:
         limit_price: Decimal | None,
         price_in_percent: bool,
         position_action: PositionAction | None,
+        trigger: TriggerSpec | None,
     ) -> str:
         loop = asyncio.get_running_loop()
         if position_action is not None and not isinstance(position_action, PositionAction):
             raise TypeError(f"position_action must be a PositionAction, got {position_action!r}")
-        if order_type in _LIMIT_PRICE_TYPES and limit_price is None:
+        warn_legacy_trigger(order_type, trigger, stacklevel=3)  # caller of buy / sell
+        if trigger is not None:
+            validate_order_args(
+                order_type,
+                trade_type.name.lower(),
+                amount,
+                None if price.is_nan() else price,
+                limit_price,
+                price_in_percent,
+                trigger,
+            )
+        elif order_type in _LIMIT_PRICE_TYPES and limit_price is None:
             raise ValueError(f"{order_type.name} requires limit_price")
         amount, price = quantize_order(self.trading_rules.get(trading_pair), amount, price)
         client_order_id = f"hbot-{trade_type.name.lower()}-{uuid.uuid4().hex}"
         self._assign_userref(client_order_id)
         self._limit_prices[client_order_id] = (limit_price, price_in_percent)
+        if trigger is not None:
+            self._triggers[client_order_id] = trigger
         self._created_at[client_order_id] = self._clock()
         order = InFlightOrder(
             client_order_id=client_order_id,
@@ -586,6 +614,7 @@ class KrakenConnectorCore:
                 userref=self._userrefs.get(cid),
                 limit_price=limit_price,
                 price_in_percent=price_in_percent,
+                trigger=self._triggers.get(cid),
             )
         except asyncio.CancelledError:
             logger.warning(
@@ -765,6 +794,7 @@ class KrakenConnectorCore:
         self._held.pop(cid, None)
         self._userref_to_cid.pop(self._userrefs.pop(cid, 0), None)
         self._limit_prices.pop(cid, None)
+        self._triggers.pop(cid, None)
         self._created_at.pop(cid, None)
         self._set_state(order, state, time.time())
         now = self._clock()

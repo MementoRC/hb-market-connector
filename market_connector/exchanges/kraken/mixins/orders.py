@@ -296,6 +296,36 @@ def _order_fields(
     return fields
 
 
+def validate_order_args(
+    order_type: object,
+    side: object,
+    amount: Decimal,
+    price: Decimal | None,
+    limit_price: Decimal | None,
+    price_in_percent: bool,
+    trigger: TriggerSpec | None,
+) -> None:
+    """Raise exactly what ``place_order`` would for these arguments, sending nothing."""
+    _order_fields(order_type, side, amount, price, limit_price, price_in_percent, trigger)
+
+
+def warn_legacy_trigger(
+    order_type: object, trigger: TriggerSpec | None, *, stacklevel: int
+) -> None:
+    """Warn (``DeprecationWarning``, removal in #241) for a triggered type without ``trigger``.
+
+    ``stacklevel`` counts from the caller of this function, as for ``warnings.warn``.
+    """
+    if trigger is None and is_triggered_order_type(order_type):
+        warnings.warn(
+            "Placing a triggered Kraken order through the overloaded price / limit_price / "
+            "price_in_percent arguments is deprecated; pass trigger=TriggerSpec(...) "
+            "instead. The legacy arguments will be removed in #241.",
+            DeprecationWarning,
+            stacklevel=stacklevel + 1,
+        )
+
+
 def _to_kraken_side(side: object) -> str:
     """Translate a TradeType enum or string to a Kraken side string.
 
@@ -535,14 +565,7 @@ class OrdersMixin:
                 ``price`` / ``limit_price`` / ``price_in_percent`` trigger arguments);
                 removal in #241. The request body is unchanged.
         """
-        if trigger is None and is_triggered_order_type(order_type):
-            warnings.warn(
-                "Placing a triggered Kraken order through the overloaded price / limit_price / "
-                "price_in_percent arguments is deprecated; pass trigger=TriggerSpec(...) "
-                "instead. The legacy arguments will be removed in #241.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+        warn_legacy_trigger(order_type, trigger, stacklevel=2)
         return await self._place_order_compat(  # type: ignore[no-any-return]
             trading_pair,
             order_type,

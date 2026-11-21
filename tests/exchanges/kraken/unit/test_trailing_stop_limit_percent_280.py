@@ -139,13 +139,13 @@ class TestPercentTrailingStopLimitPayload:
             _D("0.5"),
             None,
             limit_price=_D("-0.0000005"),
-            trigger=_trail(TriggerKind.PERCENT, "0.0000002"),
+            trigger=_trail(TriggerKind.PERCENT, "1E-3"),
         )
         (body,) = rest.bodies
         assert "oflags" not in body
         assert "e" not in body["price"].lower()
         assert "e" not in body["price2"].lower()
-        assert body["price"] == "+0.00002%"
+        assert body["price"] == "+0.1%"
         assert body["price2"] == "-0.00005%"
 
     async def test_absolute_trail_path_unchanged(

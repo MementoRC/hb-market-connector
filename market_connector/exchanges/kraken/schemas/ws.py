@@ -283,7 +283,9 @@ class OpenOrderDetail(BaseModel):
 
     def _levels(self) -> tuple[Decimal | None, Decimal | None]:
         descr = self.descr if isinstance(self.descr, dict) else {}
-        return effective_levels(self.misc, descr.get("price"), descr.get("price2"))
+        return effective_levels(
+            self.misc, descr.get("ordertype"), descr.get("price"), descr.get("price2")
+        )
 
     @property
     def trigger_level(self) -> Decimal | None:

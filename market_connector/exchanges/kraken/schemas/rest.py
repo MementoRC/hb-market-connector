@@ -226,22 +226,29 @@ class OrderDescription(_Base):
     close: str | None = None  # conditional-close text on a bracket entry
 
 
-def effective_levels(misc: Any, price: Any, price2: Any) -> tuple[Decimal | None, Decimal | None]:
+def _finite_decimal(value: Any) -> Decimal | None:
+    try:
+        parsed = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def effective_levels(
+    misc: Any, ordertype: Any, price: Any, price2: Any
+) -> tuple[Decimal | None, Decimal | None]:
     """Absolute ``(trigger_level, limit_level)`` of an order whose trigger has fired.
 
     Only when ``stopped`` is one of the comma-separated ``misc`` flags are ``descr.price`` /
-    ``descr.price2`` absolute levels (before that they are relative offsets). Unparseable
-    values give ``(None, None)``.
+    ``descr.price2`` absolute levels (before that they are relative offsets). The two levels
+    are parsed independently (unparseable gives ``None`` for that level only), and
+    ``limit_level`` is set only for order types with a limit leg (``ordertype`` ending in
+    ``-limit``).
     """
     if not isinstance(misc, str) or "stopped" not in misc.split(","):
         return None, None
-    try:
-        trigger, limit = Decimal(str(price)), Decimal(str(price2))
-    except InvalidOperation:
-        return None, None
-    if not (trigger.is_finite() and limit.is_finite()):
-        return None, None
-    return trigger, limit
+    has_limit_leg = isinstance(ordertype, str) and ordertype.endswith("-limit")
+    return _finite_decimal(price), _finite_decimal(price2) if has_limit_leg else None
 
 
 class OrderInfo(_Base):
@@ -261,15 +268,19 @@ class OrderInfo(_Base):
     misc: str = ""
     trades: list[str] = Field(default_factory=list)
 
+    def _levels(self) -> tuple[Decimal | None, Decimal | None]:
+        d = self.descr
+        return effective_levels(self.misc, d.ordertype, d.price, d.price2)
+
     @property
     def trigger_level(self) -> Decimal | None:
         """Absolute trigger level once the trigger fired (``stopped``), else ``None``."""
-        return effective_levels(self.misc, self.descr.price, self.descr.price2)[0]
+        return self._levels()[0]
 
     @property
     def limit_level(self) -> Decimal | None:
-        """Absolute limit level once the trigger fired (``stopped``), else ``None``."""
-        return effective_levels(self.misc, self.descr.price, self.descr.price2)[1]
+        """Absolute limit level once fired (``stopped``), only for ``*-limit`` order types."""
+        return self._levels()[1]
 
 
 # OpenOrders / QueryOrders result: {order_id: OrderInfo}

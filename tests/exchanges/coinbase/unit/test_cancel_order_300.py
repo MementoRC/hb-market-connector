@@ -1,12 +1,14 @@
 """Acceptance tests for #300: Coinbase cancel_order must send the exchange order id."""
 
+import asyncio
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
-from market_connector.exceptions import OrderNotFoundError
-from market_connector.exchanges.coinbase.mixins.orders import OrdersMixin
+from market_connector.exceptions import OrderNotFoundError, OrderRejectedError
+from market_connector.exchanges.coinbase.mixins import orders as orders_module
+from market_connector.exchanges.coinbase.mixins.orders import OrdersMixin, _placing
 from market_connector.primitives import OrderType, TradeType
 from market_connector.testing.mock_transport import MockRestClient
 
@@ -177,8 +179,6 @@ async def test_place_uses_success_response_order_id_when_top_level_absent():
 
 
 async def test_cancel_waits_for_in_flight_placement():
-    import asyncio
-
     rest = _RecordingRest()
     gate = asyncio.Event()
     original = rest.request
@@ -214,6 +214,155 @@ async def test_cancel_waits_for_in_flight_placement():
 
     assert await cancel is True
     assert rest.cancel_bodies() == [{"order_ids": ["X"]}]
+
+
+class _GatedGateway:
+    """Gateway whose place_order POSTs block on per-call gates; behaviour set per call."""
+
+    def __init__(self) -> None:
+        self.rest = _RecordingRest()
+        self.gateway = _Gateway(self.rest)
+        self.gates: list[asyncio.Event] = []
+        self.failures: list[BaseException | None] = []
+        original = self.rest.request
+
+        async def request(endpoint_name, params=None, data=None, headers=None):
+            if endpoint_name == "place_order":
+                idx = len([1 for n, _, _ in self.rest.calls if n == "place_order"])
+                self.rest.calls.append((endpoint_name, params, data))
+                await self.gates[idx].wait()
+                failure = self.failures[idx]
+                if failure is not None:
+                    raise failure
+                return await MockRestClient.request(
+                    self.rest, endpoint_name, params=params, data=data, headers=headers
+                )
+            return await original(endpoint_name, params=params, data=data, headers=headers)
+
+        self.rest.request = request  # type: ignore[method-assign]
+        self.rest.register("list_orders", {"orders": []})
+        self.rest.register("cancel_orders", _cancel_result("X"))
+
+    def start_place(self, failure: BaseException | None = None) -> asyncio.Task[str]:
+        self.gates.append(asyncio.Event())
+        self.failures.append(failure)
+        return asyncio.create_task(
+            self.gateway.place_order(
+                "BTC-USD",
+                OrderType.LIMIT,
+                TradeType.BUY,
+                Decimal("0.5"),
+                Decimal("50000"),
+                client_order_id="C",
+            )
+        )
+
+
+async def _settle() -> None:
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+async def test_cancel_released_when_placement_rejected():
+    h = _GatedGateway()
+    h.rest.register("place_order", {"success": False, "failure_reason": "INSUFFICIENT_FUND"})
+    place = h.start_place()
+    await _settle()
+    cancel = asyncio.create_task(h.gateway.cancel_order("BTC-USD", "C"))
+    await _settle()
+    assert not cancel.done()
+    h.gates[0].set()
+    with pytest.raises(OrderRejectedError):
+        await place
+    with pytest.raises(OrderNotFoundError):
+        await asyncio.wait_for(cancel, timeout=2)
+    assert h.rest.cancel_bodies() == []
+
+
+async def test_cancel_released_when_placement_raises():
+    h = _GatedGateway()
+    place = h.start_place(failure=RuntimeError("boom"))
+    await _settle()
+    cancel = asyncio.create_task(h.gateway.cancel_order("BTC-USD", "C"))
+    await _settle()
+    assert not cancel.done()
+    h.gates[0].set()
+    with pytest.raises(RuntimeError):
+        await place
+    with pytest.raises(OrderNotFoundError):
+        await asyncio.wait_for(cancel, timeout=2)
+    assert h.rest.cancel_bodies() == []
+
+
+async def test_cancel_released_when_placement_task_cancelled():
+    h = _GatedGateway()
+    place = h.start_place()
+    await _settle()
+    cancel = asyncio.create_task(h.gateway.cancel_order("BTC-USD", "C"))
+    await _settle()
+    assert not cancel.done()
+    place.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await place
+    with pytest.raises(OrderNotFoundError):
+        await asyncio.wait_for(cancel, timeout=2)
+    assert h.rest.cancel_bodies() == []
+    assert "C" not in _placing(h.gateway)
+
+
+async def test_same_client_id_concurrent_placements_do_not_orphan_event():
+    h = _GatedGateway()
+    h.rest.register("place_order", {"success": True, "order_id": "X", "success_response": None})
+    first = h.start_place()
+    await _settle()
+    second = h.start_place()
+    await _settle()
+    second_event = _placing(h.gateway)["C"]
+
+    h.gates[0].set()
+    await first
+    # First finisher must not pop or leave the second call's event unreachable.
+    assert _placing(h.gateway).get("C") is second_event
+    assert not second_event.is_set()
+
+    cancel = asyncio.create_task(h.gateway.cancel_order("BTC-USD", "C"))
+    await _settle()
+    assert not cancel.done()
+    h.gates[1].set()
+    await second
+    assert await asyncio.wait_for(cancel, timeout=2) is True
+    assert h.rest.cancel_bodies() == [{"order_ids": ["X"]}]
+    assert "C" not in _placing(h.gateway)
+
+
+async def test_cancel_wait_timeout_falls_through_to_normal_resolution(monkeypatch):
+    monkeypatch.setattr(orders_module, "_PLACEMENT_WAIT_TIMEOUT_S", 0.05)
+    h = _GatedGateway()
+    h.rest.register("list_orders", {"orders": [_order("X", "C")]})
+    place = h.start_place()
+    await _settle()
+
+    # Placement never resolves: cancel must not hang, and falls back to the lookup.
+    assert await asyncio.wait_for(h.gateway.cancel_order("BTC-USD", "C"), timeout=2) is True
+    assert h.rest.cancel_bodies() == [{"order_ids": ["X"]}]
+
+    place.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await place
+
+
+async def test_cancel_wait_timeout_unresolvable_raises_order_not_found(monkeypatch):
+    monkeypatch.setattr(orders_module, "_PLACEMENT_WAIT_TIMEOUT_S", 0.05)
+    h = _GatedGateway()
+    place = h.start_place()
+    await _settle()
+
+    with pytest.raises(OrderNotFoundError):
+        await asyncio.wait_for(h.gateway.cancel_order("BTC-USD", "C"), timeout=2)
+
+    place.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await place
 
 
 async def test_cancel_resolves_stop_limit_order_without_conversion():

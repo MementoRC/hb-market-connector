@@ -9,7 +9,7 @@ import time
 import uuid
 import warnings
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 from data_type_primitives import TriggerKind, TriggerReference
@@ -77,6 +77,9 @@ _ORDER_TYPE_MAP: dict[str, str] = {
 # Trailing types: ``price`` is the trail distance, ``price2`` (limit) a signed offset
 # relative to the trigger level at the moment it fires.
 _TRAILING_KEYS = frozenset({"TRAILING_STOP", "TRAILING_STOP_LIMIT"})
+# Minimum percent trail distance in percent points (0.1%); live probe 2026-11-21 (#299):
+# Kraken rejects less with EGeneral:Invalid arguments:price. price2 has no minimum.
+_KRAKEN_MIN_PERCENT_TRAIL = Decimal("0.1")
 # Conditional types whose ``price`` is the trigger.
 _CONDITIONAL_KEYS = frozenset(_ORDER_TYPE_MAP) - {"MARKET", "LIMIT", "LIMIT_MAKER"} - _TRAILING_KEYS
 # Conditional types that also carry a limit price (sent as ``price2``).
@@ -135,19 +138,50 @@ def _to_kraken_ordertype(order_type: object) -> str:
     raise ValueError(f"Unsupported order type: {order_type!r}.")
 
 
+def _reject_small_percent_trail(key: str, points: Decimal) -> NoReturn:
+    """Raise the ``percent_trail_min`` error for a percent trail of ``points`` percent points."""
+    raise UnsupportedOrderError(
+        exchange="kraken",
+        order_type=key,
+        feature="percent_trail_min",
+        reason=f"minimum percent trail is {_KRAKEN_MIN_PERCENT_TRAIL}%, got {points:f}%",
+    )
+
+
+def check_legacy_percent_trail(
+    order_type: object, price: Decimal | None, price_in_percent: bool
+) -> None:
+    """Synchronously reject a legacy percent trail below the minimum (#299).
+
+    For callers that defer ``place_order`` to a background task (``KrakenConnectorCore``) and
+    must raise before tracking the order. Checks the unquantized ``price`` (percent points);
+    other order types, absolute trails, and unset or NaN prices are left to ``place_order``.
+    """
+    key = _order_type_key(order_type)
+    if key not in _TRAILING_KEYS or not price_in_percent or price is None or price.is_nan():
+        return
+    if 0 < price < _KRAKEN_MIN_PERCENT_TRAIL:
+        _reject_small_percent_trail(key, price)
+
+
 def _trailing_fields(
     key: str,
     price: Decimal | None,
     limit_price: Decimal | None,
     price_in_percent: bool,
 ) -> dict[str, object]:
-    """Validate trailing arguments and return the relative ``price``/``price2`` fields."""
+    """Validate trailing arguments and return the relative ``price``/``price2`` fields.
+
+    Raises UnsupportedOrderError (``percent_trail_min``) for a percent trail below 0.1% (#299).
+    """
     if price is None or price <= 0:
         raise ValueError(f"price (trail distance) must be > 0 for {key} orders")
     if key == "TRAILING_STOP" and limit_price is not None:
         raise ValueError("limit_price is not valid for TRAILING_STOP orders")
     if key == "TRAILING_STOP_LIMIT" and limit_price is None:
         raise ValueError("limit_price (offset from trigger) is required for TRAILING_STOP_LIMIT")
+    if price_in_percent and price < _KRAKEN_MIN_PERCENT_TRAIL:
+        _reject_small_percent_trail(key, price)
     suffix = "%" if price_in_percent else ""
     fields: dict[str, object] = {"price": f"+{price:f}{suffix}"}
     if limit_price is not None:
@@ -197,7 +231,8 @@ def _trailing_from_trigger(
 
     For a percent trail, ``limit_price`` of TRAILING_STOP_LIMIT is a signed fraction of the
     trigger level (0.02 = 2%), converted like the distance. Kraken applies the offset to the
-    trigger level at the moment it fires (live #230).
+    trigger level at the moment it fires (live #230). A percent distance below 0.1% is
+    rejected downstream by ``_trailing_fields`` (#299).
     """
     trail = trigger.trail
     if trail is None:
@@ -210,6 +245,10 @@ def _trailing_from_trigger(
     percent = trail.kind is TriggerKind.PERCENT
     if not percent:
         return trail.distance, limit_price, False
+    # Compare the exact fraction: _percent_points rounds to context precision and could lift a
+    # value just below the minimum onto it.
+    if trail.distance < _KRAKEN_MIN_PERCENT_TRAIL / 100:
+        _reject_small_percent_trail(key, trail.distance * 100)
     offset = None if limit_price is None else _percent_points(limit_price)
     return _percent_points(trail.distance), offset, True
 
@@ -555,6 +594,12 @@ class OrdersMixin:
             ValueError: For an unknown dashed pair, unsupported order types,
                 inconsistent price arguments, both ``userref`` and ``cl_ord_id``, or an
                 invalid ``cl_ord_id``; raised before any request.
+            UnsupportedOrderError: A canonical order type Kraken does not map; a
+                ``trigger.reference`` other than LAST (``feature="trigger_reference"``); a
+                relative-offset trigger on a non-trailing type
+                (``feature="relative_offset_trigger"``); or a TRAILING_STOP /
+                TRAILING_STOP_LIMIT percent trail below 0.1%
+                (``feature="percent_trail_min"``). Raised before any request.
             OrderOutcomeUnknownError: Only when ``cl_ord_id`` is set and the reply was
                 lost (timeout or transport error). The outcome is unknown; resolve it
                 with ``get_open_orders`` / ``get_closed_orders(cl_ord_id=...)``. Any

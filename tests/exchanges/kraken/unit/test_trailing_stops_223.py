@@ -140,7 +140,7 @@ class TestTrailingStop:
         [
             pytest.param(Decimal("5E+2"), False, "+500", id="exponent_large"),
             pytest.param(Decimal("1E-7"), False, "+0.0000001", id="exponent_small"),
-            pytest.param(Decimal("1E-3"), True, "+0.001%", id="exponent_small_percent"),
+            pytest.param(Decimal("1E-1"), True, "+0.1%", id="exponent_small_percent"),
         ],
     )
     async def test_plain_decimal_notation(

@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Kraken `TRAILING_STOP` / `TRAILING_STOP_LIMIT` reject a percent trail distance below 0.1% with `UnsupportedOrderError(feature="percent_trail_min")` before any request, via `trigger=TriggerSpec` and legacy `price_in_percent` (#299)
+
 ### Added
 
 - Coinbase `SupportsLegLookup` (`get_leg`, `list_open_legs`) with a Coinbase status -> `OrderState` map; `get_leg` is a paginated full scan of the order listing (#250)

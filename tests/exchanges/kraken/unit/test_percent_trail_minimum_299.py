@@ -150,6 +150,20 @@ class TestTriggerSpecPercentTrail:
         assert body["price"] == "+0.1%"
         assert body["price2"] == "-0.05%"
 
+    @pytest.mark.parametrize(("order_type", "offset"), _TYPES)
+    async def test_context_rounded_fraction_below_minimum_rejected(
+        self, venue: Any, rest: _RecordingRest, order_type: Any, offset: str | None
+    ) -> None:
+        # 31 significant digits: x100 rounds to exactly 0.1 at the default 28-digit context
+        fraction = "0.000" + "9" * 30
+        kwargs: dict[str, Any] = {"trigger": _trail(TriggerKind.PERCENT, fraction)}
+        if offset is not None:
+            kwargs["limit_price"] = _limit(offset)
+        with pytest.raises(UnsupportedOrderError) as excinfo:
+            await venue.place_order(_PAIR, order_type, TradeType.BUY, _AMOUNT, None, **kwargs)
+        assert excinfo.value.feature == "percent_trail_min"
+        assert rest.calls == []
+
     async def test_absolute_trail_unaffected(self, venue: Any, rest: _RecordingRest) -> None:
         await venue.place_order(
             _PAIR,
@@ -199,6 +213,29 @@ class TestLegacyPercentTrail:
         (body,) = rest.bodies
         assert body["price"] == price
         assert body["price2"] == "-0.05%"
+
+    @pytest.mark.parametrize("points", ["0.09", "0.0001", "0.0000001"])
+    async def test_core_buy_sell_raise_synchronously(
+        self, rest: _RecordingRest, gateway: KrakenGateway, points: str
+    ) -> None:
+        from market_connector.exchanges.kraken.hb_compat.kraken_connector_core import (
+            KrakenConnectorCore,
+        )
+        from market_connector.hb_compat.event_bus import EventBus
+
+        core = KrakenConnectorCore(gateway, event_bus=EventBus(name="trail-299"))
+        for call in (core.buy, core.sell):
+            with pytest.raises(UnsupportedOrderError) as excinfo:
+                call(
+                    _PAIR,
+                    _AMOUNT,
+                    OrderType.TRAILING_STOP,
+                    _D(points),
+                    price_in_percent=True,
+                )
+            assert excinfo.value.feature == "percent_trail_min"
+        assert core.in_flight_orders == {}
+        assert rest.calls == []
 
     async def test_absolute_small_distance_unaffected(
         self, venue: Any, rest: _RecordingRest

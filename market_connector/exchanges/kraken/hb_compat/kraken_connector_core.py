@@ -62,6 +62,7 @@ from market_connector.exchanges.kraken.hb_compat.kraken_core_support import (
     update_from_ws,
 )
 from market_connector.exchanges.kraken.mixins.orders import (
+    check_legacy_percent_trail,
     validate_order_args,
     warn_legacy_trigger,
 )
@@ -560,8 +561,10 @@ class KrakenConnectorCore:
                 price_in_percent,
                 trigger,
             )
-        elif order_type in _LIMIT_PRICE_TYPES and limit_price is None:
-            raise ValueError(f"{order_type.name} requires limit_price")
+        else:
+            if order_type in _LIMIT_PRICE_TYPES and limit_price is None:
+                raise ValueError(f"{order_type.name} requires limit_price")
+            check_legacy_percent_trail(order_type, price, price_in_percent)  # before quantizing
         rule = self.trading_rules.get(trading_pair)
         amount, price = quantize_order(rule, amount, price)
         percent_limit = price_in_percent or (

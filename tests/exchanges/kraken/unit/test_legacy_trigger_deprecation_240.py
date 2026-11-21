@@ -4,7 +4,7 @@
 A TRIGGERED order type placed through ``KrakenGateway.place_order`` without ``trigger=``
 relies on the overloaded ``price`` / ``limit_price`` / ``price_in_percent`` arguments: that
 emits one ``DeprecationWarning`` per call (removal in #241). The request body is unchanged.
-The hb_compat bridge and core never emit it.
+Since #288 the hb_compat bridge and core emit it too for the legacy triggered form.
 """
 
 from __future__ import annotations
@@ -130,9 +130,9 @@ class TestNoWarning:
             await gateway.place_order(_XBT, order_type, TradeType.BUY, _AMOUNT, price)
 
 
-class TestHbCompatIsSilent:
+class TestHbCompatWarns:
     @pytest.mark.parametrize("case", sorted(_LEGACY))
-    async def test_bridge_is_silent_and_sends_same_body(
+    async def test_bridge_warns_and_sends_same_body(
         self, gateway: KrakenGateway, rest: FakeKrakenRest, case: str
     ) -> None:
         bridge = KrakenConnectorBridge(api_key="k", secret_key="c2VjcmV0")
@@ -141,8 +141,8 @@ class TestHbCompatIsSilent:
         with pytest.warns(DeprecationWarning, match=_MATCH):
             await _place(gateway, case)
         direct = rest.bodies("add_order")[-1]
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        n = len(rest.bodies("add_order"))
+        with pytest.warns(DeprecationWarning, match=_MATCH):
             await bridge.place_order(
                 _XBT,
                 order_type,
@@ -152,6 +152,7 @@ class TestHbCompatIsSilent:
                 limit_price=limit_price,
                 price_in_percent=percent,
             )
+        assert len(rest.bodies("add_order")) == n + 1
         assert rest.bodies("add_order")[-1] == direct
 
     @pytest.mark.parametrize(
@@ -163,7 +164,7 @@ class TestHbCompatIsSilent:
             (OrderType.STOP_LOSS, _D("2"), None, True),
         ],
     )
-    async def test_core_buy_is_silent(
+    async def test_core_buy_warns(
         self,
         connector: Any,
         rest: FakeKrakenRest,
@@ -172,8 +173,7 @@ class TestHbCompatIsSilent:
         limit_price: Decimal | None,
         percent: bool,
     ) -> None:
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
+        with pytest.warns(DeprecationWarning, match=_MATCH) as record:
             connector.buy(
                 _PAIR,
                 _AMOUNT,
@@ -184,7 +184,7 @@ class TestHbCompatIsSilent:
             )
             await asyncio.sleep(0.05)
         assert rest.bodies("add_order")
-        assert _deprecations(caught) == []
+        assert len(_deprecations(list(record))) == 1
 
 
 class TestPayloadUnchanged:

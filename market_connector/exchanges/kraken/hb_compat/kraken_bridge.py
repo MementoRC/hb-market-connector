@@ -38,12 +38,17 @@ from market_connector.exchanges.kraken.hb_compat.kraken_startup_cleanup import (
     reconcile_stale_orders,
 )
 from market_connector.exchanges.kraken.kraken_gateway import KrakenGateway
-from market_connector.exchanges.kraken.mixins.orders import is_triggered_order_type
+from market_connector.exchanges.kraken.mixins.orders import (
+    is_triggered_order_type,
+    warn_legacy_trigger,
+)
 from market_connector.exchanges.kraken.schemas.enums import KrakenAPITier
 from market_connector.hb_compat.logging import get_logger
 
 if TYPE_CHECKING:
     from decimal import Decimal
+
+    from data_type_primitives import TriggerSpec
 
     from market_connector.primitives import OrderBookSnapshot
 
@@ -152,6 +157,7 @@ class KrakenConnectorBridge:
         limit_price: Decimal | None = None,
         price_in_percent: bool = False,
         userref: int | None = None,
+        trigger: TriggerSpec | None = None,
     ) -> str:
         """Place an order via the gateway.
 
@@ -165,20 +171,30 @@ class KrakenConnectorBridge:
             order_type:   ``OrderType`` enum, conditional type, or string.
             side:         ``TradeType`` enum or string (``"buy"`` / ``"sell"``).
             amount:       Order volume as a ``Decimal``.
-            price:        Limit price, or the trigger for conditional orders.
+            price:        Limit price. With `trigger`, `price` is the limit price only for
+                          `*_LIMIT` types and must be omitted otherwise; without `trigger`
+                          (deprecated), it carries the trigger for conditional types.
             limit_price:  Limit price (Kraken ``price2``) for ``*_LIMIT`` types.
             price_in_percent: Send the trigger as a percentage offset.
             userref:      Optional int32 tag for finding the order after a lost response.
+            trigger:      Venue-neutral trigger, forwarded with the gateway's validation and
+                          argument convention (see ``KrakenGateway.place_order``).
 
         Returns:
             The first txid string from the Kraken API response.
+
+        Warns:
+            DeprecationWarning: A triggered type placed without ``trigger`` (removal in #241).
         """
         extra: dict[str, Any] = {} if userref is None else {"userref": userref}
-        # Triggered types go through the non-warning entry point (the bridge's legacy
-        # arguments are its public contract until #241); other types use the public one.
+        if trigger is not None:
+            extra["trigger"] = trigger
+        # The warning is emitted here so it points at the bridge's caller, not the bridge;
+        # the triggered path then uses the non-warning gateway entry point.
+        warn_legacy_trigger(order_type, trigger, stacklevel=2)
         place = (
             self._gateway._place_order_compat
-            if is_triggered_order_type(order_type)
+            if trigger is not None or is_triggered_order_type(order_type)
             else self._gateway.place_order
         )
         return await place(

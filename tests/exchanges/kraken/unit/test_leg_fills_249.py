@@ -20,9 +20,10 @@ Contract (agreed with strategy-framework; this package must not import it, ADR 0
 
 Kraken semantics pinned here:
 
-* The leg's ``client_order_id`` is the link tag, the same string #250 ``get_leg`` reports:
-  ``str(userref)`` for an order with a userref (place_bracket returns the userref as the
-  entry id; the core sends one with every order), else its ``cl_ord_id``.
+* The leg's ``client_order_id`` is the EXACT string the placing call returned, never
+  ``str(userref)``: for core-placed orders the ``hbot-<side>-<uuid>`` id ``buy``/``sell``
+  returned; for ``KrakenGateway.place_order`` orders the value ``place_order`` returned
+  (today the first txid, NOT the ``cl_ord_id``; the tests assert against the return value).
 * Each trade booked for such an order (WS ``ownTrades`` via ``core.on_own_trades`` or REST
   QueryOrders+QueryTrades via ``core._poll_once``) emits exactly one LegFill:
   ``cumulative_filled`` is the running total base volume (strictly increasing),
@@ -98,9 +99,13 @@ async def _settle() -> None:
 
 
 async def _placed(core: Any, seen: Recorder, rest: FakeKrakenRest) -> str:  # noqa: F811
-    """Place a 0.5 order; return its leg cid (the link tag Kraken got as ``userref``)."""
-    await base._place(core, seen)
-    return str(rest.bodies("add_order")[0]["userref"])
+    """Place a 0.5 order via core.buy; return its leg cid (the id ``buy`` returned)."""
+    return await base._place(core, seen)
+
+
+async def _gateway_placed(gateway: KrakenGateway, **kwargs: Any) -> str:  # noqa: F811
+    """Place a 0.5 order straight on the gateway (the core never tracks it)."""
+    return await gateway.place_order("XBTUSD", "limit", "buy", base._AMOUNT, base._PRICE, **kwargs)
 
 
 def _ws(core: Any, tid: str, vol: str, price: str, seq: int = 1) -> None:
@@ -266,6 +271,112 @@ class TestNoDuplicateEmission:
             (cid, _D("0.2"), _D("27000"), "T1"),
             (cid, _D("0.5"), _D("27010"), "T2"),
         ]
+
+
+class TestGatewayPlaced:
+    async def test_two_partial_fills_use_exact_place_order_return_as_cid(
+        self,
+        core: Any,
+        gateway: KrakenGateway,  # noqa: F811
+    ) -> None:
+        sink = Sink()
+        gateway.subscribe_leg_fills(sink.on_fill)
+        cid = await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
+
+        _ws(core, "T1", "0.2", "27000", seq=1)
+        await _settle()
+        _ws(core, "T2", "0.3", "27010", seq=2)
+        await _settle()
+
+        assert _shape(sink) == [
+            (cid, _D("0.2"), _D("27000"), "T1"),
+            (cid, _D("0.5"), _D("27010"), "T2"),
+        ]
+        assert not cid.startswith("hbot-")
+
+    async def test_same_trade_delivered_twice_emits_once(
+        self,
+        core: Any,
+        gateway: KrakenGateway,  # noqa: F811
+    ) -> None:
+        sink = Sink()
+        gateway.subscribe_leg_fills(sink.on_fill)
+        cid = await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
+
+        _ws(core, "T1", "0.2", "27000", seq=1)
+        await _settle()
+        _ws(core, "T1", "0.2", "27000", seq=2)
+        await _settle()
+
+        assert _shape(sink) == [(cid, _D("0.2"), _D("27000"), "T1")]
+
+    async def test_negative_link_userref_without_cl_ord_id_uses_exact_return(
+        self,
+        core: Any,
+        gateway: KrakenGateway,  # noqa: F811
+        rest: FakeKrakenRest,  # noqa: F811
+    ) -> None:
+        sink = Sink()
+        gateway.subscribe_leg_fills(sink.on_fill)
+        cid = await _gateway_placed(gateway, userref=-5)
+
+        assert rest.bodies("add_order")[0]["userref"] == -5
+        _ws(core, "T1", "0.2", "27000")
+        await _settle()
+
+        assert _shape(sink) == [(cid, _D("0.2"), _D("27000"), "T1")]
+        assert cid != "-5"
+
+
+class TestGatewayLegIsNotBuffered:
+    async def test_claimed_trades_never_enter_core_pending_buffer(
+        self,
+        core: Any,
+        gateway: KrakenGateway,  # noqa: F811
+    ) -> None:
+        """A gateway-placed txid is claimed by the leg-fill hub: the core must not buffer it."""
+        sink = Sink()
+        gateway.subscribe_leg_fills(sink.on_fill)
+        cid = await _gateway_placed(gateway, cl_ord_id="mcl-1-0")
+
+        for n in range(1, 201):
+            _ws(core, f"T{n}", "0.001", "27000", seq=n)
+        await _settle()
+
+        buffered = [key for key in core._pending_trades._items if key[0] == _TXID]
+        assert buffered == []
+        assert len(sink.fills) == 200
+        assert {f.client_order_id for f in sink.fills} == {cid}
+        cumulative = [f.cumulative_filled for f in sink.fills]
+        assert all(a < b for a, b in zip(cumulative, cumulative[1:], strict=False))
+        assert cumulative[-1] == _D("0.2")
+
+
+class TestPreAckRace:
+    async def test_ws_trade_before_placement_ack_emits_once_with_hbot_cid(
+        self,
+        core: Any,
+        gateway: KrakenGateway,  # noqa: F811
+        seen: Recorder,
+    ) -> None:
+        sink = Sink()
+        gateway.subscribe_leg_fills(sink.on_fill)
+
+        cid = core.buy(
+            trading_pair=base._PAIR,
+            amount=base._AMOUNT,
+            order_type=base.OrderType.LIMIT,
+            price=base._PRICE,
+            position_action=base.PositionAction.NIL,
+        )
+        # The AddOrder task has not run yet: the trade's txid is still unknown to the core.
+        _ws(core, "T1", "0.2", "27000")
+        await _settle()
+        await seen.wait(base.BUY_CREATED)
+        await _settle()
+
+        assert cid.startswith("hbot-buy-")
+        assert _shape(sink) == [(cid, _D("0.2"), _D("27000"), "T1")]
 
 
 class TestUntaggedOrders:

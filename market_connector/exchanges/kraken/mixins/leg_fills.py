@@ -41,7 +41,9 @@ class _LegFillHub:
         self.tasks: set[asyncio.Task[None]] = set()
 
     def emit(self, fill: LegFill) -> None:
-        """Deliver ``fill`` unless its cumulative does not exceed the last one for its cid."""
+        """Deliver ``fill`` if its cumulative is > 0 and exceeds the last one for its cid."""
+        if fill.cumulative_filled <= 0:
+            return
         previous = self.last.get(fill.client_order_id)
         if previous is not None and fill.cumulative_filled <= previous:
             return
@@ -110,8 +112,8 @@ class LegFillsMixin:
           It is not the txid ``place_order`` returns. Orders placed without a link tag
           emit nothing; a released bracket exit has no known txid and emits nothing.
 
-        ``cumulative_filled`` is strictly increasing per ``client_order_id``; each trade
-        is emitted once. Core-placed orders get fills from both WS ``ownTrades`` and REST
+        ``cumulative_filled`` is > 0 and strictly increasing per ``client_order_id``; each
+        trade is emitted once. Core-placed orders get fills from both WS ``ownTrades`` and REST
         polling. Gateway-placed legs get fills over WS ``ownTrades`` only (the core
         consumes the stream); after a missed frame recover the filled volume with
         ``get_leg(...).filled``.

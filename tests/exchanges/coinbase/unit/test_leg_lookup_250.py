@@ -43,6 +43,7 @@ _E6 = _CODEC.encode(6, 0)
 _DONE = _CODEC.encode(7, 0)
 _CXL = _CODEC.encode(8, 0)
 _ETH = _CODEC.encode(5, 2)
+_QUEUED = _CODEC.encode(9, 0)
 _FOREIGN = "coinbase-0a1b2c3d"
 _D = Decimal
 _PAGE = 2
@@ -76,7 +77,21 @@ _ORDERS: list[dict[str, Any]] = [
     _order("V-EXIT", _X5),
     _order("V-ETH", _ETH, product="ETH-USD"),
     _order("V-E6", _E6),
+    _order("V-QUEUED", _QUEUED, status="QUEUED"),
 ]
+
+_ACTIVE = {"OPEN", "PENDING", "QUEUED", "EDIT_QUEUED", "CANCEL_QUEUED"}
+_MIXED_MSG = (
+    "Cannot pass multiple statuses when requesting active orders "
+    "(OPEN, PENDING, QUEUED, EDIT_QUEUED, or CANCEL_QUEUED)"
+)
+
+
+class _VenueError(Exception):
+    """Models the live HTTP 400 INVALID_ARGUMENT (confirmed against production 2026-11-21)."""
+
+    status_code = 400
+    error = "INVALID_ARGUMENT"
 
 
 class _FakeRest:
@@ -90,6 +105,8 @@ class _FakeRest:
             raise AssertionError(f"unexpected endpoint {endpoint_name}")
         wanted = params.get("order_status")
         statuses = [wanted] if isinstance(wanted, str) else wanted
+        if statuses is not None and len(statuses) > 1 and _ACTIVE & set(statuses):
+            raise _VenueError(_MIXED_MSG)
         rows = [
             o
             for o in _ORDERS
@@ -104,6 +121,25 @@ class _FakeRest:
             "cursor": str(end) if end < len(rows) else "",
         }
         return Response(raw=body, status_code=200, headers=httpx.Headers(), _endpoint=endpoint_name)
+
+
+_FULL_SEQUENCE: list[Any] = [
+    "OPEN",
+    ["FILLED", "CANCELLED", "EXPIRED", "FAILED"],
+    "PENDING",
+    "QUEUED",
+    "CANCEL_QUEUED",
+    "EDIT_QUEUED",
+]
+
+
+def _sequence(gateway: CoinbaseGateway) -> list[Any]:
+    """Distinct consecutive ``order_status`` queries (cursor pages of one query collapse)."""
+    seq: list[Any] = []
+    for _, params in gateway._rest.calls:  # type: ignore[attr-defined]
+        if not seq or seq[-1] != params["order_status"]:
+            seq.append(params["order_status"])
+    return seq
 
 
 @pytest.fixture
@@ -230,13 +266,36 @@ class TestGetLegExplicitStatuses:
     async def test_sends_open_then_terminal_status_queries(self, gateway: CoinbaseGateway) -> None:
         assert await gateway.get_leg(_PAIR, client_order_id="nope") is None
 
-        statuses = [c[1]["order_status"] for c in gateway._rest.calls]  # type: ignore[attr-defined]
-        assert "OPEN" in statuses
-        terminal = [s for s in statuses if s != "OPEN"]
-        assert terminal and all(s == terminal[0] for s in terminal)
-        assert terminal[0] == ["FILLED", "CANCELLED", "EXPIRED", "FAILED", "QUEUED"]
-        assert statuses.index("OPEN") < statuses.index(terminal[0])
+        assert _sequence(gateway) == _FULL_SEQUENCE
         assert all(c[1]["product_id"] == _PAIR for c in gateway._rest.calls)  # type: ignore[attr-defined]
+
+    async def test_no_request_mixes_statuses_illegally(self, gateway: CoinbaseGateway) -> None:
+        for key in ("nope", _DONE, _CXL, _QUEUED, _E5):
+            await gateway.get_leg(_PAIR, client_order_id=key)
+
+        for status in (c[1]["order_status"] for c in gateway._rest.calls):  # type: ignore[attr-defined]
+            statuses = [status] if isinstance(status, str) else status
+            assert len(statuses) == 1 or not (_ACTIVE & set(statuses))
+
+    async def test_filled_and_cancelled_found_via_terminal_query(
+        self, gateway: CoinbaseGateway
+    ) -> None:
+        assert (await gateway.get_leg(_PAIR, client_order_id=_DONE)) is not None
+        assert _sequence(gateway) == _FULL_SEQUENCE[:2]
+        gateway._rest.calls.clear()  # type: ignore[attr-defined]
+        assert (await gateway.get_leg(_PAIR, client_order_id=_CXL)) is not None
+        assert _sequence(gateway) == _FULL_SEQUENCE[:2]
+
+    async def test_queued_leg_found_via_active_query(self, gateway: CoinbaseGateway) -> None:
+        snap = await gateway.get_leg(_PAIR, client_order_id=_QUEUED)
+
+        assert snap is not None
+        assert snap.venue_order_id == "V-QUEUED"
+        assert _sequence(gateway) == _FULL_SEQUENCE[:4]
+
+    async def test_not_found_makes_full_sequence_then_none(self, gateway: CoinbaseGateway) -> None:
+        assert await gateway.get_leg(_PAIR, client_order_id="nope") is None
+        assert _sequence(gateway) == _FULL_SEQUENCE
 
     async def test_open_leg_found_without_terminal_query(self, gateway: CoinbaseGateway) -> None:
         assert await gateway.get_leg(_PAIR, client_order_id=_E5) is not None

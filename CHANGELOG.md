@@ -5,11 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-20
+
 ### Added
 
 - `LegSnapshot` and `SupportsLegLookup` (`get_leg`, `list_open_legs`) protocols, implemented by `KrakenGateway` via `LegLookupMixin` (#250)
 - hb_compat exchange registry (`list_exchanges` / `get_exchange`), `ExchangeDescriptor` with Kraken descriptor, `ConnectorCoreHandle` lifecycle and `ConnectorCoreProtocol`; Kraken core exposes dtp `TradingRules` / `OrderBookSnapshot` and price/size quanta (#265)
 - `KrakenConnectorCore.buy/sell` and `KrakenConnectorBridge.place_order` accept `trigger: TriggerSpec | None`, forwarded to the gateway with the same validation and argument convention as `KrakenGateway.place_order`; invalid arguments raise synchronously before anything is tracked or sent (#288)
+- Kraken `TriggerSpec`, native bracket via conditional close, `userref` link codec (#240)
+- `KrakenConnectorCore.start()` is self-driving (#266)
+- `max_group_id` (read-only) on bounded link codecs; unbounded codecs lack it (#291)
 
 ### Changed
 
@@ -23,6 +28,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Kraken spot rejects `sandbox=True` with `ValueError` (Kraken spot has no sandbox; REST previously pointed at demo-futures while WS stayed on production) (#260)
 - Kraken converter maps `TAKE_PROFIT_LIMIT` and `TRAILING_STOP_LIMIT` (#261)
+- Age+count finished-order retention; late trades are surfaced for evicted orders (#284)
+- Kraken `QueryOrders` requests `trades=true`, `QueryTrades` is chunked, and terminal orders are held until fills are reconciled (#286)
+- EventKey int event-id contract, requires hb-event-bus>=0.4 (#262)
+- Kraken single-owner WS reconnect, with `is_connected` and a connection generation (#273)
+- Kraken private WS is wired, with ack-gated private subscribes and private-frame decode (#274)
 
 ## [0.10.0] - 2026-11-16
 

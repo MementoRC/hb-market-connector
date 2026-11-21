@@ -32,6 +32,8 @@ from tests.exchanges.kraken.unit.test_kraken_connector_core_211 import (  # noqa
     _AMOUNT,
     _PAIR,
     _WIRE_PAIR,
+    BUY_CREATED,
+    SELL_CREATED,
     FakeKrakenRest,
     Recorder,
     bare_connector,
@@ -90,8 +92,11 @@ _CASES: dict[str, tuple[Any, tuple[Any, Any], tuple[Any, Any, TriggerSpec]]] = {
 class _Entry:
     """Uniform ``place`` over core buy/sell and bridge; ``pair`` is the entry's own pair form."""
 
-    def __init__(self, name: str, connector: Any, bridge: KrakenConnectorBridge) -> None:
+    def __init__(
+        self, name: str, connector: Any, bridge: KrakenConnectorBridge, seen: Recorder
+    ) -> None:
         self.name = name
+        self._seen = seen
         self._connector = connector
         self._bridge = bridge
 
@@ -120,15 +125,17 @@ class _Entry:
             return
         method = self._connector.sell if self.name == "core_sell" else self._connector.buy
         args = (price,) if price is not None else ()
+        created_id = SELL_CREATED if self.name == "core_sell" else BUY_CREATED
+        count = len(self._seen.of(created_id)) + 1
         method(_PAIR, _AMOUNT, order_type, *args, **kwargs)
-        await asyncio.sleep(0.05)  # let the background AddOrder run
+        await self._seen.wait(created_id, count=count, timeout=2.0)  # background AddOrder done
 
 
 @pytest.fixture(params=_ENTRIES)
-def entry(request: pytest.FixtureRequest, connector: Any, gateway: Any) -> _Entry:
+def entry(request: pytest.FixtureRequest, connector: Any, gateway: Any, seen: Recorder) -> _Entry:
     bridge = KrakenConnectorBridge(api_key="k", secret_key="c2VjcmV0")
     bridge._gateway = gateway
-    return _Entry(request.param, connector, bridge)
+    return _Entry(request.param, connector, bridge, seen)
 
 
 def _comparable(body: dict[str, Any]) -> dict[str, Any]:

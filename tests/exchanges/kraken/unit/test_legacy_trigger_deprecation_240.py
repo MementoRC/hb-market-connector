@@ -141,6 +141,7 @@ class TestHbCompatWarns:
         with pytest.warns(DeprecationWarning, match=_MATCH):
             await _place(gateway, case)
         direct = rest.bodies("add_order")[-1]
+        n = len(rest.bodies("add_order"))
         with pytest.warns(DeprecationWarning, match=_MATCH):
             await bridge.place_order(
                 _XBT,
@@ -151,6 +152,7 @@ class TestHbCompatWarns:
                 limit_price=limit_price,
                 price_in_percent=percent,
             )
+        assert len(rest.bodies("add_order")) == n + 1
         assert rest.bodies("add_order")[-1] == direct
 
     @pytest.mark.parametrize(

@@ -19,6 +19,7 @@ from market_connector.exceptions import (
     UnsupportedOrderError,
 )
 from market_connector.exchanges.coinbase.converters import to_exchange_pair, to_open_order
+from market_connector.exchanges.coinbase.mixins.order_pages import iter_order_pages
 from market_connector.exchanges.coinbase.schemas.enums import CoinbaseOrderStatus
 from market_connector.exchanges.coinbase.schemas.rest import (
     CancelOrdersResponse,
@@ -229,13 +230,8 @@ class OrdersMixin:
     ) -> list[OpenOrder]:
         if not self.ready:
             raise GatewayNotStartedError("Gateway not started")
-        product_id = to_exchange_pair(trading_pair)
-        response = await self._rest.request(
-            "list_orders",
-            params={"product_id": product_id, "order_status": "OPEN"},
-        )
-        parsed = ListOrdersResponse.model_validate(response.raw)
-        return [to_open_order(o) for o in parsed.orders]
+        params = {"product_id": to_exchange_pair(trading_pair), "order_status": "OPEN"}
+        return [to_open_order(o) async for page in iter_order_pages(self, params) for o in page]
 
     async def get_order_by_client_order_id(
         self: HasRest & HasReady,  # type: ignore[valid-type]

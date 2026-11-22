@@ -10,17 +10,19 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from market_connector.exceptions import GatewayNotStartedError
 from market_connector.exchanges.coinbase.converters import to_exchange_pair
 from market_connector.exchanges.coinbase.linked_order_codec import (
     CoinbaseClientOrderIdLinkCodec,
 )
+from market_connector.exchanges.coinbase.mixins.order_pages import iter_order_pages
 from market_connector.exchanges.coinbase.order_state import to_order_state
-from market_connector.exchanges.coinbase.schemas.rest import ListOrdersResponse, Order
+from market_connector.exchanges.coinbase.schemas.enums import CoinbaseOrderStatus
 from market_connector.protocols import LegSnapshot
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from market_connector.exchanges.coinbase.schemas.rest import Order
 
 _CODEC = CoinbaseClientOrderIdLinkCodec()
 _OPEN_STATUS = "OPEN"
@@ -29,7 +31,10 @@ _OPEN_STATUS = "OPEN"
 # GET /api/v3/brokerage/orders/historical/batch: combining any of them with another status
 # (e.g. OPEN+FILLED) returns HTTP 400 INVALID_ARGUMENT "Cannot pass multiple statuses when
 # requesting active orders (OPEN, PENDING, QUEUED, EDIT_QUEUED, or CANCEL_QUEUED)".
-_ACTIVE_STATUSES = frozenset({"OPEN", "PENDING", "QUEUED", "EDIT_QUEUED", "CANCEL_QUEUED"})
+_QUEUED = CoinbaseOrderStatus.QUEUED.value
+_CANCEL_QUEUED = CoinbaseOrderStatus.CANCEL_QUEUED.value
+_EDIT_QUEUED = CoinbaseOrderStatus.EDIT_QUEUED.value
+_ACTIVE_STATUSES = frozenset({"OPEN", "PENDING", _QUEUED, _EDIT_QUEUED, _CANCEL_QUEUED})
 # Terminal statuses may be combined with each other (FILLED+CANCELLED live-confirmed 200).
 _TERMINAL_STATUSES = ["FILLED", "CANCELLED", "EXPIRED", "FAILED"]
 # get_leg query order; each entry is one request (scanned over all pages), first match wins.
@@ -37,9 +42,9 @@ _GET_LEG_QUERIES: tuple[str | list[str], ...] = (
     _OPEN_STATUS,
     _TERMINAL_STATUSES,
     "PENDING",
-    "QUEUED",
-    "CANCEL_QUEUED",
-    "EDIT_QUEUED",
+    _QUEUED,
+    _CANCEL_QUEUED,
+    _EDIT_QUEUED,
 )
 
 
@@ -73,22 +78,18 @@ class LegLookupMixin:
     ) -> list[Order]:
         """Orders of ``target`` with ``order_status`` across every cursor page.
 
-        ``get_open_orders`` reads one page. Readiness is re-checked before each page so a
-        concurrent ``stop()`` aborts the scan with ``GatewayNotStartedError`` instead of
-        hitting a closed REST client. With ``client_order_id`` the scan stops at the first
-        match on ``target``.
+        Pages come from ``iter_order_pages`` (the same walk ``get_open_orders`` uses), which
+        re-checks readiness before each page so a concurrent ``stop()`` aborts the scan with
+        ``GatewayNotStartedError`` instead of hitting a closed REST client. With
+        ``client_order_id`` the scan stops at the first match on ``target``.
         """
         params: dict[str, Any] = {
             "product_id": to_exchange_pair(target),
             "order_status": order_status,
         }
         orders: list[Order] = []
-        while True:
-            if not self.ready:
-                raise GatewayNotStartedError("Gateway not started")
-            response = await self._rest.request("list_orders", params=dict(params))
-            parsed = ListOrdersResponse.model_validate(response.raw)
-            for o in parsed.orders:
+        async for page in iter_order_pages(self, params):
+            for o in page:
                 if o.product_id != params["product_id"]:
                     continue
                 if client_order_id is not None:
@@ -96,9 +97,7 @@ class LegLookupMixin:
                         return [o]
                 else:
                     orders.append(o)
-            if not (parsed.has_next and parsed.cursor) or parsed.cursor == params.get("cursor"):
-                return orders
-            params["cursor"] = parsed.cursor
+        return orders
 
     async def get_leg(
         self: Any,

@@ -22,6 +22,9 @@ class CoinbaseOrderStatus(_StrValue):
     EXPIRED = "EXPIRED"
     FAILED = "FAILED"
     PENDING = "PENDING"
+    QUEUED = "QUEUED"
+    CANCEL_QUEUED = "CANCEL_QUEUED"
+    EDIT_QUEUED = "EDIT_QUEUED"
     UNKNOWN = "UNKNOWN_ORDER_STATUS"
 
 

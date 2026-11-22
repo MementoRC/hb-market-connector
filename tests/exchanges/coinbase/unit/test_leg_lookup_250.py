@@ -320,11 +320,16 @@ class TestGetLegExplicitStatuses:
         assert cancelled.state is OrderState.CANCELED
         assert cancelled.filled == _D("0.1")
 
-    async def test_list_open_legs_still_sends_open_only(self, gateway: CoinbaseGateway) -> None:
+    async def test_list_open_legs_sends_open_and_edit_queued_alone(
+        self, gateway: CoinbaseGateway
+    ) -> None:
+        # EDIT_QUEUED maps to OrderState.OPEN (#301) so it is listed too, each status in its
+        # own request (active statuses cannot be combined); never terminal statuses.
         await gateway.list_open_legs(_PAIR)
 
-        statuses = {c[1]["order_status"] for c in gateway._rest.calls}  # type: ignore[attr-defined]
-        assert statuses == {"OPEN"}
+        statuses = [c[1]["order_status"] for c in gateway._rest.calls]  # type: ignore[attr-defined]
+        assert set(statuses) == {"OPEN", "EDIT_QUEUED"}
+        assert all(isinstance(s, str) for s in statuses)
 
 
 class TestGetLegArguments:

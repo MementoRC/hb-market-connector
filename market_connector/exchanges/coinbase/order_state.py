@@ -16,6 +16,9 @@ __all__ = ["COINBASE_STATUS_TO_ORDER_STATE", "to_order_state"]
 # terminal state) so a caller cannot mistake an unrecognised status for a finished order.
 COINBASE_STATUS_TO_ORDER_STATE: dict[str, OrderState] = {
     "PENDING": OrderState.PENDING_CREATE,
+    "QUEUED": OrderState.PENDING_CREATE,
+    "CANCEL_QUEUED": OrderState.PENDING_CANCEL,
+    "EDIT_QUEUED": OrderState.OPEN,
     "OPEN": OrderState.OPEN,
     "FILLED": OrderState.FILLED,
     "CANCELLED": OrderState.CANCELED,

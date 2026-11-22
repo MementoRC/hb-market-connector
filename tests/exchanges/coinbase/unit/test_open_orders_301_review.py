@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -104,3 +105,29 @@ async def test_list_open_legs_includes_edit_queued() -> None:
     assert sorted(leg.venue_order_id for leg in legs) == ["V1", "V2"]
     statuses = [c["order_status"] for c in gw._rest.calls]  # type: ignore[attr-defined]
     assert statuses == ["OPEN", "EDIT_QUEUED"]
+
+
+async def test_list_open_legs_dedupes_order_returned_by_both_queries() -> None:
+    # Same order in both responses (it moved between the two calls, or OPEN already covers
+    # EDIT_QUEUED). The EDIT_QUEUED response is the later one and must win (filled 0.5).
+    open_body = {"orders": [_order("V1", _CID)]}
+    edit_body = {"orders": [{**_order("V1", _CID, status="EDIT_QUEUED"), "filled_size": "0.5"}]}
+    gw = _gw([open_body, edit_body])
+
+    legs = await gw.list_open_legs("BTC-USD")
+
+    assert [leg.venue_order_id for leg in legs] == ["V1"]
+    assert legs[0].filled == Decimal("0.5")
+
+
+async def test_list_open_legs_keeps_distinct_open_and_edit_queued_orders() -> None:
+    gw = _gw(
+        [
+            {"orders": [_order("V1", _CID)]},
+            {"orders": [_order("V2", _CID2, status="EDIT_QUEUED")]},
+        ]
+    )
+
+    legs = await gw.list_open_legs("BTC-USD")
+
+    assert [leg.venue_order_id for leg in legs] == ["V1", "V2"]

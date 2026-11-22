@@ -134,10 +134,14 @@ class LegLookupMixin:
     ) -> Sequence[LegSnapshot]:
         """Open link-tagged orders on ``target``; ``group`` keeps only that ``group_id``."""
         # EDIT_QUEUED maps to OrderState.OPEN but must be requested alone (see _ACTIVE_STATUSES).
-        orders: list[Order] = []
+        # Unverified whether the OPEN query already returns EDIT_QUEUED orders (#301), and an
+        # order can move between the two calls. De-duplicate by order_id: a repeated id keeps
+        # its first-seen position but takes the later (EDIT_QUEUED) response. Correct either way.
+        by_id: dict[str, Order] = {}
         for status in (_OPEN_STATUS, _EDIT_QUEUED):
-            orders.extend(await self._scan_orders(target, order_status=status))
-        legs = [_snapshot(o) for o in orders]
+            for o in await self._scan_orders(target, order_status=status):
+                by_id[o.order_id] = o
+        legs = [_snapshot(o) for o in by_id.values()]
         return [
             leg
             for leg in legs

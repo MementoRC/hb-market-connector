@@ -416,6 +416,16 @@ def _ib_stop_trigger_price(hb_order: HBOrder) -> Decimal:
     return trigger.value
 
 
+def _tag_orders(ib_orders: Sequence[Any], link_tags: Sequence[str] | None) -> None:
+    """Set ``orderRef`` of each order to its link tag (positional); no tags leaves them as is."""
+    if link_tags is None:
+        return
+    if len(link_tags) != len(ib_orders):
+        raise ValueError(f"expected {len(ib_orders)} link tags, got {len(link_tags)}")
+    for ib_order, tag in zip(ib_orders, link_tags, strict=True):
+        ib_order.orderRef = tag
+
+
 def _hb_to_ib_order(hb_order: HBOrder) -> Any:
     """Map an HBOrder to an ib_async Order.
 
@@ -1259,8 +1269,11 @@ class IbGatewayTransport:
         hb_order: HBOrder,
         *,
         options: IbOrderOptions | None = None,
+        link_tag: str | None = None,
     ) -> OrderHandle:
         """Submit an order to IB and await the first non-PendingSubmit status update.
+
+        ``link_tag`` (if any) is carried in ``Order.orderRef`` (#250).
 
         The caller (gateway) is responsible for pre-resolving the contract; this
         method receives the raw ib_async Contract object directly. ``options``
@@ -1282,6 +1295,8 @@ class IbGatewayTransport:
 
         ib_order = _hb_to_ib_order(hb_order)
         _apply_order_options(ib_order, native_contract, hb_order, options)
+        if link_tag is not None:
+            ib_order.orderRef = link_tag
         trade = self._submit_leg(native_contract, ib_order)
         return await self._await_leg(trade)
 
@@ -1335,8 +1350,11 @@ class IbGatewayTransport:
         entry: HBOrder,
         take_profit: HBOrder | None,
         stop_loss: HBOrder | None,
+        link_tags: Sequence[str] | None = None,
     ) -> IbBracket:
         """Place an entry with attached take-profit and/or stop-loss children as one bracket.
+
+        ``link_tags`` (one per placed leg, entry first) go into ``orderRef`` (#250).
 
         The entry must be MARKET/LIMIT, the take-profit LIMIT and the stop-loss
         STOP_LOSS/STOP_LOSS_LIMIT; children take the opposite side and the
@@ -1360,6 +1378,7 @@ class IbGatewayTransport:
         _validate_bracket(entry, take_profit, stop_loss)
         legs = [o for o in (entry, take_profit, stop_loss) if o is not None]
         ib_orders = [_hb_to_ib_order(o) for o in legs]
+        _tag_orders(ib_orders, link_tags)
         parent_id = self._ib.client.getReqId()
         ids = [parent_id, *(self._ib.client.getReqId() for _ in legs[1:])]
         for position, (ib_order, order_id) in enumerate(zip(ib_orders, ids, strict=True)):
@@ -1379,8 +1398,11 @@ class IbGatewayTransport:
         native_contract: Any,
         orders: Sequence[HBOrder],
         oca_type: OcaType = OcaType.CANCEL_WITH_BLOCK,
+        link_tags: Sequence[str] | None = None,
     ) -> IbOcaGroup:
         """Place *orders* as one OCA (one-cancels-all) group under a fresh group name.
+
+        ``link_tags`` (one per order, input order) go into ``orderRef`` (#250).
 
         Needs at least two orders (ValueError before any IB call). Handles come
         back in input order once every member has a first status. If any member
@@ -1399,6 +1421,7 @@ class IbGatewayTransport:
         if len(orders) < 2:
             raise ValueError(f"an OCA group needs at least 2 orders, got {len(orders)}")
         ib_orders = [_hb_to_ib_order(o) for o in orders]
+        _tag_orders(ib_orders, link_tags)
         group = f"hb-oca-{uuid.uuid4().hex}"
         for ib_order in ib_orders:
             ib_order.ocaGroup = group
@@ -1779,6 +1802,27 @@ class IbGatewayTransport:
             self._handle_registry[order_id] = handle
             result.append(handle)
         return result
+
+    @property
+    def client_id(self) -> int:
+        """This connection's API client id."""
+        return self._spec.client_id
+
+    def open_trades(self) -> list[Any]:
+        """Raw ib_async trades from the local ``openTrades()`` cache (all clients).
+
+        Raises ConnectionLostError if the transport is not connected.
+        """
+        self._require_connected()
+        return list(self._ib.openTrades())
+
+    async def completed_trades(self) -> list[Any]:
+        """Raw completed trades via ``reqCompletedOrdersAsync(apiOnly=True)``.
+
+        Raises ConnectionLostError if the transport is not connected.
+        """
+        self._require_connected()
+        return list(await self._ib.reqCompletedOrdersAsync(apiOnly=True))
 
     async def cancel_all(self) -> list[OrderHandle]:
         """Cancel every open order owned by this client, sequentially.

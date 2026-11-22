@@ -49,6 +49,7 @@ from data_type_primitives.common import OrderType
 
 from market_connector.capabilities import LinkedMode, OrderCapabilities
 from market_connector.exceptions import GatewayNotStartedError
+from market_connector.exchanges.interactive_brokers.linked_order_codec import IbOrderRefLinkCodec
 from market_connector.exchanges.interactive_brokers.linked_orders import (
     IbBracket,
     IbOcaGroup,
@@ -56,6 +57,7 @@ from market_connector.exchanges.interactive_brokers.linked_orders import (
     cancel_legs,
 )
 from market_connector.exchanges.interactive_brokers.mixins import (
+    LegLookupMixin,
     MarketDataMixin,
     SubscriptionsMixin,
 )
@@ -89,7 +91,18 @@ IB_ORDER_CAPABILITIES = OrderCapabilities(
 )
 
 
-class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
+_LINK_CODEC = IbOrderRefLinkCodec()
+
+
+def _link_tags(options: Mapping[str, Any] | None, count: int) -> list[str] | None:
+    """``mcl-<group_id>-<i>`` tags for ``count`` legs when ``options["group_id"]`` is set."""
+    group_id = (options or {}).get("group_id")
+    if group_id is None:
+        return None
+    return [_LINK_CODEC.encode(group_id, i) for i in range(count)]
+
+
+class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin, LegLookupMixin):
     """Composition root for IB integration.
 
     Conforms structurally to TransportAwareGateway (which extends ExchangeGateway).
@@ -176,11 +189,14 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         hb_order: HBOrder,
         *,
         options: IbOrderOptions | None = None,
+        link_tag: str | None = None,
     ) -> OrderHandle:
         """Resolve contract then delegate to transport.place_order.
 
         ``options`` carries opt-in IB-specific settings (e.g. the Adaptive algo);
-        an invalid combination raises ValueError before any IB call.
+        an invalid combination raises ValueError before any IB call. ``link_tag`` is
+        written to ``Order.orderRef`` (free text, any string accepted; only ``mcl-<g>-<i>``
+        tags are group-listable by ``list_open_legs``).
 
         The gateway is responsible for contract resolution so that the transport
         remains free of resolver dependencies. Raises RuntimeError if no
@@ -193,7 +209,11 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
                 "Use build_ib_gateway() to construct a fully-wired gateway."
             )
         resolved = await self.contract_resolver.resolve(ref)
-        return await self._transport.place_order(resolved.native, hb_order, options=options)
+        if link_tag is None:
+            return await self._transport.place_order(resolved.native, hb_order, options=options)
+        return await self._transport.place_order(
+            resolved.native, hb_order, options=options, link_tag=link_tag
+        )
 
     async def _resolve_native(self, target: str | InstrumentRef) -> Any:
         """Resolve a pair string or InstrumentRef to the native contract (see dispatch.py)."""
@@ -213,14 +233,15 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         take_profit: HBOrder | None = None,
         stop_loss: HBOrder | None = None,
         *,
-        options: Mapping[str, Any] | None = None,  # noqa: ARG002  (SupportsBracket signature)
+        options: Mapping[str, Any] | None = None,
         entry: HBOrder | None = None,
     ) -> IbBracket:
         """Resolve contract once then place an entry with take-profit and/or stop-loss children.
 
         Preferred form: ``place_bracket(target, spec)`` with a BRACKET ``LinkedOrderSpec``; one
         or two exits. The legacy per-leg form ``(ref, entry, take_profit, stop_loss)`` still
-        works but emits a DeprecationWarning.
+        works but emits a DeprecationWarning. With a spec, ``options={"group_id": n}`` tags
+        the legs ``mcl-<n>-<i>`` in ``ordered_legs()`` order.
 
         Raises GatewayNotStartedError if no contract_resolver has been wired.
         """
@@ -241,7 +262,15 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         if entry_order is None:
             raise TypeError("place_bracket requires a LinkedOrderSpec or an entry order")
         native = await self._resolve_native(target)
-        return await self._transport.place_bracket(native, entry_order, take_profit, stop_loss)
+        tags = _link_tags(
+            options if isinstance(spec, LinkedOrderSpec) else None,
+            sum(o is not None for o in (entry_order, take_profit, stop_loss)),
+        )
+        if tags is None:
+            return await self._transport.place_bracket(native, entry_order, take_profit, stop_loss)
+        return await self._transport.place_bracket(
+            native, entry_order, take_profit, stop_loss, link_tags=tags
+        )
 
     async def place_oco(
         self,
@@ -253,14 +282,17 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin):
         """Place an OCO ``LinkedOrderSpec`` as one IB OCA group, legs in ``ordered_legs()`` order.
 
         ``options={"oca_type": OcaType.X}`` selects IB's OCA behaviour (default
-        CANCEL_WITH_BLOCK).
+        CANCEL_WITH_BLOCK). ``options={"group_id": n}`` tags the legs ``mcl-<n>-<i>``.
 
         Raises GatewayNotStartedError if no contract_resolver has been wired.
         """
         oca_type = (options or {}).get("oca_type", OcaType.CANCEL_WITH_BLOCK)
         native = await self._resolve_native(target)
         orders = [_leg_to_order(leg) for leg in spec.ordered_legs()]
-        return await self._transport.place_oca(native, orders, oca_type)
+        tags = _link_tags(options, len(orders))
+        if tags is None:
+            return await self._transport.place_oca(native, orders, oca_type)
+        return await self._transport.place_oca(native, orders, oca_type, link_tags=tags)
 
     async def place_oca(
         self,

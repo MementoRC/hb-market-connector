@@ -93,6 +93,8 @@ class CoinbaseGateway(
         """Gracefully close WebSocket and REST connections."""
         if not self._started:
             return
+        # Clear readiness first so in-flight paginated requests fail the ready check
+        # (GatewayNotStartedError) instead of using a closing REST client.
+        self._started = False
         await self._ws.disconnect()
         await self._rest.close()
-        self._started = False

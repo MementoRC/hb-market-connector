@@ -133,7 +133,11 @@ class LegLookupMixin:
         self: Any, target: str, *, group: str | None = None
     ) -> Sequence[LegSnapshot]:
         """Open link-tagged orders on ``target``; ``group`` keeps only that ``group_id``."""
-        legs = [_snapshot(o) for o in await self._scan_orders(target, order_status=_OPEN_STATUS)]
+        # EDIT_QUEUED maps to OrderState.OPEN but must be requested alone (see _ACTIVE_STATUSES).
+        orders: list[Order] = []
+        for status in (_OPEN_STATUS, _EDIT_QUEUED):
+            orders.extend(await self._scan_orders(target, order_status=status))
+        legs = [_snapshot(o) for o in orders]
         return [
             leg
             for leg in legs

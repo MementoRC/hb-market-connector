@@ -30,7 +30,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _CODEC = CoinbaseClientOrderIdLinkCodec()
-_MAX_TRACKED = 4096  # tracked non-terminal legs; the oldest is dropped beyond this
 _MAX_QUEUED = 1024  # per async subscriber backlog before superseded fills are coalesced
 _TERMINAL = frozenset(
     {
@@ -85,7 +84,8 @@ class _LegFillHub:
         else:
             self.legs.pop(client_order_id, None)
             self.legs[client_order_id] = _Leg(exchange_id)
-        while len(self.legs) > _MAX_TRACKED:
+        cap = self.gateway._config.leg_fill_max_tracked
+        while len(self.legs) > cap:
             dropped = next(iter(self.legs))
             self.legs.pop(dropped)
             logger.warning("leg fill tracking cap reached; no longer polling %r", dropped)

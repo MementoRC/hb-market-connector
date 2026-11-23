@@ -50,6 +50,24 @@ def test_nonpositive_poll_interval_rejected(bad: float) -> None:
         CoinbaseConfig(api_key="k", secret_key="s", leg_fill_poll_interval=bad)
 
 
+@pytest.mark.parametrize("bad", [0, -1])
+def test_nonpositive_max_tracked_rejected(bad: int) -> None:
+    with pytest.raises(ValidationError):
+        CoinbaseConfig(api_key="k", secret_key="s", leg_fill_max_tracked=bad)
+
+
+def test_max_tracked_defaults_to_4096() -> None:
+    assert CoinbaseConfig(api_key="k", secret_key="s").leg_fill_max_tracked == 4096
+
+
+def test_tracking_cap_is_configurable_and_evicts_oldest() -> None:
+    cfg = CoinbaseConfig(api_key="k", secret_key="s", leg_fill_max_tracked=2)
+    hub = leg_fills._LegFillHub(type("_Gw", (), {"_config": cfg})())
+    for i in (1, 2, 3):
+        hub.track(f"c{i}", f"e{i}")
+    assert list(hub.legs) == ["c2", "c3"]
+
+
 async def test_malformed_price_does_not_lose_fill(gateway: Any, rest: _FakeRest) -> None:
     xid = await _place(gateway, _A)
     _script(rest, xid, _row("0.5", price="not-a-number"), _row("0.5", price="50000"))

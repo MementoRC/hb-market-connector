@@ -19,6 +19,7 @@ from market_connector.exceptions import (
     UnsupportedOrderError,
 )
 from market_connector.exchanges.coinbase.converters import to_exchange_pair, to_open_order
+from market_connector.exchanges.coinbase.mixins.leg_fills import track_leg_placement
 from market_connector.exchanges.coinbase.mixins.order_pages import iter_order_pages
 from market_connector.exchanges.coinbase.schemas.enums import CoinbaseOrderStatus
 from market_connector.exchanges.coinbase.schemas.rest import (
@@ -174,6 +175,7 @@ class OrdersMixin:
                 _remember_exchange_id(
                     self, client_id, exchange_id, product or str(body["product_id"])
                 )
+                track_leg_placement(self, client_id, exchange_id)
         finally:
             # Only drop our own registration: a concurrent placement with the same
             # client id may have replaced it, and its event must stay reachable.

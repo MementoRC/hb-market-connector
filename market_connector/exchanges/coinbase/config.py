@@ -11,6 +11,7 @@ class CoinbaseConfig(BaseModel):
     api_key: str
     secret_key: str
     sandbox: bool = False
+    leg_fill_poll_interval: float = 1.0  # seconds between REST polls of tracked legs (#249)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

@@ -241,7 +241,8 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin, LegLookupMixin):
         Preferred form: ``place_bracket(target, spec)`` with a BRACKET ``LinkedOrderSpec``; one
         or two exits. The legacy per-leg form ``(ref, entry, take_profit, stop_loss)`` still
         works but emits a DeprecationWarning. With a spec, ``options={"group_id": n}`` tags
-        the legs ``mcl-<n>-<i>`` in ``ordered_legs()`` order.
+        the legs ``mcl-<n>-<i>`` in ``ordered_legs()`` order. ``group_id`` must be unique per live
+        group (the caller allocates it; concurrent groups sharing one are indistinguishable).
 
         Raises GatewayNotStartedError if no contract_resolver has been wired.
         """
@@ -282,7 +283,9 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin, LegLookupMixin):
         """Place an OCO ``LinkedOrderSpec`` as one IB OCA group, legs in ``ordered_legs()`` order.
 
         ``options={"oca_type": OcaType.X}`` selects IB's OCA behaviour (default
-        CANCEL_WITH_BLOCK). ``options={"group_id": n}`` tags the legs ``mcl-<n>-<i>``.
+        CANCEL_WITH_BLOCK). ``options={"group_id": n}`` tags the legs ``mcl-<n>-<i>``;
+        ``group_id`` must be unique per live group (the caller allocates it; concurrent groups
+        sharing one are indistinguishable).
 
         Raises GatewayNotStartedError if no contract_resolver has been wired.
         """

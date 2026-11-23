@@ -264,9 +264,14 @@ class TestGetLegByLinkTag:
 
 class TestGetLegArguments:
     async def test_neither_key_is_none_not_an_error(self) -> None:
-        gateway, _ = _build([_trade(1)])
+        gateway, ib = _build([_trade(1)])
 
         assert await gateway.get_leg(SYMBOL) is None
+        assert await gateway.get_leg(SYMBOL, client_order_id="", link_tag="") is None
+        ib.reqCompletedOrdersAsync.assert_not_awaited()
+        ib.reqCompletedOrdersAsync.assert_not_called()
+        ib.openTrades.assert_not_called()
+        ib.reqAllOpenOrdersAsync.assert_not_called()
 
     async def test_filled_is_decimal_not_float(self) -> None:
         gateway, _ = _build([_trade(1, filled=0.5)])

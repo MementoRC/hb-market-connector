@@ -181,11 +181,31 @@ class TestGetLegByClientOrderId:
         assert (snap.link_tag, snap.group_id) == (None, None)
 
 
+def _build_live(open_trades: list[Any], completed: list[Any]) -> tuple[IbGatewayGateway, MagicMock]:
+    """Like ``_build`` but with real open-order/status events and handlers attached."""
+    from ib_async import Event  # noqa: PLC0415
+
+    gateway, ib = _build(open_trades, completed)
+    ib.openOrderEvent = Event("openOrderEvent")
+    ib.orderStatusEvent = Event("orderStatusEvent")
+    gateway._transport._attach_handlers()
+    return gateway, ib
+
+
+def _completed_live(perm_id: int, *, status: str, filled: float) -> SimpleNamespace:
+    """Live shape of a completed trade: orderId=0, clientId=0, no fills, empty orderRef."""
+    return SimpleNamespace(
+        contract=SimpleNamespace(symbol=SYMBOL, conId=1),
+        order=SimpleNamespace(orderId=0, clientId=0, permId=perm_id, orderRef="", account="DU1"),
+        orderStatus=SimpleNamespace(status=status, filled=filled, avgFillPrice=0.0),
+        fills=[],
+    )
+
+
 class TestGetLegCompletedFallback:
     async def test_falls_back_to_completed_orders_api_only(self) -> None:
-        gateway, ib = _build(
-            [_trade(1)], [_trade(20, ref=_tag(7, 0), status="Filled", filled=1.0, perm_id=55)]
-        )
+        gateway, ib = _build_live([_trade(1)], [_completed_live(55, status="Filled", filled=1.0)])
+        ib.openOrderEvent.emit(_trade(20, ref=_tag(7, 0), perm_id=55))
 
         snap = await gateway.get_leg(SYMBOL, client_order_id="20")
 
@@ -196,10 +216,11 @@ class TestGetLegCompletedFallback:
             _D(1),
             "55",
         )
-        assert (snap.link_tag, snap.group_id) == (_tag(7, 0), "7")
+        assert snap.client_order_id == "20"
 
     async def test_completed_cancelled_is_canceled(self) -> None:
-        gateway, _ = _build([], [_trade(21, status="Cancelled", filled=0.1)])
+        gateway, ib = _build_live([], [_completed_live(66, status="Cancelled", filled=0.1)])
+        ib.orderStatusEvent.emit(_trade(21, perm_id=66))
 
         snap = await gateway.get_leg(SYMBOL, client_order_id="21")
 

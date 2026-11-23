@@ -223,7 +223,7 @@ FEE_TOPIC = "fee"
 
 # Upper bound on remembered execution ids (fills and fees each); oldest evicted first.
 _MAX_TRACKED_EXECUTIONS = 10_000
-
+_MAX_TRACKED_PERM_IDS = 4096
 # Depth rows requested per side (reqMktDepth numRows); the own book is truncated to this.
 _DEPTH_ROWS = 10
 
@@ -695,6 +695,9 @@ class IbGatewayTransport:
         # Fill de-duplication: execId base (final ".NN" removed) -> last full execId.
         self._seen_fills: OrderedDict[str, str] = OrderedDict()
         self._seen_fees: OrderedDict[str, None] = OrderedDict()
+        # str(orderId) -> permId for this client's orders, recorded while open (#250). Completed
+        # orders carry orderId=0/clientId=0, so only the permId can find them. In-process only.
+        self._perm_ids: OrderedDict[str, int] = OrderedDict()
         # Reconnect supervisor state.
         self._handlers_attached: bool = False
         self._closing: bool = False
@@ -901,6 +904,8 @@ class IbGatewayTransport:
         self._ib.disconnectedEvent += self._on_disconnected
         self._ib.execDetailsEvent += self._on_exec_details
         self._ib.commissionReportEvent += self._on_commission_report
+        self._ib.openOrderEvent += self._record_perm_id
+        self._ib.orderStatusEvent += self._record_perm_id
         self._handlers_attached = True
 
     def _detach_handlers(self) -> None:
@@ -910,15 +915,30 @@ class IbGatewayTransport:
         self._ib.disconnectedEvent -= self._on_disconnected
         self._ib.execDetailsEvent -= self._on_exec_details
         self._ib.commissionReportEvent -= self._on_commission_report
+        self._ib.openOrderEvent -= self._record_perm_id
+        self._ib.orderStatusEvent -= self._record_perm_id
         self._handlers_attached = False
 
     @staticmethod
-    def _remember(seen: OrderedDict[str, Any], key: str, value: Any) -> None:
-        """Record *key* as the newest entry, evicting the oldest beyond the cap."""
+    def _remember(
+        seen: OrderedDict[str, Any], key: str, value: Any, cap: int | None = None
+    ) -> None:
+        """Record *key* as the newest entry, evicting the oldest beyond *cap*."""
+        limit = _MAX_TRACKED_EXECUTIONS if cap is None else cap
         seen[key] = value
         seen.move_to_end(key)
-        while len(seen) > _MAX_TRACKED_EXECUTIONS:
+        while len(seen) > limit:
             seen.popitem(last=False)
+
+    def _record_perm_id(self, trade: Any) -> None:
+        """openOrderEvent/orderStatusEvent handler: remember this client's orderId -> permId."""
+        order = trade.order
+        if order.clientId == self._spec.client_id and order.permId:
+            self._remember(self._perm_ids, str(order.orderId), order.permId, _MAX_TRACKED_PERM_IDS)
+
+    def perm_id_for(self, client_order_id: str) -> int | None:
+        """The permId recorded for ``client_order_id`` while it was open, else ``None``."""
+        return self._perm_ids.get(client_order_id)
 
     def _on_exec_details(self, _trade: Any, fill: Any) -> None:
         """IB.execDetailsEvent handler: publish the live fill immediately."""

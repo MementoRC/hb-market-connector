@@ -9,6 +9,7 @@ is still found by ``get_leg`` (``link_tag``/``group_id`` ``None``) and excluded 
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -124,9 +125,18 @@ class LegLookupMixin:
         found = _first(open_trades, scoped)
         if found is not None:
             return found
-        # Unverified live (#250, see PR body): completed orders may report clientId 0, which
-        # would make the by-id clientId match above miss them; whether apiOnly=True includes
-        # other clients' orders is likewise unverified. Needs a live IB Gateway probe.
+        # Live probe (#250, IB paper Gateway): completed orders carry orderId=0/clientId=0, so
+        # they are matched by the permId recorded while the order was open (in-process only).
+        # apiOnly=True returned other clients' completed orders identically to apiOnly=False
+        # (4/4 trades). orderRef survival on completed orders is still unverified.
+        if client_order_id:
+            perm = transport.perm_id_for(client_order_id)
+
+            def match_perm(t: Any) -> bool:
+                return perm is not None and t.order.permId == perm and _in_scope(t, native, account)
+
+            found = _first(await transport.completed_trades(), match_perm)
+            return None if found is None else replace(found, client_order_id=client_order_id)
         return _first(await transport.completed_trades(), scoped)
 
     async def list_open_legs(

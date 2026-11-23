@@ -1,6 +1,6 @@
 """Coinbase Advanced Trade connector configuration with sandbox URL switching."""
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 class CoinbaseConfig(BaseModel):
@@ -11,7 +11,8 @@ class CoinbaseConfig(BaseModel):
     api_key: str
     secret_key: str
     sandbox: bool = False
-    leg_fill_poll_interval: float = 1.0  # seconds between REST polls of tracked legs (#249)
+    # seconds between REST polls of tracked legs (#249); must be positive
+    leg_fill_poll_interval: float = Field(default=1.0, gt=0)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

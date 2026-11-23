@@ -31,6 +31,7 @@ logger = get_logger(__name__)
 
 _CODEC = CoinbaseClientOrderIdLinkCodec()
 _MAX_TRACKED = 4096  # tracked non-terminal legs; the oldest is dropped beyond this
+_MAX_QUEUED = 1024  # per async subscriber backlog before superseded fills are coalesced
 _TERMINAL = frozenset(
     {
         CoinbaseOrderStatus.FILLED,
@@ -54,7 +55,9 @@ class _Subscriber:
 
     def __init__(self, callback: Callable[[LegFill], Awaitable[None] | None]) -> None:
         self.callback = callback
-        self.is_async = inspect.iscoroutinefunction(callback)
+        self.is_async = inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(
+            getattr(callback, "__call__", None)  # noqa: B004 - callable object, async __call__
+        )
         self.queue: deque[LegFill] = deque()
         self.task: asyncio.Task[None] | None = None
         self.closed = False
@@ -68,18 +71,28 @@ class _LegFillHub:
         self.subscribers: list[_Subscriber] = []
         self.legs: dict[str, _Leg] = {}  # client_order_id -> non-terminal leg
         self.poll_task: asyncio.Task[None] | None = None
+        self.orphans: set[asyncio.Task[None]] = set()  # drain tasks of unsubscribed subscribers
+        self.stopped = False  # set by shutdown; cleared by resume
 
     # -- tracking and polling ------------------------------------------------
 
     def track(self, client_order_id: str, exchange_id: str) -> None:
-        self.legs.pop(client_order_id, None)
-        self.legs[client_order_id] = _Leg(exchange_id)
+        existing = self.legs.get(client_order_id)
+        if existing is not None and existing.exchange_id == exchange_id:
+            # Same order re-registered: keep its cumulative so no fill is re-emitted.
+            self.legs.pop(client_order_id)
+            self.legs[client_order_id] = existing
+        else:
+            self.legs.pop(client_order_id, None)
+            self.legs[client_order_id] = _Leg(exchange_id)
         while len(self.legs) > _MAX_TRACKED:
-            self.legs.pop(next(iter(self.legs)))
+            dropped = next(iter(self.legs))
+            self.legs.pop(dropped)
+            logger.warning("leg fill tracking cap reached; no longer polling %r", dropped)
         self.ensure_polling()
 
     def ensure_polling(self) -> None:
-        if self.subscribers and self.legs and self.poll_task is None:
+        if not self.stopped and self.subscribers and self.legs and self.poll_task is None:
             self.poll_task = asyncio.ensure_future(self._poll_loop())
 
     async def _poll_loop(self) -> None:
@@ -99,13 +112,16 @@ class _LegFillHub:
             )
             order = Order.model_validate(response.raw["order"])
             cumulative = Decimal(order.filled_size)
-            if cumulative > leg.cumulative:
+            if cumulative > leg.cumulative and self.legs.get(cid) is leg:
+                # Convert the price first: a malformed value must not advance the
+                # cumulative, or the fill would be deduped away on the next valid poll.
+                price = Decimal(order.average_filled_price)
                 leg.cumulative = cumulative
                 self._emit(
                     LegFill(
                         client_order_id=cid,
                         cumulative_filled=cumulative,
-                        last_price=Decimal(order.average_filled_price),
+                        last_price=price,
                         timestamp=time.time(),
                         fill_id=None,
                     )
@@ -123,10 +139,33 @@ class _LegFillHub:
         for sub in list(self.subscribers):
             if sub.is_async:
                 sub.queue.append(fill)
+                self._bound_queue(sub)
                 if sub.task is None:
                     sub.task = asyncio.ensure_future(self._drain(sub))
             else:
                 self._call_sync(sub, fill)
+
+    @staticmethod
+    def _bound_queue(sub: _Subscriber) -> None:
+        """Cap a stalled subscriber's backlog by coalescing superseded fills.
+
+        ``cumulative_filled`` is running, so a queued fill is superseded by a later one
+        for the same client order id; only such superseded entries are dropped, oldest
+        first. The newest fill of every leg is always kept, which bounds the queue by
+        ``_MAX_QUEUED`` plus the number of tracked legs.
+        """
+        while len(sub.queue) > _MAX_QUEUED:
+            seen: set[str] = set()
+            victim = None
+            for idx in range(len(sub.queue) - 1, -1, -1):
+                cid = sub.queue[idx].client_order_id
+                if cid in seen:
+                    victim = idx
+                    break
+                seen.add(cid)
+            if victim is None:
+                return
+            del sub.queue[victim]
 
     def _call_sync(self, sub: _Subscriber, fill: LegFill) -> None:
         try:
@@ -161,12 +200,27 @@ class _LegFillHub:
             self.subscribers.remove(sub)
         sub.closed = True
         sub.queue.clear()
+        if sub.task is not None:
+            # An in-flight callback outlives the subscription; keep it for shutdown.
+            task = sub.task
+            self.orphans.add(task)
+            task.add_done_callback(self.orphans.discard)
         if not self.subscribers and self.poll_task is not None:
             self.poll_task.cancel()
             self.poll_task = None
 
+    def resume(self) -> None:
+        """Re-enable polling after a stop (gateway restart)."""
+        self.stopped = False
+        self.ensure_polling()
+
     async def shutdown(self) -> None:
-        tasks = [t for t in (self.poll_task, *(s.task for s in self.subscribers)) if t is not None]
+        self.stopped = True
+        tasks = [
+            t
+            for t in (self.poll_task, *(s.task for s in self.subscribers), *self.orphans)
+            if t is not None
+        ]
         self.poll_task = None
         for task in tasks:
             task.cancel()
@@ -194,6 +248,13 @@ async def stop_leg_fills(owner: Any) -> None:
     hub = owner.__dict__.get("_leg_fill_hub")
     if hub is not None:
         await hub.shutdown()
+
+
+def resume_leg_fills(owner: Any) -> None:
+    """Resume polling for retained subscribers and legs (gateway ``start``)."""
+    hub = owner.__dict__.get("_leg_fill_hub")
+    if hub is not None:
+        hub.resume()
 
 
 class LegFillsMixin:

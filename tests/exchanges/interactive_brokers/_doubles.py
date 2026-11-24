@@ -474,12 +474,14 @@ def make_execution(  # noqa: PLR0913
     shares: float = 10.0,
     price: float = 101.25,
     cum_qty: float = 10.0,
+    order_ref: str = "",
+    perm_id: int = 987654,
 ) -> SimpleNamespace:
     """Fake ib_async.Execution."""
     return SimpleNamespace(
         execId=exec_id,
         orderId=order_id,
-        permId=987654,
+        permId=perm_id,
         clientId=1,
         side=side,
         shares=shares,
@@ -488,6 +490,7 @@ def make_execution(  # noqa: PLR0913
         avgPrice=price,
         time=_FILL_TIME,
         acctNumber="DU123",
+        orderRef=order_ref,
     )
 
 

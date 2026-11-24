@@ -57,6 +57,7 @@ from market_connector.exchanges.interactive_brokers.linked_orders import (
     cancel_legs,
 )
 from market_connector.exchanges.interactive_brokers.mixins import (
+    LegFillsMixin,
     LegLookupMixin,
     MarketDataMixin,
     SubscriptionsMixin,
@@ -102,7 +103,7 @@ def _link_tags(options: Mapping[str, Any] | None, count: int) -> list[str] | Non
     return [_LINK_CODEC.encode(group_id, i) for i in range(count)]
 
 
-class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin, LegLookupMixin):
+class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin, LegLookupMixin, LegFillsMixin):
     """Composition root for IB integration.
 
     Conforms structurally to TransportAwareGateway (which extends ExchangeGateway).

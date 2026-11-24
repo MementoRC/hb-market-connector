@@ -265,6 +265,8 @@ class FillEvent:
     account: str
     is_correction: bool = False
     reconciled: bool = False
+    # ``Execution.orderRef`` as IB reported it; "" when absent (not guaranteed to survive, #312).
+    order_ref: str = ""
 
 
 @dataclass(frozen=True)
@@ -316,6 +318,7 @@ def _fill_event(fill: Any, *, is_correction: bool, reconciled: bool) -> FillEven
         account=ex.acctNumber,
         is_correction=is_correction,
         reconciled=reconciled,
+        order_ref=getattr(ex, "orderRef", "") or "",
     )
 
 
@@ -698,6 +701,9 @@ class IbGatewayTransport:
         # str(orderId) -> permId for this client's orders, recorded while open (#250). Completed
         # orders carry orderId=0/clientId=0, so only the permId can find them. In-process only.
         self._perm_ids: OrderedDict[str, int] = OrderedDict()
+        # This process's link-tagged ib Order objects by orderId (#249); the orderRef is the tag
+        # and permId is updated in place, so replays (orderId 0) match by permId.
+        self._tagged_orders: OrderedDict[str, Any] = OrderedDict()
         # Reconnect supervisor state.
         self._handlers_attached: bool = False
         self._closing: bool = False
@@ -935,6 +941,22 @@ class IbGatewayTransport:
         order = trade.order
         if order.clientId == self._spec.client_id and order.permId:
             self._remember(self._perm_ids, str(order.orderId), order.permId, _MAX_TRACKED_PERM_IDS)
+
+    def leg_tag_for(self, event: FillEvent) -> str | None:
+        """Link tag of the order behind *event* (#249), or ``None`` for an untagged order.
+
+        Order: the execution's own ``orderRef``; else the tag recorded at placement for its
+        orderId; else the tag of the in-process order whose recorded permId matches.
+        """
+        if event.order_ref:
+            return event.order_ref
+        order = self._tagged_orders.get(str(event.order_id)) if event.order_id else None
+        if order is None and event.perm_id:
+            # ib_async fills permId into the placed Order object in place once IB assigns it.
+            order = next(
+                (o for o in self._tagged_orders.values() if o.permId == event.perm_id), None
+            )
+        return order.orderRef if order is not None else None
 
     def perm_id_for(self, client_order_id: str) -> int | None:
         """The permId recorded for ``client_order_id`` while it was open, else ``None``."""
@@ -1332,6 +1354,10 @@ class IbGatewayTransport:
         if self.account is not None:
             ib_order.account = self.account
         trade = self._ib.placeOrder(native_contract, ib_order)
+        if ib_order.orderRef:
+            self._remember(
+                self._tagged_orders, str(trade.order.orderId), trade.order, _MAX_TRACKED_PERM_IDS
+            )
         self._handle_registry[trade.order.orderId] = OrderHandle.from_trade(
             trade, self._spec.client_id
         )

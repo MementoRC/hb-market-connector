@@ -33,7 +33,7 @@ from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpe
 from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
 from market_connector.protocols import LegSnapshot, SupportsLegLookup
 
-pytest.importorskip("ib_async")
+from ._doubles import FakeEvent
 
 OWN = 5
 OTHER = 9
@@ -183,11 +183,9 @@ class TestGetLegByClientOrderId:
 
 def _build_live(open_trades: list[Any], completed: list[Any]) -> tuple[IbGatewayGateway, MagicMock]:
     """Like ``_build`` but with real open-order/status events and handlers attached."""
-    from ib_async import Event  # noqa: PLC0415
-
     gateway, ib = _build(open_trades, completed)
-    ib.openOrderEvent = Event("openOrderEvent")
-    ib.orderStatusEvent = Event("orderStatusEvent")
+    ib.openOrderEvent = FakeEvent()
+    ib.orderStatusEvent = FakeEvent()
     gateway._transport._attach_handlers()
     return gateway, ib
 

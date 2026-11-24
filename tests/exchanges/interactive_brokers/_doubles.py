@@ -78,8 +78,6 @@ class MockIb:
     """Mock ib_async.IB instance supporting market data and historical data methods."""
 
     def __init__(self) -> None:
-        from ib_async import Event  # noqa: PLC0415
-
         self._depth_ticker = FakeTicker()
         self._cancel_mkt_depth_calls: list[object] = []
         self._tick_ticker = FakeTicker()
@@ -91,8 +89,8 @@ class MockIb:
         self.disconnectedEvent = FakeEvent()  # noqa: N815
         self.execDetailsEvent = FakeEvent()  # noqa: N815
         self.commissionReportEvent = FakeEvent()  # noqa: N815
-        self.openOrderEvent = Event("openOrderEvent")  # noqa: N815
-        self.orderStatusEvent = Event("orderStatusEvent")  # noqa: N815
+        self.openOrderEvent = FakeEvent()  # noqa: N815
+        self.orderStatusEvent = FakeEvent()  # noqa: N815
         # reqExecutionsAsync: filters received, fills returned, optional error to raise.
         self.req_executions_filters: list[object] = []
         self.executions_result: list[object] = []

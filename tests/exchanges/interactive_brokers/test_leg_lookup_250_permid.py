@@ -29,7 +29,7 @@ from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayG
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
 
-ib_async = pytest.importorskip("ib_async")
+from ._doubles import FakeEvent
 
 OWN = 5
 SYMBOL = "AAPL"
@@ -67,8 +67,8 @@ def _build(completed: list[Any]) -> tuple[IbGatewayGateway, MagicMock]:
     ib.errorEvent = MagicMock()
     ib.errorEvent.__iadd__ = MagicMock()
     ib.errorEvent.__isub__ = MagicMock()
-    ib.openOrderEvent = ib_async.Event("openOrderEvent")
-    ib.orderStatusEvent = ib_async.Event("orderStatusEvent")
+    ib.openOrderEvent = FakeEvent()
+    ib.orderStatusEvent = FakeEvent()
     with patch("market_connector.exchanges.interactive_brokers.transport.IB", return_value=ib):
         transport = IbGatewayTransport(IbConnectionSpec(client_id=OWN))
     transport._error_router._is_connected = True

@@ -143,6 +143,21 @@ local size-increment check are pending a live survey (#182).
   `since` returns fewer fills. The fee is `None` for a fill whose commission report has not arrived yet.
 - The `ExecutionFilter.time` format (`yyyymmdd-hh:mm:ss`, UTC) is pending live confirmation (#181).
 
+## Per-leg fills (LegFill)
+
+- `subscribe_leg_fills(callback)` pushes a `LegFill` per execution: `cumulative_filled` is the
+  execution's `cumQty`, `last_price` its price, `fill_id` its `execId`. It emits only when the
+  cumulative strictly increases per `client_order_id`, so corrections, `get_fills` and reconnect
+  replays emit nothing new. Sync or async callbacks; errors are logged and swallowed. A slow
+  async callback gets the newest pending fill per `client_order_id` (intermediate `fill_id`s may
+  be skipped; the cumulative supersedes them).
+- Subscribe before placing legs: fills ingested before the first subscriber are not replayed
+  (see #323).
+- `client_order_id` is the link tag, not the numeric orderId. It comes from `Execution.orderRef`,
+  else the tag recorded at placement (by orderId, then by permId). Untagged orders never emit.
+- Attribution of legs placed by a previous process depends on `orderRef` surviving onto
+  executions; this is unverified (#312/#319).
+
 ## Auction orders (MOC/LOC, MOO/LOO)
 
 STK only, MARKET or LIMIT only:

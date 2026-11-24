@@ -11,6 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Interactive Brokers `SupportsLegFills` (`subscribe_leg_fills`) via `LegFillsMixin`: `LegFill` from `execDetails` `cumQty`, keyed by link tag (`Execution.orderRef`, else the tag recorded at placement by orderId or permId); emits only on a strict cumulative increase; untagged orders never emit; `FillEvent.order_ref` added (#249)
 - Coinbase `SupportsLegLookup` (`get_leg`, `list_open_legs`) with a Coinbase status -> `OrderState` map; `get_leg` is a paginated full scan of the order listing (#250)
 - Kraken percent `TRAILING_STOP_LIMIT` via `trigger=TriggerSpec`: with a percent trail, `limit_price` is a signed fraction of the trigger level (0.02 = 2%), sent as signed percent `price2`; no longer raises `UnsupportedOrderError` (#280)
 - `trigger_level` / `limit_level` on Kraken `OrderInfo`, `OpenOrderDetail` and `LegSnapshot`: the absolute levels once a trigger has fired (`stopped`), else `None`; `limit_level` only for `*-limit` order types (#280)

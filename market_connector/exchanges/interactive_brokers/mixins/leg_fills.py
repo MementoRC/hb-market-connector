@@ -36,7 +36,9 @@ class _Subscriber:
         self.is_async = inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(
             getattr(callback, "__call__", None)  # noqa: B004 - callable object, async __call__
         )
-        self.queue: deque[LegFill] = deque()
+        # (fill, awaitable): awaitable is None for an async callback (called by the drain),
+        # or the awaitable a sync callback already returned (awaited by the drain, in order).
+        self.queue: deque[tuple[LegFill, Awaitable[None] | None]] = deque()
         self.task: asyncio.Task[None] | None = None
         self.closed = False
 
@@ -87,30 +89,26 @@ class _LegFillHub:
     def _emit(self, fill: LegFill) -> None:
         for sub in list(self.subscribers):
             if sub.is_async:
-                sub.queue.append(fill)
-                if sub.task is None:
-                    sub.task = asyncio.ensure_future(self._drain(sub))
+                self._enqueue(sub, fill, None)
             else:
                 try:
                     result = sub.callback(fill)
                     if inspect.isawaitable(result):
-                        asyncio.ensure_future(self._await_logged(result, fill))  # noqa: RUF006
+                        self._enqueue(sub, fill, result)
                 except Exception:
                     logger.exception("leg fill callback failed for %r", fill.client_order_id)
 
-    @staticmethod
-    async def _await_logged(awaitable: Awaitable[None], fill: LegFill) -> None:
-        try:
-            await awaitable
-        except Exception:
-            logger.exception("leg fill callback failed for %r", fill.client_order_id)
+    def _enqueue(self, sub: _Subscriber, fill: LegFill, awaitable: Awaitable[None] | None) -> None:
+        sub.queue.append((fill, awaitable))
+        if sub.task is None:
+            sub.task = asyncio.ensure_future(self._drain(sub))
 
     async def _drain(self, sub: _Subscriber) -> None:
         try:
             while sub.queue and not sub.closed:
-                fill = sub.queue.popleft()
+                fill, pending = sub.queue.popleft()
                 try:
-                    await sub.callback(fill)  # type: ignore[misc]
+                    await (pending if pending is not None else sub.callback(fill))  # type: ignore[misc]
                 except Exception:
                     logger.exception("leg fill callback failed for %r", fill.client_order_id)
         finally:
@@ -120,6 +118,9 @@ class _LegFillHub:
         if sub in self.subscribers:
             self.subscribers.remove(sub)
         sub.closed = True
+        for _, pending in sub.queue:
+            if inspect.iscoroutine(pending):
+                pending.close()  # never awaited: avoid a "never awaited" warning
         sub.queue.clear()
         if not self.subscribers:
             self.detach()

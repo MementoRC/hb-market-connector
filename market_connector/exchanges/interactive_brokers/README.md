@@ -157,6 +157,11 @@ local size-increment check are pending a live survey (#182).
   else the tag recorded at placement (by orderId, then by permId). Untagged orders never emit.
 - Attribution of legs placed by a previous process depends on `orderRef` surviving onto
   executions; this is unverified (#312/#319).
+- `get_leg` / `list_open_legs` snapshot `filled = max(orderStatus.filled, observed cumQty)`: the
+  transport keeps the highest `Execution.cumQty` per permId and per orderRef (live and
+  reconcile). When that reaches the order's `totalQuantity` the state is FILLED whatever the
+  venue status (completed orders can report `filled=0`, Cancelled/Inactive; #326, #312). Nothing
+  is synthesized when no execution was observed.
 
 ## Auction orders (MOC/LOC, MOO/LOO)
 

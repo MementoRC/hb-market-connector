@@ -18,6 +18,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- IB `get_leg` / `list_open_legs` `filled` falls back to the highest observed execution `cumQty` (by permId or orderRef) and reports FILLED when it reaches `totalQuantity`, fixing completed orders that report `filled=0` (#326)
 - Coinbase `cancel_order` now sends the exchange order id to batch_cancel (map recorded by `place_order`, `get_order_by_client_order_id` fallback; `OrderNotFoundError` if unresolvable) (#300)
 
 ## [0.12.0] - 2026-11-21

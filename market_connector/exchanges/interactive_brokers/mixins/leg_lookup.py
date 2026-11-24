@@ -13,6 +13,8 @@ from dataclasses import replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+from data_type_primitives import OrderState
+
 from market_connector.exchanges.interactive_brokers.exceptions import OpenOrdersSyncError
 from market_connector.exchanges.interactive_brokers.linked_order_codec import IbOrderRefLinkCodec
 from market_connector.exchanges.interactive_brokers.order_state import to_order_state
@@ -25,15 +27,28 @@ _CODEC = IbOrderRefLinkCodec()
 logger = logging.getLogger(__name__)
 
 
-def _snapshot(trade: Any) -> LegSnapshot:
+def _snapshot(trade: Any, transport: Any) -> LegSnapshot:
+    """Snapshot of ``trade``; ``filled`` is max(orderStatus.filled, observed execution cumQty).
+
+    Live evidence (#326): completed orders may report ``filled == 0`` and a Cancelled/Inactive
+    status although executions filled them. Reaching ``totalQuantity`` yields FILLED.
+    """
     order, status = trade.order, trade.orderStatus
     ref = order.orderRef
     decoded = _CODEC.decode(ref) if ref else None
     filled = Decimal(str(status.filled)) if status.filled is not None else Decimal(0)
+    observed = transport.observed_cum_qty(order.permId, ref)
+    if observed is not None and observed > filled:
+        filled = observed
+    total = Decimal(str(getattr(order, "totalQuantity", 0) or 0))
+    if total > 0 and filled >= total:
+        state = OrderState.FILLED
+    else:
+        state = to_order_state(status.status, filled)
     return LegSnapshot(
         client_order_id=str(order.orderId),
         link_tag=None if decoded is None else ref,
-        state=to_order_state(status.status, filled),
+        state=state,
         filled=filled,
         venue_order_id=str(order.permId) if order.permId else None,
         group_id=None if decoded is None else str(decoded[0]),
@@ -42,8 +57,10 @@ def _snapshot(trade: Any) -> LegSnapshot:
     )
 
 
-def _first(trades: Sequence[Any], match: Callable[[Any], bool]) -> LegSnapshot | None:
-    return next((_snapshot(t) for t in trades if match(t)), None)
+def _first(
+    trades: Sequence[Any], match: Callable[[Any], bool], transport: Any
+) -> LegSnapshot | None:
+    return next((_snapshot(t, transport) for t in trades if match(t)), None)
 
 
 def _in_scope(trade: Any, native: Any, account: str | None) -> bool:
@@ -122,7 +139,7 @@ class LegLookupMixin:
         def scoped(t: Any) -> bool:
             return match(t) and _in_scope(t, native, account)
 
-        found = _first(open_trades, scoped)
+        found = _first(open_trades, scoped, transport)
         if found is not None:
             return found
         # Live probe (#250, IB paper Gateway): completed orders carry orderId=0/clientId=0, so
@@ -135,9 +152,9 @@ class LegLookupMixin:
             def match_perm(t: Any) -> bool:
                 return perm is not None and t.order.permId == perm and _in_scope(t, native, account)
 
-            found = _first(await transport.completed_trades(), match_perm)
+            found = _first(await transport.completed_trades(), match_perm, transport)
             return None if found is None else replace(found, client_order_id=client_order_id)
-        return _first(await transport.completed_trades(), scoped)
+        return _first(await transport.completed_trades(), scoped, transport)
 
     async def list_open_legs(
         self: Any, target: str, *, group: str | None = None
@@ -156,7 +173,9 @@ class LegLookupMixin:
         await _refresh_open_orders(self._transport)
         account = self._transport.account
         legs = [
-            _snapshot(t) for t in self._transport.open_trades() if _in_scope(t, native, account)
+            _snapshot(t, self._transport)
+            for t in self._transport.open_trades()
+            if _in_scope(t, native, account)
         ]
         return [
             leg

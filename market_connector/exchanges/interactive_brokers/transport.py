@@ -701,6 +701,8 @@ class IbGatewayTransport:
         # str(orderId) -> permId for this client's orders, recorded while open (#250). Completed
         # orders carry orderId=0/clientId=0, so only the permId can find them. In-process only.
         self._perm_ids: OrderedDict[str, int] = OrderedDict()
+        # Highest Execution.cumQty seen per "p:<permId>" / "r:<orderRef>" (#326), bounded.
+        self._observed_cum: OrderedDict[str, Decimal] = OrderedDict()
         # This process's link-tagged ib Order objects by orderId (#249); the orderRef is the tag
         # and permId is updated in place, so replays (orderId 0) match by permId.
         self._tagged_orders: OrderedDict[str, Any] = OrderedDict()
@@ -958,6 +960,32 @@ class IbGatewayTransport:
             )
         return order.orderRef if order is not None else None
 
+    def _observe_cum_qty(self, fill: Any) -> None:
+        """Keep the highest ``Execution.cumQty`` per permId and per orderRef (#326)."""
+        ex = fill.execution
+        cum_raw = getattr(ex, "cumQty", None)
+        if cum_raw is None:
+            return
+        cum = Decimal(str(cum_raw))
+        keys = []
+        if getattr(ex, "permId", 0):
+            keys.append(f"p:{ex.permId}")
+        if getattr(ex, "orderRef", ""):
+            keys.append(f"r:{ex.orderRef}")
+        for key in keys:
+            prior = self._observed_cum.get(key)
+            if prior is None or cum > prior:
+                self._remember(self._observed_cum, key, cum, _MAX_TRACKED_PERM_IDS)
+
+    def observed_cum_qty(self, perm_id: int | None, order_ref: str | None) -> Decimal | None:
+        """Highest execution cumQty observed for *perm_id* or *order_ref*, else ``None`` (#326)."""
+        found = [
+            self._observed_cum[key]
+            for key in (f"p:{perm_id}" if perm_id else "", f"r:{order_ref}" if order_ref else "")
+            if key in self._observed_cum
+        ]
+        return max(found) if found else None
+
     def perm_id_for(self, client_order_id: str) -> int | None:
         """The permId recorded for ``client_order_id`` while it was open, else ``None``."""
         return self._perm_ids.get(client_order_id)
@@ -988,6 +1016,7 @@ class IbGatewayTransport:
         base with a different ``.NN`` suffix is a correction and is published
         with ``is_correction=True``, but only if the suffix is strictly newer.
         """
+        self._observe_cum_qty(fill)
         exec_id: str = fill.execution.execId
         base = exec_id.rpartition(".")[0] or exec_id
         last = self._seen_fills.get(base)
@@ -1216,6 +1245,8 @@ class IbGatewayTransport:
         fills = await self._ib.reqExecutionsAsync(
             ExecutionFilter(clientId=self._spec.client_id, acctCode=self.account or "", time=stamp)
         )
+        for fill in fills:
+            self._observe_cum_qty(fill)
         result = [
             (
                 _fill_event(fill, is_correction=False, reconciled=False),

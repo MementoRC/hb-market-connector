@@ -89,6 +89,8 @@ class MockIb:
         self.disconnectedEvent = FakeEvent()  # noqa: N815
         self.execDetailsEvent = FakeEvent()  # noqa: N815
         self.commissionReportEvent = FakeEvent()  # noqa: N815
+        self.openOrderEvent = FakeEvent()  # noqa: N815
+        self.orderStatusEvent = FakeEvent()  # noqa: N815
         # reqExecutionsAsync: filters received, fills returned, optional error to raise.
         self.req_executions_filters: list[object] = []
         self.executions_result: list[object] = []

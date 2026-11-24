@@ -10,6 +10,11 @@ from market_connector.capabilities import OrderCapabilities
 from market_connector.exchanges.coinbase.endpoints import ENDPOINT_REGISTRY
 from market_connector.exchanges.coinbase.factory import coinbase_signer_factory
 from market_connector.exchanges.coinbase.mixins.accounts import AccountsMixin
+from market_connector.exchanges.coinbase.mixins.leg_fills import (
+    LegFillsMixin,
+    resume_leg_fills,
+    stop_leg_fills,
+)
 from market_connector.exchanges.coinbase.mixins.leg_lookup import LegLookupMixin
 from market_connector.exchanges.coinbase.mixins.market_data import MarketDataMixin
 from market_connector.exchanges.coinbase.mixins.orders import OrdersMixin
@@ -39,7 +44,7 @@ COINBASE_ORDER_CAPABILITIES = OrderCapabilities(
 
 
 class CoinbaseGateway(
-    LegLookupMixin, OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMixin
+    LegFillsMixin, LegLookupMixin, OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMixin
 ):
     """Coinbase Advanced Trade gateway — implements ExchangeGateway protocol."""
 
@@ -88,9 +93,11 @@ class CoinbaseGateway(
         await self._rest.request("server_time")
         await self._ws.connect()
         self._started = True
+        resume_leg_fills(self)
 
     async def stop(self) -> None:
         """Gracefully close WebSocket and REST connections."""
+        await stop_leg_fills(self)
         if not self._started:
             return
         # Clear readiness first so in-flight paginated requests fail the ready check

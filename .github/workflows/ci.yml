@@ -19,7 +19,7 @@ permissions: {}
 
 jobs:
   ci:
-    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@00e1705d5c63d4226920823a2f9184e99416aa09 # v5.1.0
+    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@247d5a6316065fbf55b37287d38c04077315c25c # fix/scorecard-v2.5.0-pin
     permissions:
       contents: read
       actions: read

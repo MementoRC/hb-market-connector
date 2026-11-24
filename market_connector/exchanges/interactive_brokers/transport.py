@@ -978,13 +978,16 @@ class IbGatewayTransport:
                 self._remember(self._observed_cum, key, cum, _MAX_TRACKED_PERM_IDS)
 
     def observed_cum_qty(self, perm_id: int | None, order_ref: str | None) -> Decimal | None:
-        """Highest execution cumQty observed for *perm_id* or *order_ref*, else ``None`` (#326)."""
-        found = [
-            self._observed_cum[key]
-            for key in (f"p:{perm_id}" if perm_id else "", f"r:{order_ref}" if order_ref else "")
-            if key in self._observed_cum
-        ]
-        return max(found) if found else None
+        """Highest execution cumQty observed, permId record first, else orderRef (#326).
+
+        The orderRef record is only a fallback: another order sharing the tag must not
+        override a permId match.
+        """
+        if perm_id and f"p:{perm_id}" in self._observed_cum:
+            return self._observed_cum[f"p:{perm_id}"]
+        if order_ref:
+            return self._observed_cum.get(f"r:{order_ref}")
+        return None
 
     def perm_id_for(self, client_order_id: str) -> int | None:
         """The permId recorded for ``client_order_id`` while it was open, else ``None``."""

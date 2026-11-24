@@ -972,21 +972,29 @@ class IbGatewayTransport:
             keys.append(f"p:{ex.permId}")
         if getattr(ex, "orderRef", ""):
             keys.append(f"r:{ex.orderRef}")
+        order_id = getattr(ex, "orderId", 0)
+        if order_id and getattr(ex, "clientId", None) == self._spec.client_id:
+            keys.append(f"o:{order_id}")
         for key in keys:
             prior = self._observed_cum.get(key)
             if prior is None or cum > prior:
                 self._remember(self._observed_cum, key, cum, _MAX_TRACKED_PERM_IDS)
 
-    def observed_cum_qty(self, perm_id: int | None, order_ref: str | None) -> Decimal | None:
-        """Highest execution cumQty observed, permId record first, else orderRef (#326).
+    def observed_cum_qty(
+        self, perm_id: int | None, order_ref: str | None, order_id: int | None = None
+    ) -> Decimal | None:
+        """Highest execution cumQty observed for an order (#326).
 
-        The orderRef record is only a fallback: another order sharing the tag must not
-        override a permId match.
+        A truthy permId is authoritative: only its record is used (a shared orderRef must
+        not attribute another order's fills). Without a permId, fall back to the orderRef;
+        without that too, to this client's non-zero orderId (completed orders report 0).
         """
-        if perm_id and f"p:{perm_id}" in self._observed_cum:
-            return self._observed_cum[f"p:{perm_id}"]
+        if perm_id:
+            return self._observed_cum.get(f"p:{perm_id}")
         if order_ref:
             return self._observed_cum.get(f"r:{order_ref}")
+        if order_id:
+            return self._observed_cum.get(f"o:{order_id}")
         return None
 
     def perm_id_for(self, client_order_id: str) -> int | None:

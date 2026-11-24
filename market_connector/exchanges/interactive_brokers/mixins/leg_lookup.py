@@ -37,7 +37,7 @@ def _snapshot(trade: Any, transport: Any) -> LegSnapshot:
     ref = order.orderRef
     decoded = _CODEC.decode(ref) if ref else None
     filled = Decimal(str(status.filled)) if status.filled is not None else Decimal(0)
-    observed = transport.observed_cum_qty(order.permId, ref)
+    observed = transport.observed_cum_qty(order.permId, ref, order.orderId)
     if observed is not None and observed > filled:
         filled = observed
     total = Decimal(str(getattr(order, "totalQuantity", 0) or 0))

@@ -15,6 +15,29 @@ if TYPE_CHECKING:
 pytest.importorskip("ib_async")
 
 
+class TestSlowAsyncSubscriberCoalesces:
+    async def test_backlog_keeps_newest_cumulative_per_tag_and_is_bounded(self) -> None:
+        gateway, ib = await _gateway()
+        oid = await _place(gateway, ib, TAG_A)
+        got: list[LegFill] = []
+        release = asyncio.Event()
+
+        async def callback(fill: LegFill) -> None:
+            await release.wait()
+            got.append(fill)
+
+        gateway.subscribe_leg_fills(callback)
+        for i in range(1, 6):
+            _exec(ib, f"e{i}", oid, i, tag=TAG_A)
+        await asyncio.sleep(0.01)
+        (sub,) = gateway.__dict__["_leg_fill_hub"].subscribers
+        assert len(sub.queue) <= 1  # one tag -> at most one pending fill
+        release.set()
+        await asyncio.sleep(0.05)
+        assert [f.cumulative_filled for f in got][-1] == 5
+        assert len(got) <= 2  # first in flight + the coalesced newest
+
+
 class TestAwaitableReturningSyncCallback:
     async def test_returned_awaitables_complete_in_fill_order(self) -> None:
         gateway, ib = await _gateway()

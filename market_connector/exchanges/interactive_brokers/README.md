@@ -148,7 +148,11 @@ local size-increment check are pending a live survey (#182).
 - `subscribe_leg_fills(callback)` pushes a `LegFill` per execution: `cumulative_filled` is the
   execution's `cumQty`, `last_price` its price, `fill_id` its `execId`. It emits only when the
   cumulative strictly increases per `client_order_id`, so corrections, `get_fills` and reconnect
-  replays emit nothing new. Sync or async callbacks; errors are logged and swallowed.
+  replays emit nothing new. Sync or async callbacks; errors are logged and swallowed. A slow
+  async callback gets the newest pending fill per `client_order_id` (intermediate `fill_id`s may
+  be skipped; the cumulative supersedes them).
+- Subscribe before placing legs: fills ingested before the first subscriber are not replayed
+  (see #323).
 - `client_order_id` is the link tag, not the numeric orderId. It comes from `Execution.orderRef`,
   else the tag recorded at placement (by orderId, then by permId). Untagged orders never emit.
 - Attribution of legs placed by a previous process depends on `orderRef` surviving onto

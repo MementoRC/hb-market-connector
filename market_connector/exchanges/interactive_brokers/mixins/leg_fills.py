@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 from market_connector.hb_compat.logging import get_logger
@@ -36,9 +36,13 @@ class _Subscriber:
         self.is_async = inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(
             getattr(callback, "__call__", None)  # noqa: B004 - callable object, async __call__
         )
-        # (fill, awaitable): awaitable is None for an async callback (called by the drain),
-        # or the awaitable a sync callback already returned (awaited by the drain, in order).
-        self.queue: deque[tuple[LegFill, Awaitable[None] | None]] = deque()
+        # key -> (fill, awaitable). For an async callback the key is the client_order_id and a
+        # newer fill replaces the pending one (cumulative: the newest supersedes), so the
+        # backlog is bounded by the number of tags. For a sync callback that returned an
+        # awaitable (already created, so not coalescable) the key is a unique counter; the
+        # drain awaits it in order.
+        self.queue: OrderedDict[Any, tuple[LegFill, Awaitable[None] | None]] = OrderedDict()
+        self.seq = 0
         self.task: asyncio.Task[None] | None = None
         self.closed = False
 
@@ -99,14 +103,18 @@ class _LegFillHub:
                     logger.exception("leg fill callback failed for %r", fill.client_order_id)
 
     def _enqueue(self, sub: _Subscriber, fill: LegFill, awaitable: Awaitable[None] | None) -> None:
-        sub.queue.append((fill, awaitable))
+        if awaitable is None:
+            sub.queue[fill.client_order_id] = (fill, None)  # replaces a pending one in place
+        else:
+            sub.seq += 1
+            sub.queue[sub.seq] = (fill, awaitable)
         if sub.task is None:
             sub.task = asyncio.ensure_future(self._drain(sub))
 
     async def _drain(self, sub: _Subscriber) -> None:
         try:
             while sub.queue and not sub.closed:
-                fill, pending = sub.queue.popleft()
+                fill, pending = sub.queue.popitem(last=False)[1]
                 try:
                     await (pending if pending is not None else sub.callback(fill))  # type: ignore[misc]
                 except Exception:
@@ -118,7 +126,7 @@ class _LegFillHub:
         if sub in self.subscribers:
             self.subscribers.remove(sub)
         sub.closed = True
-        for _, pending in sub.queue:
+        for _, pending in sub.queue.values():
             if inspect.iscoroutine(pending):
                 pending.close()  # never awaited: avoid a "never awaited" warning
         sub.queue.clear()
@@ -150,8 +158,14 @@ class LegFillsMixin:
         onto executions, which is unverified (#312/#319). The last-emitted state is
         in-process and capped (4096 tags, oldest evicted).
 
+        Subscribe before placing legs: fills ingested before the first subscriber attaches
+        are not replayed (see #323).
+
         A sync callback runs inline on the IB event loop. An async callback is driven by
-        one drain task per subscriber, in order. A callback error is logged, never
+        one drain task per subscriber, in order; under backlog a newer fill of a
+        ``client_order_id`` replaces its pending one (the cumulative supersedes it, so the
+        backlog is bounded by the number of tags, but intermediate ``fill_id`` values may be
+        skipped). A callback error is logged, never
         raised, and other subscribers are still served. Returns an idempotent unsubscribe.
         """
         hub = _hub(self)

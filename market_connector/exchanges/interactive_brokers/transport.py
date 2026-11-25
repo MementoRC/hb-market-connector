@@ -822,6 +822,11 @@ class IbGatewayTransport:
             self._attach_handlers()
             self._apply_market_data_type()
             await self._reconcile_executions()
+            if not self._ib.isConnected():
+                # The socket dropped during reconcile (e.g. in its backoff). The active
+                # supervisor/connect loop swallowed the disconnect event, so fail this
+                # attempt and let that loop retry rather than report a dead socket as up.
+                raise ConnectionError("IB socket dropped during execution reconcile")
             await self._sync_all_open_orders()
         except BaseException:
             self._detach_handlers()

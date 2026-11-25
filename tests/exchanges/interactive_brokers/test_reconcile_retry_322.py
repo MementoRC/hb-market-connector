@@ -172,6 +172,46 @@ class TestBackoff:
         assert len(backoffs) == 2
         assert backoffs == sorted(backoffs)
 
+    async def test_a_backoff_sleep_precedes_every_retry_request(self) -> None:
+        ib = FlakyIb(fail_times=2)
+        transport = _transport(ib)
+        real_sleep = asyncio.sleep
+        calls_at_sleep: list[int] = []
+
+        async def spy(delay: float, *a: Any, **kw: Any) -> None:
+            if delay >= BACKOFF_S:
+                calls_at_sleep.append(ib.calls)
+            await real_sleep(0)
+
+        with patch("asyncio.sleep", spy):
+            await transport.connect()
+
+        # One backoff after the 1st failed request and one after the 2nd, none before the 1st.
+        assert calls_at_sleep == [1, 2]
+
+
+class TestSocketDropDuringReconcile:
+    async def test_drop_during_reconcile_is_retried_not_reported_connected(self) -> None:
+        ib = FlakyIb(fail_times=0)
+        transport = _transport(ib)
+        await transport.connect()
+        ib.calls = 0
+        original = ib.reqExecutionsAsync
+
+        async def drop_once(execFilter: object = None) -> list[object]:  # noqa: N803
+            result = await original(execFilter)
+            if ib.calls == 1:
+                ib.connected = False  # socket dies mid-reconcile; supervisor swallows the event
+            return result
+
+        ib.reqExecutionsAsync = drop_once  # type: ignore[method-assign]
+        ib.simulate_drop()
+        assert transport._supervisor is not None  # noqa: SLF001
+        await transport._supervisor  # noqa: SLF001
+
+        assert ib.calls == 2
+        assert transport.is_connected
+
 
 class TestGiveUp:
     async def test_gives_up_after_max_attempts_without_raising(self) -> None:
@@ -229,6 +269,8 @@ class TestFirstAttemptSuccess:
 
         assert ib.calls == 1
         assert all(d < 5.0 for d in delays)
+        # The first backoff would be exactly the base delay; none may be requested.
+        assert 5.0 not in delays
 
     async def test_first_attempt_fills_emitted_once(self) -> None:
         ib = FlakyIb(fail_times=0)

@@ -155,7 +155,8 @@ class TestPlaceOrderErrorRace:
         self, mock_ib: MagicMock, mock_hb_order: MagicMock
     ) -> None:
         """Error router fires OrderRejectedError before statusEvent — place_order raises."""
-        trade = _make_trade(order_id=55, status="Submitted")
+        # Unacknowledged at placement (#308: an already-acked trade resolves immediately).
+        trade = _make_trade(order_id=55, status="PendingSubmit")
         mock_ib.placeOrder = MagicMock(return_value=trade)
 
         with patch(

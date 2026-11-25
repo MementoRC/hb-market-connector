@@ -1836,6 +1836,14 @@ class IbGatewayTransport:
 
         trade.statusEvent += _on_status
         try:
+            # Missed-ack window (#308): the ack or reject may predate this subscription.
+            rejection = self._error_router._unclaimed_order_rejections.pop(
+                trade.order.orderId, None
+            )
+            if rejection is not None:
+                fut.set_exception(rejection)
+            else:
+                _on_status()
             return await asyncio.wait_for(fut, timeout=self._first_status_timeout)
         finally:
             trade.statusEvent -= _on_status

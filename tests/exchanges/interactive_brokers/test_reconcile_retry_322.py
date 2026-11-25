@@ -24,7 +24,7 @@ import sys
 import types
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -32,9 +32,11 @@ import pytest
 from market_connector.exchanges.interactive_brokers.ib_gateway import IbGatewayGateway
 from market_connector.exchanges.interactive_brokers.specs import IbConnectionSpec
 from market_connector.exchanges.interactive_brokers.transport import IbGatewayTransport
-from market_connector.protocols import LegFill
 
 from ._doubles import MockIb, make_fill
+
+if TYPE_CHECKING:
+    from market_connector.protocols import LegFill
 
 _IB_PATH = "market_connector.exchanges.interactive_brokers.transport.IB"
 _LOGGER_PATH = "market_connector.exchanges.interactive_brokers.transport.logger"
@@ -122,7 +124,7 @@ class TestRetryThenSucceed:
         assert [f.cumulative_filled for f in got] == [Decimal(10)]
 
     async def test_timeout_is_retried_like_an_error(self) -> None:
-        ib = FlakyIb(fail_times=1, exc=asyncio.TimeoutError())
+        ib = FlakyIb(fail_times=1, exc=TimeoutError())
         ib.executions_result = [_missed_fill()]
         transport = _transport(ib)
         got: list[LegFill] = []

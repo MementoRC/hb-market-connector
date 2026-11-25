@@ -132,7 +132,7 @@ class TestAlreadyAcked:
         gateway = await _gateway(ib_cls())
         transport = gateway._transport
 
-        _, elapsed = await _timed(transport.place_oca(MagicMock(), [_limit(), _limit("101")]))
+        _, elapsed = await _timed(transport.place_oca(MagicMock(), [_limit(), _limit(price="101")]))
 
         assert elapsed < _FAST
 

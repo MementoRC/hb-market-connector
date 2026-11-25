@@ -519,7 +519,8 @@ class TestLifecycle:
         second = Sink()
         unsub2 = gateway.subscribe_leg_fills(second.on_fill)
         try:
-            assert await _wait_until(lambda: len(second.fills) >= 1)
+            # A late subscriber is first replayed the latest known total (#323), then live.
+            assert await _wait_until(lambda: second.cumulative[-1:] == [_D("1.0")])
         finally:
             unsub2()
 

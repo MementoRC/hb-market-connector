@@ -158,7 +158,14 @@ class SupportsLegFills(Protocol):
     def subscribe_leg_fills(
         self, callback: Callable[[LegFill], Awaitable[None] | None]
     ) -> Callable[[], None]:
-        """Register ``callback`` (sync or async); returns an idempotent unsubscribe."""
+        """Register ``callback`` (sync or async); returns an idempotent unsubscribe.
+
+        A new subscriber receives the latest known cumulative per leg, delivered after
+        this call returns (never inline), then live fills. The replay is best-effort
+        within a bounded per-venue record (oldest legs evicted first); ``get_leg``
+        remains the catch-up for evicted legs. A live fill whose cumulative is not above
+        the replayed value is not re-emitted to that subscriber.
+        """
         ...
 
 

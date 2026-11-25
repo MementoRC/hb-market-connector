@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from market_connector.exchanges.kraken.mixins.leg_lookup import link_tag
 from market_connector.hb_compat.logging import get_logger
+from market_connector.leg_fill_hub import LegFillLedger, ReplaySubscriber, schedule_replay
 from market_connector.protocols import LegFill
 
 if TYPE_CHECKING:
@@ -24,6 +25,7 @@ _MAX_TERMINAL = 4096  # records of legs known to be fully filled (kept for trade
 _MAX_ACTIVE = 65536  # hard safety cap on records of legs not known to be terminal
 _MAX_EARLY = 1024  # unclaimed own-trades buffered for a placement that has not returned yet
 _MAX_LAST = 65536  # last emitted cumulative per order instance
+_MAX_REPLAY_LEGS = 4096  # latest fill per leg replayed to a late subscriber; oldest evicted
 
 
 def _bounded_put(table: OrderedDict[Any, Any], key: Any, value: Any, cap: int) -> None:
@@ -43,15 +45,15 @@ class _LegRecord:
     seen: set[str] = field(default_factory=set)
 
 
-class _Subscriber:
+class _Subscriber(ReplaySubscriber):
     """One subscriber; an async one drains ``pending`` (cid -> newest fill) in order."""
 
     def __init__(self, callback: Callable[[LegFill], Awaitable[None] | None]) -> None:
+        super().__init__()
         self.callback = callback
         self.is_async = inspect.iscoroutinefunction(callback)
         self.pending: OrderedDict[str, LegFill] = OrderedDict()
         self.task: asyncio.Task[None] | None = None
-        self.closed = False
 
 
 class _LegFillHub:
@@ -64,6 +66,7 @@ class _LegFillHub:
         self.early: OrderedDict[tuple[str, str], OwnTradeDetail] = OrderedDict()
         self.last: OrderedDict[str, Decimal] = OrderedDict()  # instance -> last emitted cumulative
         self.tasks: set[asyncio.Task[None]] = set()
+        self.ledger = LegFillLedger(_MAX_REPLAY_LEGS)  # latest fill per leg, replayed to joiners
 
     # -- gateway-placed legs -------------------------------------------------
 
@@ -117,11 +120,16 @@ class _LegFillHub:
         if previous is not None and fill.cumulative_filled <= previous:
             return
         _bounded_put(self.last, instance, fill.cumulative_filled, _MAX_LAST)
+        self.ledger.put(fill)  # a tag reused by a new order instance starts afresh
         for sub in list(self.subscribers):
-            if sub.is_async:
-                self._enqueue(sub, fill)
-            else:
-                self._call_sync(sub.callback, fill)
+            if sub.admit(fill):
+                self.deliver(sub, fill)
+
+    def deliver(self, sub: _Subscriber, fill: LegFill) -> None:
+        if sub.is_async:
+            self._enqueue(sub, fill)
+        else:
+            self._call_sync(sub.callback, fill)
 
     def _call_sync(
         self, callback: Callable[[LegFill], Awaitable[None] | None], fill: LegFill
@@ -214,6 +222,9 @@ class LegFillsMixin:
         receives every fill. An async callback (``async def``) is driven by one drain task per
         subscriber: fills are delivered in order and never concurrently, and under backlog a
         newer fill of a ``client_order_id`` replaces its pending one (newest per cid).
+        A new subscriber is replayed the latest known cumulative of every leg seen so far
+        (active or terminal), delivered after this call returns and best-effort within a
+        bounded record of 4096 legs; ``get_leg(...).filled`` is the catch-up for evicted legs.
         A callback error is logged, never raised. Returns an idempotent unsubscribe function;
         it discards the subscriber's pending fills (a call already in flight completes).
 
@@ -236,6 +247,7 @@ class LegFillsMixin:
         hub = _hub(self)
         sub = _Subscriber(callback)
         hub.subscribers.append(sub)
+        schedule_replay(hub.ledger, sub, hub.deliver)
         return lambda: hub.unsubscribe(sub)
 
     def _emit_leg_fill(self: Any, fill: LegFill) -> None:

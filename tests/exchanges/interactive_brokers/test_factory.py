@@ -18,9 +18,14 @@ from market_connector.protocols import TransportAwareGateway
 def mock_ib():
     """Mock ib_async.IB instance with AsyncMock for connectAsync."""
     ib = MagicMock()
-    ib.connectAsync = AsyncMock()
-    ib.disconnect = MagicMock()
     ib.isConnected = MagicMock(return_value=False)
+
+    async def _connect(*_a, **_kw):
+        ib.isConnected.return_value = True  # a successful connect leaves the socket up
+
+    ib.connectAsync = AsyncMock(side_effect=_connect)
+    ib.reqExecutionsAsync = AsyncMock(return_value=[])
+    ib.disconnect = MagicMock()
     return ib
 
 

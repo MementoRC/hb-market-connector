@@ -683,6 +683,9 @@ class IbGatewayTransport:
             on_pacing_violation=self.pacer.report_pacing_violation,
         )
         self._first_status_timeout: float = 30.0
+        # Execution reconcile: total attempts (incl. the first) and base delay, doubled per retry.
+        self._reconcile_max_attempts: int = 3
+        self._reconcile_backoff_s: float = 1.0
         self._event_bus = EventBus(name="ib-ws")
         self._subscribe_seq: int = 0
         self._subscriptions: dict[str, _ActiveSubscription] = {}
@@ -711,7 +714,8 @@ class IbGatewayTransport:
         self._closing: bool = False
         self._connecting: bool = False
         self._supervisor: asyncio.Task[None] | None = None
-        self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep  # patchable in tests
+        # patchable in tests; resolves asyncio.sleep at call time so patching it also works
+        self._sleep: Callable[[float], Awaitable[None]] = lambda delay: asyncio.sleep(delay)
         self._error_router._connection_listeners.append(self._on_router_connection)
         self._error_router._data_lost_listeners.append(self._on_data_lost)
         self._error_router._farm_listeners.append(self._on_farm_status)
@@ -819,6 +823,11 @@ class IbGatewayTransport:
             self._attach_handlers()
             self._apply_market_data_type()
             await self._reconcile_executions()
+            if not self._ib.isConnected():
+                # The socket dropped during reconcile (e.g. in its backoff). The active
+                # supervisor/connect loop swallowed the disconnect event, so fail this
+                # attempt and let that loop retry rather than report a dead socket as up.
+                raise ConnectionError("IB socket dropped during execution reconcile")
             await self._sync_all_open_orders()
         except BaseException:
             self._detach_handlers()
@@ -1058,21 +1067,50 @@ class IbGatewayTransport:
         Runs after every successful (re)connect. Fills and fees go through the
         same de-duplication as the live stream, flagged ``reconciled=True``,
         so anything already seen live is not re-emitted. Failure is logged and
-        never fails the connect.
+        never fails the connect. A failed attempt is retried with exponential
+        backoff up to ``_reconcile_max_attempts`` total attempts, then abandoned.
         """
-        try:
-            from ib_async import ExecutionFilter  # noqa: PLC0415 — lazy, ib_async is optional
+        attempts = max(1, self._reconcile_max_attempts)
+        for attempt in range(1, attempts + 1):
+            try:
+                await self._reconcile_once()
+            except ImportError as exc:
+                logger.warning(
+                    "IB execution reconcile unavailable (module missing), giving up: %r", exc
+                )
+                return
+            except Exception as exc:
+                if attempt >= attempts:
+                    logger.warning(
+                        "IB execution reconcile failed after %d attempts, giving up: %r",
+                        attempts,
+                        exc,
+                    )
+                    return
+                delay = self._reconcile_backoff_s * 2 ** (attempt - 1)
+                logger.warning(
+                    "IB execution reconcile attempt %d/%d failed: %r; retrying in %.1fs",
+                    attempt,
+                    attempts,
+                    exc,
+                    delay,
+                )
+                await self._sleep(delay)
+            else:
+                return
 
-            fills = await self._ib.reqExecutionsAsync(
-                ExecutionFilter(clientId=self._spec.client_id, acctCode=self._spec.account_id or "")
-            )
-            for fill in fills:
-                self._ingest_fill(fill, reconciled=True)
-                report = _fill_report(fill)
-                if report is not None:
-                    self._ingest_fee(fill, report, reconciled=True)
-        except Exception as exc:
-            logger.warning("IB execution reconcile failed: %s", exc)
+    async def _reconcile_once(self) -> None:
+        """One reqExecutionsAsync pass; ingests fills and fees, raises on failure."""
+        from ib_async import ExecutionFilter  # noqa: PLC0415 — lazy, ib_async is optional
+
+        fills = await self._ib.reqExecutionsAsync(
+            ExecutionFilter(clientId=self._spec.client_id, acctCode=self._spec.account_id or "")
+        )
+        for fill in fills:
+            self._ingest_fill(fill, reconciled=True)
+            report = _fill_report(fill)
+            if report is not None:
+                self._ingest_fee(fill, report, reconciled=True)
 
     async def _sync_all_open_orders(self) -> None:
         """Pull open orders of all API clients via reqAllOpenOrdersAsync.

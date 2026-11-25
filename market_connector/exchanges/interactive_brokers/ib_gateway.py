@@ -62,7 +62,10 @@ from market_connector.exchanges.interactive_brokers.mixins import (
     MarketDataMixin,
     SubscriptionsMixin,
 )
-from market_connector.exchanges.interactive_brokers.mixins.leg_fills import track_leg_fills
+from market_connector.exchanges.interactive_brokers.mixins.leg_fills import (
+    track_leg_fills,
+    untrack_leg_fills,
+)
 from market_connector.exchanges.interactive_brokers.trading_rules import IbTradingRules
 from market_connector.hb_compat.primitives import coerce_order_type, coerce_trade_type
 from market_connector.orders import HBOrder
@@ -163,6 +166,7 @@ class IbGatewayGateway(MarketDataMixin, SubscriptionsMixin, LegLookupMixin, LegF
         await self._transport.connect()
 
     async def stop(self) -> None:
+        untrack_leg_fills(self)
         await self._transport.disconnect()
 
     @property

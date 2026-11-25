@@ -237,7 +237,10 @@ class _LegFillHub:
 
 
 def _hub(owner: Any) -> _LegFillHub:
-    return owner.__dict__.setdefault("_leg_fill_hub", _LegFillHub(owner))  # type: ignore[no-any-return]
+    hub = owner.__dict__.get("_leg_fill_hub")
+    if hub is None:
+        hub = owner.__dict__["_leg_fill_hub"] = _LegFillHub(owner)
+    return hub  # type: ignore[no-any-return]
 
 
 def track_leg_placement(owner: Any, client_order_id: str, exchange_id: str) -> None:
@@ -282,7 +285,8 @@ class LegFillsMixin:
         A new subscriber is replayed the latest known cumulative of every leg seen so far,
         including legs already terminal, delivered after this call returns and best-effort
         within ``CoinbaseConfig.leg_fill_max_tracked`` legs; ``get_leg`` is the catch-up for
-        evicted legs.
+        evicted legs. Polling runs only while there are subscribers, so a fill that occurs
+        while there are none is observed only by the first poll after a subscribe.
 
         A sync callback runs inline on the poll task and receives every fill. An async
         callback is driven by one drain task per subscriber, in order, never concurrently.

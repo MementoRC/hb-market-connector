@@ -61,6 +61,12 @@ class _LegFillHub:
         if self.bus_handle is None:
             self.bus_handle = self.gateway._transport.subscribe_fills(self.on_fill)
 
+    def detach(self) -> None:
+        """Close the bus subscription so no fill is recorded until ``attach``."""
+        if self.bus_handle is not None:
+            self.bus_handle.close()
+            self.bus_handle = None
+
     def on_fill(self, event: FillEvent) -> None:
         try:
             tag = self.gateway._transport.leg_tag_for(event)
@@ -127,12 +133,22 @@ class _LegFillHub:
 
 
 def _hub(owner: Any) -> _LegFillHub:
-    return owner.__dict__.setdefault("_leg_fill_hub", _LegFillHub(owner))  # type: ignore[no-any-return]
+    hub = owner.__dict__.get("_leg_fill_hub")
+    if hub is None:
+        hub = owner.__dict__["_leg_fill_hub"] = _LegFillHub(owner)
+    return hub  # type: ignore[no-any-return]
 
 
 def track_leg_fills(owner: Any) -> None:
     """Start recording fills for late-subscriber replay (gateway ``start``)."""
     _hub(owner).attach()
+
+
+def untrack_leg_fills(owner: Any) -> None:
+    """Detach from the transport fill bus (gateway ``stop``); the ledger is kept."""
+    hub = owner.__dict__.get("_leg_fill_hub")
+    if hub is not None:
+        hub.detach()
 
 
 class LegFillsMixin:

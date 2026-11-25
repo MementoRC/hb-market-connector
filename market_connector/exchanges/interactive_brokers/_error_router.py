@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_MAX_UNCLAIMED_REJECTIONS = 64
+
 
 # IB's refusal of a fractional order size. The exact code set is pending live
 # confirmation (#182); 10243 is the code routed for now.
@@ -92,6 +94,7 @@ class _ErrorRouter:
         self._on_pacing_violation = on_pacing_violation
         self._pending_request_waiters: dict[int, Future[Any]] = {}
         self._pending_order_waiters: dict[int, Future[Any]] = {}
+        self._unclaimed_order_rejections: dict[int, IbError] = {}
         # Starts False: the transport flips it after a successful connect.
         self._is_connected: bool = False
         self._connection_listeners: list[Callable[[bool], None]] = []
@@ -190,7 +193,17 @@ class _ErrorRouter:
         exc_cls = _ERROR_TABLE.get(code)
         if exc_cls is OrderRejectedError:
             # IB protocol invariant: req_id == orderId for order-related errors.
-            self._fail_waiter(self._pending_order_waiters, req_id, exc_cls(code, msg))
+            exc = exc_cls(code, msg)
+            if req_id not in self._pending_order_waiters:
+                # No waiter yet (reject raised synchronously inside placeOrder): keep it
+                # so the first-status waiter can pick it up when it starts.
+                self._unclaimed_order_rejections[req_id] = exc
+                while len(self._unclaimed_order_rejections) > _MAX_UNCLAIMED_REJECTIONS:
+                    self._unclaimed_order_rejections.pop(
+                        next(iter(self._unclaimed_order_rejections))
+                    )
+                return
+            self._fail_waiter(self._pending_order_waiters, req_id, exc)
             return
 
         request_exc = self._request_exception(code, msg, exc_cls)

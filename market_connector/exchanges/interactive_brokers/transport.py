@@ -714,7 +714,8 @@ class IbGatewayTransport:
         self._closing: bool = False
         self._connecting: bool = False
         self._supervisor: asyncio.Task[None] | None = None
-        self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep  # patchable in tests
+        # patchable in tests; resolves asyncio.sleep at call time so patching it also works
+        self._sleep: Callable[[float], Awaitable[None]] = lambda delay: asyncio.sleep(delay)
         self._error_router._connection_listeners.append(self._on_router_connection)
         self._error_router._data_lost_listeners.append(self._on_data_lost)
         self._error_router._farm_listeners.append(self._on_farm_status)
@@ -1073,6 +1074,11 @@ class IbGatewayTransport:
         for attempt in range(1, attempts + 1):
             try:
                 await self._reconcile_once()
+            except ImportError as exc:
+                logger.warning(
+                    "IB execution reconcile unavailable (module missing), giving up: %r", exc
+                )
+                return
             except Exception as exc:
                 if attempt >= attempts:
                     logger.warning(
@@ -1089,7 +1095,7 @@ class IbGatewayTransport:
                     exc,
                     delay,
                 )
-                await asyncio.sleep(delay)
+                await self._sleep(delay)
             else:
                 return
 

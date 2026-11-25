@@ -285,6 +285,30 @@ class TestFirstAttemptSuccess:
         assert [f.cumulative_filled for f in got] == [Decimal(10)]
 
 
+class TestMissingIbAsync:
+    async def test_import_error_is_permanent_no_retry_no_sleep(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "ib_async", None)  # import raises ImportError
+        ib = FlakyIb(fail_times=0)
+        transport = _transport(ib)
+        real_sleep = asyncio.sleep
+        delays: list[float] = []
+
+        async def spy(delay: float, *a: Any, **kw: Any) -> None:
+            delays.append(delay)
+            await real_sleep(0)
+
+        with patch("asyncio.sleep", spy), patch(_LOGGER_PATH) as logger:
+            await transport.connect()
+
+        assert ib.calls == 0
+        assert not [d for d in delays if d >= BACKOFF_S]
+        assert len(_rendered(logger)) >= 1
+        assert any("giving up" in m.lower() for m in _rendered(logger))
+        assert transport.is_connected
+
+
 class TestDefaults:
     async def test_default_knobs_allow_retry_and_have_positive_backoff(self) -> None:
         with patch(_IB_PATH, return_value=MockIb()):

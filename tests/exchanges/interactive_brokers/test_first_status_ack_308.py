@@ -44,6 +44,7 @@ _TIMEOUT = 0.5  # transport first-status timeout
 _BOUND = 2.0  # outer guard: only reached if the transport timeout itself fails to fire
 _FAST = 0.3  # a correct implementation resolves well below the transport timeout
 
+
 class SyncStatusIb(MockIb):
     """Sets the trade status synchronously inside placeOrder; no statusEvent ever fires."""
 

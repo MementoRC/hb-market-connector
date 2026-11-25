@@ -519,11 +519,16 @@ class TestLifecycle:
         second = Sink()
         unsub2 = gateway.subscribe_leg_fills(second.on_fill)
         try:
-            assert await _wait_until(lambda: len(second.fills) >= 1)
+            # A late subscriber is first replayed the latest known total (#323), then live.
+            assert await _wait_until(lambda: second.cumulative[-1:] == [_D("1.0")])
+            await _quiet(3)
         finally:
             unsub2()
 
-        assert second.fills[-1].cumulative_filled == _D("1.0")
+        seen = second.cumulative
+        assert seen[0] == first.cumulative[-1]  # the replay of what the first subscriber last saw
+        assert all(a < b for a, b in zip(seen, seen[1:], strict=False))  # no duplicates
+        assert seen[-1] == _D("1.0")
 
     async def test_stop_cancels_poll_task_cleanly(
         self, gateway: CoinbaseGateway, rest: _FakeRest

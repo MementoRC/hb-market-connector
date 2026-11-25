@@ -12,11 +12,11 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 from market_connector.hb_compat.logging import get_logger
+from market_connector.leg_fill_hub import LegFillLedger, ReplaySubscriber, schedule_replay
 from market_connector.protocols import LegFill
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from decimal import Decimal
 
     from market_connector.exchanges.interactive_brokers.transport import (
         FillEvent,
@@ -28,10 +28,11 @@ logger = get_logger(__name__)
 _MAX_TRACKED_LEGS = 4096  # last-emitted cumulative per link tag; oldest evicted first
 
 
-class _Subscriber:
+class _Subscriber(ReplaySubscriber):
     """One subscriber; an async one drains ``queue`` in order via a single task."""
 
     def __init__(self, callback: Callable[[LegFill], Awaitable[None] | None]) -> None:
+        super().__init__()
         self.callback = callback
         self.is_async = inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(
             getattr(callback, "__call__", None)  # noqa: B004 - callable object, async __call__
@@ -44,7 +45,6 @@ class _Subscriber:
         self.queue: OrderedDict[Any, tuple[LegFill, Awaitable[None] | None]] = OrderedDict()
         self.seq = 0
         self.task: asyncio.Task[None] | None = None
-        self.closed = False
 
 
 class _LegFillHub:
@@ -53,14 +53,16 @@ class _LegFillHub:
     def __init__(self, gateway: Any) -> None:
         self.gateway = gateway
         self.subscribers: list[_Subscriber] = []
-        self.emitted: OrderedDict[str, Decimal] = OrderedDict()
+        self.ledger = LegFillLedger(_MAX_TRACKED_LEGS)
         self.bus_handle: SubscriptionHandle | None = None
 
     def attach(self) -> None:
+        """Track fills from now on; stays attached after the last unsubscribe."""
         if self.bus_handle is None:
             self.bus_handle = self.gateway._transport.subscribe_fills(self.on_fill)
 
     def detach(self) -> None:
+        """Close the bus subscription so no fill is recorded until ``attach``."""
         if self.bus_handle is not None:
             self.bus_handle.close()
             self.bus_handle = None
@@ -70,37 +72,35 @@ class _LegFillHub:
             tag = self.gateway._transport.leg_tag_for(event)
             if tag is None:
                 return
-            cumulative = event.cum_qty
-            previous = self.emitted.get(tag)
-            if cumulative <= 0 or (previous is not None and cumulative <= previous):
+            if event.cum_qty <= 0:
                 return
-            self.emitted[tag] = cumulative
-            self.emitted.move_to_end(tag)
-            while len(self.emitted) > _MAX_TRACKED_LEGS:
-                self.emitted.popitem(last=False)
-            self._emit(
-                LegFill(
-                    client_order_id=tag,
-                    cumulative_filled=cumulative,
-                    last_price=event.price,
-                    timestamp=event.time.timestamp(),
-                    fill_id=event.exec_id,
-                )
+            fill = LegFill(
+                client_order_id=tag,
+                cumulative_filled=event.cum_qty,
+                last_price=event.price,
+                timestamp=event.time.timestamp(),
+                fill_id=event.exec_id,
             )
+            if self.ledger.record(fill):
+                self._emit(fill)
         except Exception:
             logger.exception("leg fill conversion failed for exec %r", event.exec_id)
 
     def _emit(self, fill: LegFill) -> None:
         for sub in list(self.subscribers):
-            if sub.is_async:
-                self._enqueue(sub, fill, None)
-            else:
-                try:
-                    result = sub.callback(fill)
-                    if inspect.isawaitable(result):
-                        self._enqueue(sub, fill, result)
-                except Exception:
-                    logger.exception("leg fill callback failed for %r", fill.client_order_id)
+            if sub.admit(fill):
+                self._deliver(sub, fill)
+
+    def _deliver(self, sub: _Subscriber, fill: LegFill) -> None:
+        if sub.is_async:
+            self._enqueue(sub, fill, None)
+        else:
+            try:
+                result = sub.callback(fill)
+                if inspect.isawaitable(result):
+                    self._enqueue(sub, fill, result)
+            except Exception:
+                logger.exception("leg fill callback failed for %r", fill.client_order_id)
 
     def _enqueue(self, sub: _Subscriber, fill: LegFill, awaitable: Awaitable[None] | None) -> None:
         if awaitable is None:
@@ -130,12 +130,25 @@ class _LegFillHub:
             if inspect.iscoroutine(pending):
                 pending.close()  # never awaited: avoid a "never awaited" warning
         sub.queue.clear()
-        if not self.subscribers:
-            self.detach()
 
 
 def _hub(owner: Any) -> _LegFillHub:
-    return owner.__dict__.setdefault("_leg_fill_hub", _LegFillHub(owner))  # type: ignore[no-any-return]
+    hub = owner.__dict__.get("_leg_fill_hub")
+    if hub is None:
+        hub = owner.__dict__["_leg_fill_hub"] = _LegFillHub(owner)
+    return hub  # type: ignore[no-any-return]
+
+
+def track_leg_fills(owner: Any) -> None:
+    """Start recording fills for late-subscriber replay (gateway ``start``)."""
+    _hub(owner).attach()
+
+
+def untrack_leg_fills(owner: Any) -> None:
+    """Detach from the transport fill bus (gateway ``stop``); the ledger is kept."""
+    hub = owner.__dict__.get("_leg_fill_hub")
+    if hub is not None:
+        hub.detach()
 
 
 class LegFillsMixin:
@@ -158,8 +171,10 @@ class LegFillsMixin:
         onto executions, which is unverified (#312/#319). The last-emitted state is
         in-process and capped (4096 tags, oldest evicted).
 
-        Subscribe before placing legs: fills ingested before the first subscriber attaches
-        are not replayed (see #323).
+        A new subscriber is replayed the latest known cumulative of every leg (tracked from
+        gateway start, not from the first subscribe), delivered after this call returns and
+        best-effort within the 4096-tag record; ``get_leg`` is the catch-up for evicted
+        legs. Live fills not above the replayed value are not re-emitted to it.
 
         A sync callback runs inline on the IB event loop. An async callback is driven by
         one drain task per subscriber, in order; under backlog a newer fill of a
@@ -172,4 +187,5 @@ class LegFillsMixin:
         sub = _Subscriber(callback)
         hub.subscribers.append(sub)
         hub.attach()
+        schedule_replay(hub.ledger, sub, hub._deliver)
         return lambda: hub.unsubscribe(sub)

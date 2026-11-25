@@ -22,6 +22,7 @@ from market_connector.exchanges.coinbase.linked_order_codec import (
 from market_connector.exchanges.coinbase.schemas.enums import CoinbaseOrderStatus
 from market_connector.exchanges.coinbase.schemas.rest import Order
 from market_connector.hb_compat.logging import get_logger
+from market_connector.leg_fill_hub import LegFillLedger, ReplaySubscriber, schedule_replay
 from market_connector.protocols import LegFill
 
 if TYPE_CHECKING:
@@ -49,17 +50,17 @@ class _Leg:
     cumulative: Decimal = Decimal(0)
 
 
-class _Subscriber:
+class _Subscriber(ReplaySubscriber):
     """One subscriber; an async one drains ``queue`` in order via a single task."""
 
     def __init__(self, callback: Callable[[LegFill], Awaitable[None] | None]) -> None:
+        super().__init__()
         self.callback = callback
         self.is_async = inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(
             getattr(callback, "__call__", None)  # noqa: B004 - callable object, async __call__
         )
         self.queue: deque[LegFill] = deque()
         self.task: asyncio.Task[None] | None = None
-        self.closed = False
 
 
 class _LegFillHub:
@@ -69,6 +70,7 @@ class _LegFillHub:
         self.gateway = gateway
         self.subscribers: list[_Subscriber] = []
         self.legs: dict[str, _Leg] = {}  # client_order_id -> non-terminal leg
+        self.ledger = LegFillLedger(gateway._config.leg_fill_max_tracked)
         self.poll_task: asyncio.Task[None] | None = None
         self.orphans: set[asyncio.Task[None]] = set()  # drain tasks of unsubscribed subscribers
         self.stopped = False  # set by shutdown; cleared by resume
@@ -136,14 +138,19 @@ class _LegFillHub:
     # -- delivery ------------------------------------------------------------
 
     def _emit(self, fill: LegFill) -> None:
+        self.ledger.put(fill)  # kept after the leg leaves ``legs``, for late subscribers
         for sub in list(self.subscribers):
-            if sub.is_async:
-                sub.queue.append(fill)
-                self._bound_queue(sub)
-                if sub.task is None:
-                    sub.task = asyncio.ensure_future(self._drain(sub))
-            else:
-                self._call_sync(sub, fill)
+            if sub.admit(fill):
+                self.deliver(sub, fill)
+
+    def deliver(self, sub: _Subscriber, fill: LegFill) -> None:
+        if sub.is_async:
+            sub.queue.append(fill)
+            self._bound_queue(sub)
+            if sub.task is None:
+                sub.task = asyncio.ensure_future(self._drain(sub))
+        else:
+            self._call_sync(sub, fill)
 
     @staticmethod
     def _bound_queue(sub: _Subscriber) -> None:
@@ -230,7 +237,10 @@ class _LegFillHub:
 
 
 def _hub(owner: Any) -> _LegFillHub:
-    return owner.__dict__.setdefault("_leg_fill_hub", _LegFillHub(owner))  # type: ignore[no-any-return]
+    hub = owner.__dict__.get("_leg_fill_hub")
+    if hub is None:
+        hub = owner.__dict__["_leg_fill_hub"] = _LegFillHub(owner)
+    return hub  # type: ignore[no-any-return]
 
 
 def track_leg_placement(owner: Any, client_order_id: str, exchange_id: str) -> None:
@@ -272,6 +282,12 @@ class LegFillsMixin:
         from polling once FILLED / CANCELLED / EXPIRED / FAILED, after any final increase
         is emitted. Latency is about the poll interval until a WS user channel (#310).
 
+        A new subscriber is replayed the latest known cumulative of every leg seen so far,
+        including legs already terminal, delivered after this call returns and best-effort
+        within ``CoinbaseConfig.leg_fill_max_tracked`` legs; ``get_leg`` is the catch-up for
+        evicted legs. Polling runs only while there are subscribers, so a fill that occurs
+        while there are none is observed only by the first poll after a subscribe.
+
         A sync callback runs inline on the poll task and receives every fill. An async
         callback is driven by one drain task per subscriber, in order, never concurrently.
         A callback error is logged, never raised; a poll error is logged and retried on
@@ -281,5 +297,6 @@ class LegFillsMixin:
         hub = _hub(self)
         sub = _Subscriber(callback)
         hub.subscribers.append(sub)
+        schedule_replay(hub.ledger, sub, hub.deliver)
         hub.ensure_polling()
         return lambda: hub.unsubscribe(sub)

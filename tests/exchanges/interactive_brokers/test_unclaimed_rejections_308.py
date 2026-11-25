@@ -65,9 +65,12 @@ async def test_waiter_claims_recorded_rejection_and_cleans_up() -> None:
         _error_router=router, _first_status_timeout=0.5, _spec=SimpleNamespace(client_id=1)
     )
 
-    with pytest.raises(OrderRejectedError):
+    recorded = router._unclaimed_order_rejections[9]
+
+    with pytest.raises(OrderRejectedError) as excinfo:
         await IbGatewayTransport._wait_first_status_update(fake_self, trade)  # type: ignore[arg-type]
 
+    assert excinfo.value is recorded
     assert 9 not in router._unclaimed_order_rejections
     assert not router._pending_order_waiters
     assert trade.statusEvent.handlers == []

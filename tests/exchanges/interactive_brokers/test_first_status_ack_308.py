@@ -105,37 +105,54 @@ ACKED_IBS = [SyncStatusIb, SyncPreSubmittedIb, SyncEventIb]
 @pytest.mark.parametrize("ib_cls", ACKED_IBS)
 class TestAlreadyAcked:
     async def test_single_place_order_resolves_before_timeout(self, ib_cls: type[MockIb]) -> None:
-        gateway = await _gateway(ib_cls())
+        ib = ib_cls()
+        gateway = await _gateway(ib)
 
-        _, elapsed = await _timed(gateway.place_order(MagicMock(), _limit()))
+        handle, elapsed = await _timed(gateway.place_order(MagicMock(), _limit()))
 
         assert elapsed < _FAST
+        assert handle is not None
+        assert [handle.order_id] == [o.orderId for o in ib.placed_orders]
 
     async def test_place_bracket_resolves_before_timeout(self, ib_cls: type[MockIb]) -> None:
         ib = ib_cls()
         gateway = await _gateway(ib)
 
-        _, elapsed = await _timed(gateway.place_bracket("AAPL", _bracket()))
+        bracket, elapsed = await _timed(gateway.place_bracket("AAPL", _bracket()))
 
         assert elapsed < _FAST
         assert len(ib.placed_orders) == 3
+        assert bracket.parent is not None
+        assert bracket.take_profit is not None
+        assert bracket.stop_loss is not None
+        assert [
+            bracket.parent.order_id,
+            bracket.take_profit.order_id,
+            bracket.stop_loss.order_id,
+        ] == [o.orderId for o in ib.placed_orders]
 
     async def test_place_oco_resolves_before_timeout(self, ib_cls: type[MockIb]) -> None:
         ib = ib_cls()
         gateway = await _gateway(ib)
 
-        _, elapsed = await _timed(gateway.place_oco("AAPL", _oco()))
+        group, elapsed = await _timed(gateway.place_oco("AAPL", _oco()))
 
         assert elapsed < _FAST
         assert len(ib.placed_orders) == 2
+        assert [h.order_id for h in group.orders] == [o.orderId for o in ib.placed_orders]
 
     async def test_transport_place_oca_resolves_before_timeout(self, ib_cls: type[MockIb]) -> None:
-        gateway = await _gateway(ib_cls())
+        ib = ib_cls()
+        gateway = await _gateway(ib)
         transport = gateway._transport
 
-        _, elapsed = await _timed(transport.place_oca(MagicMock(), [_limit(), _limit(price="101")]))
+        group, elapsed = await _timed(
+            transport.place_oca(MagicMock(), [_limit(), _limit(price="101")])
+        )
 
         assert elapsed < _FAST
+        assert len(ib.placed_orders) == 2
+        assert [h.order_id for h in group.orders] == [o.orderId for o in ib.placed_orders]
 
 
 class TestSynchronousRejection:

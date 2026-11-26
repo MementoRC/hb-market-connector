@@ -151,12 +151,21 @@ local size-increment check are pending a live survey (#182).
   replays emit nothing new. Sync or async callbacks; errors are logged and swallowed. A slow
   async callback gets the newest pending fill per `client_order_id` (intermediate `fill_id`s may
   be skipped; the cumulative supersedes them).
-- Subscribe before placing legs: fills ingested before the first subscriber are not replayed
-  (see #323).
+- Late subscribers receive the latest `LegFill` for every tracked leg (not only the tags they
+  trade) on the next loop iteration after `subscribe_leg_fills` returns (#331), provided an asyncio
+  loop is running at that call (otherwise the replay is skipped and not retried); earlier
+  intermediate fills for a leg are not replayed. Fills are recorded from `start()` (or from the
+  first subscribe, if earlier) until `stop()`, and the ledger is kept across a restart; fills
+  outside that window are not replayed unless the transport re-emits them. The ledger holds 4096
+  legs; when full, the leg whose latest accepted fill is oldest is evicted and is no longer
+  replayed (`get_leg` is the catch-up; its observed-cumulative cache is also capped at 4096 keys,
+  so for a very old completed order that reports `filled=0` the snapshot can understate the fill).
 - `client_order_id` is the link tag, not the numeric orderId. It comes from `Execution.orderRef`,
   else the tag recorded at placement (by orderId, then by permId). Untagged orders never emit.
-- Attribution of legs placed by a previous process depends on `orderRef` surviving onto
-  executions; this is unverified (#312/#319).
+- Attribution of legs placed by a previous process: verified by the #319 live paper-Gateway
+  probe (2026-11-26). `orderRef` and `permId` survive a client reconnect, a read from a different
+  clientId, and a Gateway restart, on completed orders and executions.
+  Probe: `scripts/ib_probe_312.py` (evidence in #319).
 - `get_leg` / `list_open_legs` snapshot `filled = max(orderStatus.filled, observed cumQty)`: the
   transport keeps the highest `Execution.cumQty` per permId and per orderRef (live and
   reconcile). When that reaches the order's `totalQuantity` the state is FILLED whatever the

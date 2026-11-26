@@ -8,9 +8,9 @@ import asyncio
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from ib_async import IB, Execution, Fill, Forex, MarketOrder, Trade
 
@@ -68,8 +68,8 @@ def fmt_fill(f: Fill) -> str:
 
 
 async def dump_existing(ib: IB, limit: int = 10) -> tuple[list[Trade], list[Fill]]:
-    trades = await ib.reqCompletedOrdersAsync(apiOnly=True)
-    fills = await ib.reqExecutionsAsync()
+    trades = await bounded(ib.reqCompletedOrdersAsync(apiOnly=True), "reqCompletedOrders")
+    fills = await bounded(ib.reqExecutionsAsync(), "reqExecutions")
     print(f"-- reqCompletedOrders(apiOnly=True): {len(trades)} trades (last {limit})")
     for t in trades[-limit:]:
         print("  " + fmt_trade(t))
@@ -79,11 +79,35 @@ async def dump_existing(ib: IB, limit: int = 10) -> tuple[list[Trade], list[Fill
     return trades, fills
 
 
-async def place_and_track(ib: IB, args: argparse.Namespace) -> LiveState:
+async def cancel_and_wait(ib: IB, trade: Trade) -> None:
+    ib.cancelOrder(trade.order)
+    for _ in range(20):
+        await asyncio.sleep(0.5)
+        if trade.isDone():
+            break
+    print(f"[{ts()}] after cancel: status={trade.orderStatus.status}")
+    if not trade.isDone():
+        print(
+            f"[{ts()}] WARNING: order {trade.order.orderId} still active after cancel; "
+            "check and cancel it manually in the paper account"
+        )
+
+
+async def bounded(coro: Awaitable[list[Any]], what: str, timeout: float = 30) -> list[Any]:
+    """Await an IB query with a timeout; report and return [] if it never completes."""
+    try:
+        return await asyncio.wait_for(coro, timeout)
+    except TimeoutError:
+        print(f"[{ts()}] WARNING: {what} timed out after {timeout:.0f}s")
+        return []
+
+
+async def place_and_track(ib: IB, args: argparse.Namespace, account: str) -> LiveState:
     contract = make_contract(args.symbol)
     await ib.qualifyContractsAsync(contract)
     order = MarketOrder("BUY", args.qty)
     order.orderRef = args.order_ref
+    order.account = account
     order.tif = "DAY"
 
     live: LiveState = {
@@ -95,6 +119,8 @@ async def place_and_track(ib: IB, args: argparse.Namespace) -> LiveState:
     }
 
     def on_exec(trade: Trade, fill: Fill) -> None:
+        if trade.order is not order:  # ignore other orders' events
+            return
         e = fill.execution
         live["execs"].append(e)
         live["max_cum"] = max(live["max_cum"], e.cumQty)
@@ -108,6 +134,8 @@ async def place_and_track(ib: IB, args: argparse.Namespace) -> LiveState:
         )
 
     def on_status(trade: Trade) -> None:
+        if trade.order is not order:  # ignore other orders' events
+            return
         s = trade.orderStatus
         live["statuses"].append((s.status, s.filled, s.remaining))
         live["last_filled"] = s.filled
@@ -124,20 +152,23 @@ async def place_and_track(ib: IB, args: argparse.Namespace) -> LiveState:
 
     trade = ib.placeOrder(contract, order)
     print(f"[{ts()}] placed orderId={trade.order.orderId} orderRef={args.order_ref!r}")
-    deadline = time.monotonic() + 60
-    while not trade.isDone() and time.monotonic() < deadline:
-        await asyncio.sleep(0.25)
-    await asyncio.sleep(1.0)  # let trailing events arrive
-    if not trade.isDone():
-        print(f"[{ts()}] TIMEOUT: cancelling order")
-        ib.cancelOrder(trade.order)
-        for _ in range(20):
-            await asyncio.sleep(0.5)
-            if trade.isDone():
-                break
-        print(f"[{ts()}] after cancel: status={trade.orderStatus.status}")
-    ib.execDetailsEvent -= on_exec
-    ib.orderStatusEvent -= on_status
+    try:
+        deadline = time.monotonic() + 60
+        while not trade.isDone() and time.monotonic() < deadline:
+            await asyncio.sleep(0.25)
+        await asyncio.sleep(1.0)  # let trailing events arrive
+        if not trade.isDone():
+            print(f"[{ts()}] TIMEOUT: cancelling order")
+            await cancel_and_wait(ib, trade)
+    except asyncio.CancelledError:
+        # Interrupted while waiting: do not leave the DAY order working.
+        if not trade.isDone():
+            print(f"[{ts()}] INTERRUPTED: cancelling order")
+            ib.cancelOrder(trade.order)
+        raise
+    finally:
+        ib.execDetailsEvent -= on_exec
+        ib.orderStatusEvent -= on_status
     live["trade"] = trade
     live["order_id"] = trade.order.orderId
     live["perm_id"] = trade.order.permId or (live["execs"][0].permId if live["execs"] else 0)
@@ -145,11 +176,16 @@ async def place_and_track(ib: IB, args: argparse.Namespace) -> LiveState:
 
 
 def match(order_ref: str, perm_id: int, order_id: int) -> tuple[TradePred, FillPred]:
+    # permId is authoritative when known; orderRef is only the fallback when it is not.
     def m_trade(t: Trade) -> bool:
-        return t.order.orderRef == order_ref or (perm_id != 0 and t.order.permId == perm_id)
+        if perm_id != 0:
+            return t.order.permId == perm_id
+        return t.order.orderRef == order_ref
 
     def m_fill(f: Fill) -> bool:
-        return f.execution.orderRef == order_ref or (perm_id != 0 and f.execution.permId == perm_id)
+        if perm_id != 0:
+            return f.execution.permId == perm_id
+        return f.execution.orderRef == order_ref
 
     return m_trade, m_fill
 
@@ -183,14 +219,16 @@ async def main_async(args: argparse.Namespace) -> int:
         ib.disconnect()
         return 1
 
-    live = await place_and_track(ib, args)
+    live = await place_and_track(ib, args, accounts[0])
     trade = live["trade"]
     print(f"[{ts()}] live final: {fmt_trade(trade)}")
     order_id, perm_id = live["order_id"], live["perm_id"]
 
     # Same-connection reqExecutions (Q1 second half) before disconnecting.
     m_trade, m_fill = match(args.order_ref, perm_id, order_id)
-    live_req = [f for f in await ib.reqExecutionsAsync() if m_fill(f)]
+    live_req = [
+        f for f in await bounded(ib.reqExecutionsAsync(), "reqExecutions (same conn)") if m_fill(f)
+    ]
     print("-- reqExecutions (same connection), target:")
     for f in live_req:
         print("  " + fmt_fill(f))
@@ -199,8 +237,8 @@ async def main_async(args: argparse.Namespace) -> int:
     await asyncio.sleep(2)
     print(f"[{ts()}] reconnecting as NEW IB() clientId={args.client_id}")
     ib2 = await connect(args, readonly=True)
-    trades = await ib2.reqCompletedOrdersAsync(apiOnly=True)
-    fills = await ib2.reqExecutionsAsync()
+    trades = await bounded(ib2.reqCompletedOrdersAsync(apiOnly=True), "reqCompletedOrders")
+    fills = await bounded(ib2.reqExecutionsAsync(), "reqExecutions (after reconnect)")
     t_match = [t for t in trades if m_trade(t)]
     f_match = [f for f in fills if m_fill(f)]
     print(f"-- after reconnect: completed={len(trades)} executions={len(fills)}")

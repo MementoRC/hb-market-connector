@@ -81,7 +81,13 @@ class _LegFillHub:
                 timestamp=event.time.timestamp(),
                 fill_id=event.exec_id,
             )
-            if self.ledger.record(fill):
+            if event.perm_id:
+                placement_id: str | None = str(event.perm_id)
+            elif event.order_id:
+                placement_id = str(event.order_id)
+            else:
+                placement_id = None
+            if self.ledger.record(fill, placement_id=placement_id):
                 self._emit(fill)
         except Exception:
             logger.exception("leg fill conversion failed for exec %r", event.exec_id)

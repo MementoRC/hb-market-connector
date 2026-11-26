@@ -33,9 +33,24 @@ class LegFillLedger:
         self._latest: OrderedDict[str, LegFill] = OrderedDict()
 
     def record(self, fill: LegFill) -> bool:
-        """Keep ``fill`` and return True only if its cumulative strictly increases."""
+        """Keep ``fill`` and return True only if its cumulative rises; WARN if lower."""
         previous = self._latest.get(fill.client_order_id)
         if previous is not None and fill.cumulative_filled <= previous.cumulative_filled:
+            if fill.cumulative_filled < previous.cumulative_filled:
+                logger.warning(
+                    "Dropped leg fill for %s: cumulative %s is below previous %s; "
+                    "link tag likely reused across placements (unique tag per placement "
+                    "required, see #333)",
+                    fill.client_order_id,
+                    fill.cumulative_filled,
+                    previous.cumulative_filled,
+                )
+            else:
+                logger.debug(
+                    "Dropped duplicate leg fill for %s at cumulative %s",
+                    fill.client_order_id,
+                    fill.cumulative_filled,
+                )
             return False
         self.put(fill)
         return True

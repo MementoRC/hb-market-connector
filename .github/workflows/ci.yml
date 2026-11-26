@@ -19,7 +19,7 @@ permissions: {}
 
 jobs:
   ci:
-    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@b1ae948fdca0c35d8ec8fa0e432cb85cf1543b8b # v5.1.1
+    uses: Claire-s-Monster/ci-framework/.github/workflows/reusable-ci.yml@5bf949a4e26ca7fda03ac5379b1a941b2f62624a # v5.2.0
     permissions:
       contents: read
       actions: read

@@ -81,7 +81,10 @@ class _LegFillHub:
                 timestamp=event.time.timestamp(),
                 fill_id=event.exec_id,
             )
-            if self.ledger.record(fill):
+            # permId only: mixing in orderId would make one order look like two placements
+            # (permId is 0 until IB assigns it). No permId yet -> None, which never warns.
+            placement_id = str(event.perm_id) if event.perm_id else None
+            if self.ledger.record(fill, placement_id=placement_id):
                 self._emit(fill)
         except Exception:
             logger.exception("leg fill conversion failed for exec %r", event.exec_id)

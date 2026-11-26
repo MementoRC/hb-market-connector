@@ -26,18 +26,47 @@ DEFAULT_MAX_LEG_FILLS = 4096
 
 
 class LegFillLedger:
-    """Latest ``LegFill`` per ``client_order_id``; the oldest leg is evicted when full."""
+    """Latest ``LegFill`` per ``client_order_id``; the oldest leg is evicted when full.
+
+    Link tags must be unique per placement; ``placement_id`` passed to ``record`` is an opaque
+    per-placement identifier (Interactive Brokers uses permId, and passes none while permId is
+    still 0). Reuse is detected only while the tag is retained (``max_entries``); an evicted
+    tag is forgotten, which keeps memory bounded.
+    """
 
     def __init__(self, max_entries: int = DEFAULT_MAX_LEG_FILLS) -> None:
         self._max_entries = max_entries
         self._latest: OrderedDict[str, LegFill] = OrderedDict()
+        # Evicted together with its ``_latest`` entry, so it never outgrows ``max_entries``.
+        self._placements: dict[str, str] = {}
 
-    def record(self, fill: LegFill) -> bool:
-        """Keep ``fill`` and return True only if its cumulative strictly increases."""
-        previous = self._latest.get(fill.client_order_id)
+    def record(self, fill: LegFill, *, placement_id: str | None = None) -> bool:
+        """Keep ``fill``; True only if its cumulative rises. WARN once if placement_id changes."""
+        cid = fill.client_order_id
+        if placement_id is not None:
+            known = self._placements.get(cid)
+            if known is not None and known != placement_id:
+                logger.warning(
+                    "Leg fill for %r: link tag reused across placements "
+                    "(placement %r then %r); unique tag per placement required, see #333",
+                    cid,
+                    known,
+                    placement_id,
+                )
+        previous = self._latest.get(cid)
         if previous is not None and fill.cumulative_filled <= previous.cumulative_filled:
+            if placement_id is not None:
+                self._placements[cid] = placement_id
+            logger.debug(
+                "Dropped leg fill for %s at cumulative %s (previous %s)",
+                cid,
+                fill.cumulative_filled,
+                previous.cumulative_filled,
+            )
             return False
         self.put(fill)
+        if placement_id is not None and cid in self._latest:  # not if put() evicted it at once
+            self._placements[cid] = placement_id
         return True
 
     def put(self, fill: LegFill) -> None:
@@ -45,7 +74,8 @@ class LegFillLedger:
         self._latest[fill.client_order_id] = fill
         self._latest.move_to_end(fill.client_order_id)
         while len(self._latest) > self._max_entries:
-            self._latest.popitem(last=False)
+            evicted, _ = self._latest.popitem(last=False)
+            self._placements.pop(evicted, None)
 
     def latest(self) -> Iterator[LegFill]:
         return iter(list(self._latest.values()))

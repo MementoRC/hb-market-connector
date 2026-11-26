@@ -145,7 +145,8 @@ class LegLookupMixin:
         # Live probe (#250, IB paper Gateway): completed orders carry orderId=0/clientId=0, so
         # they are matched by the permId recorded while the order was open (in-process only).
         # apiOnly=True returned other clients' completed orders identically to apiOnly=False
-        # (4/4 trades). orderRef survival on completed orders is still unverified.
+        # (4/4 trades). Live probe (#319): orderRef and permId survive a client reconnect, a
+        # read from another clientId and a Gateway restart, on completed orders and executions.
         if client_order_id:
             perm = transport.perm_id_for(client_order_id)
 

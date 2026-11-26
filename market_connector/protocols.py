@@ -140,13 +140,17 @@ class LegFill:
     """One fill of a leg, with the leg's running total.
 
     Attributes:
-        client_order_id: The caller-supplied link tag (e.g. ``mcl-<group>-<leg>``), equal to
-            ``get_leg(...).client_order_id``. It is not necessarily what ``place_order``
-            returns (IB: the int ``orderId``; Kraken: the txid, or the int userref from
-            ``place_bracket``). Key fills on the tag you supplied. Only orders whose tag
-            the venue's link codec recognises emit fills. Exception: on Kraken's
-            hummingbot-core ``buy``/``sell`` path it is the core's own order id, which
-            ``buy``/``sell`` also return.
+        client_order_id: The caller-supplied link tag (e.g. ``mcl-<group>-<leg>``). On
+            Kraken and Coinbase it equals ``get_leg(...).client_order_id``; on IB the
+            snapshot's ``client_order_id`` is ``str(orderId)``, so match IB fills on
+            ``get_leg(...).link_tag`` (hb-market-connector#335). It is not what
+            ``place_order``/``place_bracket`` return (IB: an ``OrderHandle`` with the int
+            ``orderId``; Kraken: the txid ``str``, or a ``KrakenBracket`` with the int
+            userref ``entry_client_id``). Key fills on the tag you supplied. Coinbase emits
+            fills only for link-codec ids; IB and Kraken also for any other non-empty
+            ``orderRef`` / ``cl_ord_id`` (Kraken: or negative userref). Exception: on
+            Kraken's hummingbot-core ``buy``/``sell`` path it is the core's own order id,
+            which ``buy``/``sell`` also return.
         cumulative_filled: The leg's total base volume filled so far, strictly increasing
             within one placement. On Kraken and Coinbase a new placement reusing a tag
             starts a new, lower sequence; IB currently drops a lower cumulative for a
@@ -157,7 +161,8 @@ class LegFill:
         timestamp: Unix epoch seconds as a float, but the clock differs by venue. IB: venue
             execution time via ``datetime.timestamp()``. Kraken: venue trade time, except
             fills synthesised from order-status updates, which use local time. Coinbase:
-            local receive time at REST poll, up to one poll interval after execution.
+            local time a REST poll saw the fill; the delay after execution is not bounded
+            by one poll interval (polling is serial and request time and retries add).
             Not comparable across venues or with local clocks without tolerance, and not
             monotonic.
         fill_id: Venue trade id; ``None`` when there is none (always on Coinbase, and on

@@ -1,6 +1,6 @@
 """RED acceptance tests for #333 (Interactive Brokers): placement-aware reuse warning.
 
-The IB leg-fill path passes the execution's permId (orderId if permId is 0) as the ledger's
+The IB leg-fill path passes the execution's permId (None while permId is 0) as the ledger's
 ``placement_id``. Two placements reusing a tag (different permId) log one WARNING when the
 second's cumulative is dropped. A lower-cumQty execution of the SAME placement (reconcile
 replay, busted-trade correction) is dropped silently. Neither emits a ``LegFill``.
@@ -64,6 +64,22 @@ async def test_reused_tag_across_placements_warns_and_emits_nothing(
     assert TAG_A in message
     assert "1001" in message
     assert "2002" in message
+
+
+async def test_same_order_perm_id_zero_then_assigned_does_not_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gateway, ib = await _gateway()
+    oid = await _place(gateway, ib, TAG_A)
+    got: list[LegFill] = []
+    gateway.subscribe_leg_fills(got.append)
+
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER):
+        _exec_perm(ib, "e1.01", oid, 5, perm_id=0, tag=TAG_A)
+        _exec_perm(ib, "e2.01", oid, 3, perm_id=1001, tag=TAG_A)
+
+    assert [f.cumulative_filled for f in got] == [Decimal(5)]
+    assert _hub_warnings(caplog) == []
 
 
 async def test_same_placement_older_execution_drops_silently(

@@ -26,7 +26,13 @@ DEFAULT_MAX_LEG_FILLS = 4096
 
 
 class LegFillLedger:
-    """Latest ``LegFill`` per ``client_order_id``; the oldest leg is evicted when full."""
+    """Latest ``LegFill`` per ``client_order_id``; the oldest leg is evicted when full.
+
+    Link tags must be unique per placement; ``placement_id`` passed to ``record`` is an opaque
+    per-placement identifier (Interactive Brokers uses permId, and passes none while permId is
+    still 0). Reuse is detected only while the tag is retained (``max_entries``); an evicted
+    tag is forgotten, which keeps memory bounded.
+    """
 
     def __init__(self, max_entries: int = DEFAULT_MAX_LEG_FILLS) -> None:
         self._max_entries = max_entries
@@ -41,8 +47,8 @@ class LegFillLedger:
             known = self._placements.get(cid)
             if known is not None and known != placement_id:
                 logger.warning(
-                    "Leg fill for %s: link tag reused across placements "
-                    "(placement %s then %s); unique tag per placement required, see #333",
+                    "Leg fill for %r: link tag reused across placements "
+                    "(placement %r then %r); unique tag per placement required, see #333",
                     cid,
                     known,
                     placement_id,
@@ -59,7 +65,7 @@ class LegFillLedger:
             )
             return False
         self.put(fill)
-        if placement_id is not None:
+        if placement_id is not None and cid in self._latest:  # not if put() evicted it at once
             self._placements[cid] = placement_id
         return True
 

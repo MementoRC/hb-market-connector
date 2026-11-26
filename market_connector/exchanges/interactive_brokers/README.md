@@ -164,8 +164,8 @@ local size-increment check are pending a live survey (#182).
   else the tag recorded at placement (by orderId, then by permId). Untagged orders never emit.
 - Attribution of legs placed by a previous process: verified by the #319 live paper-Gateway
   probe (2026-11-26). `orderRef` and `permId` survive a client reconnect, a read from a different
-  clientId, and a Gateway restart, on completed orders and executions. The probe script is not
-  kept in this repository; the evidence is recorded in issue #319.
+  clientId, and a Gateway restart, on completed orders and executions.
+  Probe: `scripts/ib_probe_312.py` (evidence in #319).
 - `get_leg` / `list_open_legs` snapshot `filled = max(orderStatus.filled, observed cumQty)`: the
   transport keeps the highest `Execution.cumQty` per permId and per orderRef (live and
   reconcile). When that reaches the order's `totalQuantity` the state is FILLED whatever the

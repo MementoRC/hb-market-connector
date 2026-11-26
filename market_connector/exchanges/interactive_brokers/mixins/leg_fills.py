@@ -170,9 +170,10 @@ class LegFillsMixin:
         resolved from, in order: ``Execution.orderRef``; the tag recorded at placement for
         the execution's orderId; the tag of the in-process order whose permId matches
         (replays arrive with orderId 0). An untagged order never emits. Attribution of legs
-        placed by a previous process (restart) rests on ``Execution.orderRef`` surviving
-        onto executions, which is unverified (#312/#319). The last-emitted state is
-        in-process and capped (4096 tags, oldest evicted).
+        placed by a previous process (restart) was verified by the #319 live paper-Gateway
+        probe (2026-11-26): ``orderRef`` and ``permId`` survive a client reconnect, a read
+        from a different clientId, and a Gateway restart, on completed orders and executions.
+        The last-emitted state is in-process and capped (4096 tags, oldest evicted).
 
         A new subscriber is replayed the latest known cumulative of every leg (tracked from
         gateway start, not from the first subscribe), delivered after this call returns and

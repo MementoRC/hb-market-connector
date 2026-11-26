@@ -5,12 +5,13 @@ Default is --read-only (places nothing). --place sends ONE small marketable orde
 
 import argparse
 import asyncio
+import contextlib
 import os
 import sys
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Any, NamedTuple, TypedDict
 
 from ib_async import IB, Execution, Fill, Forex, MarketOrder, Trade
 
@@ -18,6 +19,12 @@ T0 = time.monotonic()
 
 TradePred = Callable[[Trade], bool]
 FillPred = Callable[[Fill], bool]
+
+# Query labels. bounded() appends a label to TIMED_OUT when that query times out.
+EXEC_SAME_CONN = "reqExecutions (same conn)"
+COMPLETED_AFTER = "reqCompletedOrders (after reconnect)"
+EXEC_AFTER = "reqExecutions (after reconnect)"
+TIMED_OUT: list[str] = []
 
 
 class LiveState(TypedDict, total=False):
@@ -29,6 +36,15 @@ class LiveState(TypedDict, total=False):
     trade: Trade
     order_id: int
     perm_id: int
+
+
+class Matchers(NamedTuple):
+    """Independent predicates: permId and orderRef are matched separately."""
+
+    trade_perm: TradePred
+    fill_perm: FillPred
+    trade_ref: TradePred
+    fill_ref: FillPred
 
 
 def ts() -> str:
@@ -99,6 +115,7 @@ async def bounded(coro: Awaitable[list[Any]], what: str, timeout: float = 30) ->
         return await asyncio.wait_for(coro, timeout)
     except TimeoutError:
         print(f"[{ts()}] WARNING: {what} timed out after {timeout:.0f}s")
+        TIMED_OUT.append(what)
         return []
 
 
@@ -165,6 +182,10 @@ async def place_and_track(ib: IB, args: argparse.Namespace, account: str) -> Liv
         if not trade.isDone():
             print(f"[{ts()}] INTERRUPTED: cancelling order")
             ib.cancelOrder(trade.order)
+            # Give the cancel request time to reach the gateway before disconnecting.
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(asyncio.sleep(1))
+        ib.disconnect()
         raise
     finally:
         ib.execDetailsEvent -= on_exec
@@ -175,30 +196,125 @@ async def place_and_track(ib: IB, args: argparse.Namespace, account: str) -> Liv
     return live
 
 
-def match(order_ref: str, perm_id: int, order_id: int) -> tuple[TradePred, FillPred]:
-    # permId is authoritative when known; orderRef is only the fallback when it is not.
-    def m_trade(t: Trade) -> bool:
-        if perm_id != 0:
-            return t.order.permId == perm_id
+def match(order_ref: str, perm_id: int) -> Matchers:
+    def trade_perm(t: Trade) -> bool:
+        return perm_id != 0 and t.order.permId == perm_id
+
+    def fill_perm(f: Fill) -> bool:
+        return perm_id != 0 and f.execution.permId == perm_id
+
+    def trade_ref(t: Trade) -> bool:
         return t.order.orderRef == order_ref
 
-    def m_fill(f: Fill) -> bool:
-        if perm_id != 0:
-            return f.execution.permId == perm_id
+    def fill_ref(f: Fill) -> bool:
         return f.execution.orderRef == order_ref
 
-    return m_trade, m_fill
+    return Matchers(trade_perm, fill_perm, trade_ref, fill_ref)
 
 
-def yn(v: bool) -> str:
-    return "YES" if v else "NO"
+def how(by_perm: bool, by_ref: bool) -> str:
+    if by_perm and by_ref:
+        return "both"
+    return "permId" if by_perm else "orderRef"
+
+
+def tagged[T](
+    items: Sequence[T], by_perm: Callable[[T], bool], by_ref: Callable[[T], bool]
+) -> list[tuple[T, str]]:
+    """Return every item matched by either predicate, tagged with how it matched."""
+    out: list[tuple[T, str]] = []
+    for item in items:
+        p, r = by_perm(item), by_ref(item)
+        if p or r:
+            out.append((item, how(p, r)))
+    return out
+
+
+def tally[T](
+    label: str, items: Sequence[T], by_perm: Callable[[T], bool], by_ref: Callable[[T], bool]
+) -> str:
+    perm = [by_perm(x) for x in items]
+    ref = [by_ref(x) for x in items]
+    n_both = sum(p and r for p, r in zip(perm, ref, strict=True))
+    return f"{label}: matched by permId: {sum(perm)}, by orderRef: {sum(ref)}, by both: {n_both}"
+
+
+def verdict(found: bool, *deps: str) -> str:
+    """YES if found; INCONCLUSIVE if not found and a dependent query timed out; else NO."""
+    if found:
+        return "YES"
+    if any(d in TIMED_OUT for d in deps):
+        return "INCONCLUSIVE"
+    return "NO"
+
+
+def print_summary(
+    ref: str,
+    live: LiveState,
+    m: Matchers,
+    same_fills: list[Fill],
+    trades: list[Trade],
+    fills: list[Fill],
+) -> None:
+    perm_id = live["perm_id"]
+    execs = live["execs"]
+    t_ref = [t for t in trades if m.trade_ref(t)]
+    f_ref = [f for f in fills if m.fill_ref(f)]
+    t_targets = tagged(trades, m.trade_perm, m.trade_ref)
+    f_targets = tagged(fills, m.fill_perm, m.fill_ref)
+    q1_live = bool(execs) and all(e.orderRef == ref for e in execs)
+    q1_req = any(m.fill_ref(f) for f in same_fills)
+    max_cum = max((f.execution.cumQty for f, _ in f_targets), default=None)
+
+    print("\n=== SUMMARY ===")
+    if TIMED_OUT:
+        print(f"TIMED OUT (results below INCONCLUSIVE): {', '.join(TIMED_OUT)}")
+    print(f"Q1 execDetails live carries orderRef: {verdict(q1_live)}")
+    print(f"Q1 reqExecutions (same conn) carries orderRef: {verdict(q1_req, EXEC_SAME_CONN)}")
+    print(
+        f"Q1 reqExecutions (after reconnect) carries orderRef: {verdict(bool(f_ref), EXEC_AFTER)}"
+    )
+    print(
+        f"Q2 completed found by orderRef: {verdict(bool(t_ref), COMPLETED_AFTER)} "
+        f"status={[t.orderStatus.status for t in t_ref]} "
+        f"filled={[t.orderStatus.filled for t in t_ref]} "
+        f"orderRef={[t.order.orderRef for t in t_ref]}"
+    )
+    if perm_id == 0:
+        perm_verdict = "INCONCLUSIVE (permId unknown)"
+    else:
+        perm_found = any(m.trade_perm(t) for t in trades)
+        perm_verdict = verdict(perm_found, COMPLETED_AFTER)
+    print(f"Q2 completed found by permId: {perm_verdict}")
+    print(tally("completed orders", trades, m.trade_perm, m.trade_ref))
+    print(tally("executions", fills, m.fill_perm, m.fill_ref))
+    print(f"Q3 open-order orderStatus.filled lagged Execution.cumQty: {verdict(live['lag_seen'])}")
+    for t, tag in t_targets:
+        o = t.order
+        print(
+            f"Q4 completed [{tag}]: orderId={o.orderId} clientId={o.clientId} "
+            f"permId={o.permId} orderRef={o.orderRef!r} "
+            f"filled={t.orderStatus.filled} status={t.orderStatus.status}"
+        )
+    for f, tag in f_targets:
+        e = f.execution
+        print(
+            f"Q4 execution [{tag}]: orderId={e.orderId} clientId={e.clientId} "
+            f"permId={e.permId} orderRef={e.orderRef!r} cumQty={e.cumQty}"
+        )
+    if not t_targets and not f_targets:
+        found = verdict(False, COMPLETED_AFTER, EXEC_AFTER)
+        print(f"Q4 target found after reconnect: {found}")
+    print(
+        f"(max cumQty after reconnect={max_cum}, live orderId={live['order_id']}, permId={perm_id})"
+    )
 
 
 async def main_async(args: argparse.Namespace) -> int:
     if not args.place:
         ib = await connect(args, readonly=True)
         print(f"accounts={ib.managedAccounts()} (read-only mode, nothing placed)")
-        await dump_existing(ib)
+        await dump_existing(ib, args.limit)
         ib.disconnect()
         return 0
 
@@ -222,68 +338,31 @@ async def main_async(args: argparse.Namespace) -> int:
     live = await place_and_track(ib, args, accounts[0])
     trade = live["trade"]
     print(f"[{ts()}] live final: {fmt_trade(trade)}")
-    order_id, perm_id = live["order_id"], live["perm_id"]
+    perm_id = live["perm_id"]
+    m = match(args.order_ref, perm_id)
 
     # Same-connection reqExecutions (Q1 second half) before disconnecting.
-    m_trade, m_fill = match(args.order_ref, perm_id, order_id)
-    live_req = [
-        f for f in await bounded(ib.reqExecutionsAsync(), "reqExecutions (same conn)") if m_fill(f)
-    ]
+    same_fills: list[Fill] = await bounded(ib.reqExecutionsAsync(), EXEC_SAME_CONN)
     print("-- reqExecutions (same connection), target:")
-    for f in live_req:
-        print("  " + fmt_fill(f))
+    for f, tag in tagged(same_fills, m.fill_perm, m.fill_ref):
+        print(f"  [{tag}] {fmt_fill(f)}")
 
     ib.disconnect()
     await asyncio.sleep(2)
     print(f"[{ts()}] reconnecting as NEW IB() clientId={args.client_id}")
     ib2 = await connect(args, readonly=True)
-    trades = await bounded(ib2.reqCompletedOrdersAsync(apiOnly=True), "reqCompletedOrders")
-    fills = await bounded(ib2.reqExecutionsAsync(), "reqExecutions (after reconnect)")
-    t_match = [t for t in trades if m_trade(t)]
-    f_match = [f for f in fills if m_fill(f)]
+    trades: list[Trade] = await bounded(ib2.reqCompletedOrdersAsync(apiOnly=True), COMPLETED_AFTER)
+    fills: list[Fill] = await bounded(ib2.reqExecutionsAsync(), EXEC_AFTER)
+    ib2.disconnect()
     print(f"-- after reconnect: completed={len(trades)} executions={len(fills)}")
     print("-- target completed order(s):")
-    for t in t_match:
-        print("  " + fmt_trade(t))
+    for t, tag in tagged(trades, m.trade_perm, m.trade_ref):
+        print(f"  [{tag}] {fmt_trade(t)}")
     print("-- target execution(s):")
-    for f in f_match:
-        print("  " + fmt_fill(f))
-    ib2.disconnect()
+    for f, tag in tagged(fills, m.fill_perm, m.fill_ref):
+        print(f"  [{tag}] {fmt_fill(f)}")
 
-    execs = live["execs"]
-    q1_live = bool(execs) and all(e.orderRef == args.order_ref for e in execs)
-    q1_req = bool(live_req) and all(f.execution.orderRef == args.order_ref for f in live_req)
-    q1_re = bool(f_match) and all(f.execution.orderRef == args.order_ref for f in f_match)
-    q2_status = [t.orderStatus.status for t in t_match]
-    q2_filled = [t.orderStatus.filled for t in t_match]
-    q2_ref = [t.order.orderRef for t in t_match]
-    max_cum = max((f.execution.cumQty for f in f_match), default=None)
-
-    print("\n=== SUMMARY ===")
-    print(f"Q1 execDetails live carries orderRef: {yn(q1_live)}")
-    print(f"Q1 reqExecutions (same conn) carries orderRef: {yn(q1_req)}")
-    print(f"Q1 reqExecutions (after reconnect) carries orderRef: {yn(q1_re)}")
-    print(
-        f"Q2 completed found: {yn(bool(t_match))} status={q2_status} "
-        f"filled={q2_filled} orderRef={q2_ref}"
-    )
-    print(f"Q3 open-order orderStatus.filled lagged Execution.cumQty: {yn(live['lag_seen'])}")
-    for t in t_match:
-        o = t.order
-        print(
-            f"Q4 completed: orderId={o.orderId} clientId={o.clientId} "
-            f"permId={o.permId} orderRef={o.orderRef!r} "
-            f"filled={t.orderStatus.filled} status={t.orderStatus.status}"
-        )
-    for f in f_match:
-        e = f.execution
-        print(
-            f"Q4 execution: orderId={e.orderId} clientId={e.clientId} "
-            f"permId={e.permId} orderRef={e.orderRef!r} cumQty={e.cumQty}"
-        )
-    if not t_match and not f_match:
-        print("Q4 nothing returned for target after reconnect")
-    print(f"(max cumQty after reconnect={max_cum}, live orderId={order_id}, permId={perm_id})")
+    print_summary(args.order_ref, live, m, same_fills, trades, fills)
     return 0
 
 
@@ -297,6 +376,7 @@ def parse_args() -> argparse.Namespace:
         "--qty", type=float, default=20000, help="IDEALPRO minimum is typically 20000 base units"
     )
     p.add_argument("--order-ref", default=f"probe312-{datetime.now():%Y%m%d%H%M%S}")
+    p.add_argument("--limit", type=int, default=10, help="rows per table in the read-only dump")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--read-only", action="store_true", help="default: place nothing")
     mode.add_argument("--place", action="store_true", help="place ONE small marketable order")

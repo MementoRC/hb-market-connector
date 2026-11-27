@@ -34,4 +34,7 @@ class CoinbaseConfig(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def ws_user_url(self) -> str:
+        # Coinbase documents no sandbox host for the authenticated user WebSocket
+        # (the sandbox is REST-only), so this is intentionally the production host
+        # regardless of ``sandbox``. Unlike ``ws_url`` it must NOT be switched.
         return "wss://advanced-trade-ws-user.coinbase.com"

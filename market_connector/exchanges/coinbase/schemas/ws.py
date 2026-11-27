@@ -53,7 +53,7 @@ class MarketTradesEvent(_FrozenBase):
 
 class UserOrder(_FrozenBase):
     order_id: str
-    client_order_id: str
+    client_order_id: str = ""  # TODO(#310 live probe): not every event may echo it
     product_id: str
     cumulative_quantity: str
     leaves_quantity: str

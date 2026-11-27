@@ -19,6 +19,7 @@ from market_connector.exchanges.coinbase.mixins.leg_lookup import LegLookupMixin
 from market_connector.exchanges.coinbase.mixins.market_data import MarketDataMixin
 from market_connector.exchanges.coinbase.mixins.orders import OrdersMixin
 from market_connector.exchanges.coinbase.mixins.subscriptions import SubscriptionsMixin
+from market_connector.exchanges.coinbase.mixins.user_orders import UserOrdersMixin
 from market_connector.exchanges.coinbase.specs import (
     COINBASE_RATE_LIMIT_SPEC,
     COINBASE_WS_SHAPE_DECODER_SPEC,
@@ -44,7 +45,13 @@ COINBASE_ORDER_CAPABILITIES = OrderCapabilities(
 
 
 class CoinbaseGateway(
-    LegFillsMixin, LegLookupMixin, OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMixin
+    LegFillsMixin,
+    LegLookupMixin,
+    OrdersMixin,
+    AccountsMixin,
+    MarketDataMixin,
+    SubscriptionsMixin,
+    UserOrdersMixin,
 ):
     """Coinbase Advanced Trade gateway — implements ExchangeGateway protocol."""
 

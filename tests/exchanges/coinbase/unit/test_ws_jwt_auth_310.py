@@ -221,6 +221,7 @@ class TestSecretValidation:
 
     def test_non_ec_pem_rejected(self) -> None:
         from cryptography.hazmat.primitives.asymmetric import rsa
+
         from market_connector.exchanges.coinbase.ws_auth import CoinbaseJwtWsAuth
 
         rsa_pem = (

@@ -19,6 +19,10 @@ from market_connector.exchanges.coinbase.mixins.leg_lookup import LegLookupMixin
 from market_connector.exchanges.coinbase.mixins.market_data import MarketDataMixin
 from market_connector.exchanges.coinbase.mixins.orders import OrdersMixin
 from market_connector.exchanges.coinbase.mixins.subscriptions import SubscriptionsMixin
+from market_connector.exchanges.coinbase.mixins.user_orders import (
+    UserOrdersMixin,
+    stop_user_orders,
+)
 from market_connector.exchanges.coinbase.specs import (
     COINBASE_RATE_LIMIT_SPEC,
     COINBASE_WS_SHAPE_DECODER_SPEC,
@@ -44,7 +48,13 @@ COINBASE_ORDER_CAPABILITIES = OrderCapabilities(
 
 
 class CoinbaseGateway(
-    LegFillsMixin, LegLookupMixin, OrdersMixin, AccountsMixin, MarketDataMixin, SubscriptionsMixin
+    LegFillsMixin,
+    LegLookupMixin,
+    OrdersMixin,
+    AccountsMixin,
+    MarketDataMixin,
+    SubscriptionsMixin,
+    UserOrdersMixin,
 ):
     """Coinbase Advanced Trade gateway — implements ExchangeGateway protocol."""
 
@@ -80,6 +90,7 @@ class CoinbaseGateway(
             reconnect_delay=1.0,
             max_reconnect_delay=60.0,
         )
+        self._user_ws: set[WsConnectorBase] = set()
         self._started = False
 
     @property
@@ -98,6 +109,7 @@ class CoinbaseGateway(
     async def stop(self) -> None:
         """Gracefully close WebSocket and REST connections."""
         await stop_leg_fills(self)
+        await stop_user_orders(self)
         if not self._started:
             return
         # Clear readiness first so in-flight paginated requests fail the ready check

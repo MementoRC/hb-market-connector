@@ -63,6 +63,17 @@ class UserOrder(_FrozenBase):
     creation_time: str
     order_side: str
     order_type: str | None = None
+    # Documented user-channel fields, kept verbatim as strings (absent on some events).
+    number_of_fills: str | None = None
+    filled_value: str | None = None
+    limit_price: str | None = None
+    stop_price: str | None = None
+    cancel_reason: str | None = None
+    time_in_force: str | None = None
+    completion_percentage: str | None = None
+    total_value_after_fees: str | None = None
+    trigger_status: str | None = None
+    product_type: str | None = None
 
 
 class UserEvent(_FrozenBase):

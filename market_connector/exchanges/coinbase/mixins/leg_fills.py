@@ -35,6 +35,7 @@ _MAX_QUEUED = 1024  # per async subscriber backlog before superseded fills are c
 _MAX_LAST = 65536  # registered order ids / last emitted cumulatives kept (as Kraken)
 _MAX_EARLY_ORDERS = 1024  # unregistered orders with buffered observations
 _MAX_EARLY_PER_ORDER = 64  # buffered observations per unregistered order
+_EARLY_TTL = 30.0  # seconds an unclaimed early observation is kept before it expires
 _TERMINAL = frozenset(
     {
         CoinbaseOrderStatus.FILLED,
@@ -76,14 +77,18 @@ class _Subscriber(ReplaySubscriber):
 class _LegFillHub:
     """Subscribers, tracked legs and the poll task of one gateway."""
 
-    def __init__(self, gateway: Any) -> None:
+    def __init__(self, gateway: Any, clock: Callable[[], float] = time.monotonic) -> None:
         self.gateway = gateway
+        self.clock = clock  # injectable, for early-buffer expiry
         self.subscribers: list[_Subscriber] = []
         self.legs: dict[str, _Leg] = {}  # client_order_id -> non-terminal leg
         self.ledger = LegFillLedger(gateway._config.leg_fill_max_tracked)
-        self.known: OrderedDict[str, None] = OrderedDict()  # registered exchange order ids
+        # registered exchange order id -> its client order id (resolves id-less updates)
+        self.known: OrderedDict[str, str] = OrderedDict()
+        self.terminal: OrderedDict[str, None] = OrderedDict()  # known ids seen terminal
         self.last: OrderedDict[str, Decimal] = OrderedDict()  # order id -> last emitted cumulative
         self.early: OrderedDict[str, list[tuple[str, Decimal, Decimal]]] = OrderedDict()
+        self.early_at: dict[str, float] = {}  # order id -> clock time of its latest observation
         self.poll_task: asyncio.Task[None] | None = None
         self.orphans: set[asyncio.Task[None]] = set()  # drain tasks of unsubscribed subscribers
         self.stopped = False  # set by shutdown; cleared by resume
@@ -99,9 +104,14 @@ class _LegFillHub:
         else:
             self.legs.pop(client_order_id, None)
             self.legs[client_order_id] = _Leg(exchange_id)
-        _bounded_put(self.known, exchange_id, None, _MAX_LAST)
+        self.known[exchange_id] = client_order_id
+        self.known.move_to_end(exchange_id)
+        self.terminal.pop(exchange_id, None)
+        self._trim_known()
+        self._expire_early()
+        self.early_at.pop(exchange_id, None)
         for cid, total, price in self.early.pop(exchange_id, []):
-            self.observe(cid, total, price, exchange_id)
+            self.observe(cid or client_order_id, total, price, exchange_id)
         cap = self.gateway._config.leg_fill_max_tracked
         while len(self.legs) > cap:
             dropped = next(iter(self.legs))
@@ -133,6 +143,9 @@ class _LegFillHub:
                 self.observe(cid, order.filled_size, order.average_filled_price, leg.exchange_id)
             if order.status in _TERMINAL and self.legs.get(cid) is leg:
                 del self.legs[cid]
+                if leg.exchange_id in self.known:
+                    self.terminal[leg.exchange_id] = None
+                    self.terminal.move_to_end(leg.exchange_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -151,15 +164,23 @@ class _LegFillHub:
         total = Decimal(str(cumulative))
         if total <= 0:
             return
+        if not cid:
+            # An update may omit its client order id: resolve it from the registration.
+            cid = self.known.get(order_id, "")
+        elif _CODEC.decode(cid) is None:
+            return  # not a gateway link id: never tracked, so never worth buffering
         if order_id not in self.known:
             # Validate before buffering so a malformed price never reaches the replay.
             entry = (cid, total, Decimal(str(price)))
+            self._expire_early()
             buffered = self.early.setdefault(order_id, [])
             self.early.move_to_end(order_id)
+            self.early_at[order_id] = self.clock()
             buffered.append(entry)
             del buffered[: max(0, len(buffered) - _MAX_EARLY_PER_ORDER)]
             while len(self.early) > _MAX_EARLY_ORDERS:
-                self.early.popitem(last=False)
+                evicted, _ = self.early.popitem(last=False)
+                self.early_at.pop(evicted, None)
             return
         previous = self.last.get(order_id)
         if previous is not None and total <= previous:
@@ -175,6 +196,26 @@ class _LegFillHub:
                 fill_id=None,
             )
         )
+
+    def _trim_known(self) -> None:
+        """Bound ``known`` (and ``last``): drop terminal orders first, then the oldest."""
+        while len(self.known) > _MAX_LAST:
+            if self.terminal:
+                victim, _ = self.terminal.popitem(last=False)
+                self.known.pop(victim, None)
+            else:
+                victim, _ = self.known.popitem(last=False)
+            self.last.pop(victim, None)
+
+    def _expire_early(self) -> None:
+        """Drop early observations older than ``_EARLY_TTL``, oldest first."""
+        now = self.clock()
+        while self.early:
+            oldest = next(iter(self.early))
+            if now - self.early_at.get(oldest, now) <= _EARLY_TTL:
+                break
+            del self.early[oldest]
+            self.early_at.pop(oldest, None)
 
     # -- delivery ------------------------------------------------------------
 

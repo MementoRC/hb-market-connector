@@ -329,9 +329,7 @@ class TestInterleaving:
         await _poll_once(gateway, _A)  # REST cumulative 2 (stale)
         hub.observe(_A, "3", "100", xid)  # WS cumulative 3 again
 
-        assert sink.cumulative() == [_D("1"), _D("3")]
-        deltas = [
-            cur - prev
-            for prev, cur in zip([_D(0), *sink.cumulative()], sink.cumulative(), strict=True)
-        ]
+        c = sink.cumulative()
+        assert c == [_D("1"), _D("3")]
+        deltas = [cur - prev for prev, cur in zip([_D(0), *c[:-1]], c, strict=True)]
         assert deltas == [_D("1"), _D("2")]

@@ -43,6 +43,11 @@ class CoinbaseJwtWsAuth:
         )
         if not isinstance(key, ec.EllipticCurvePrivateKey):
             raise ValueError("Coinbase WS JWT auth requires an EC private key in PEM format")
+        if not isinstance(key.curve, ec.SECP256R1):
+            raise ValueError(
+                f"Coinbase WS JWT auth signs ES256 and requires a P-256 (SECP256R1) key, "
+                f"got {key.curve.name}"
+            )
         self._api_key = api_key
         self._pem = pem
         self._clock = clock

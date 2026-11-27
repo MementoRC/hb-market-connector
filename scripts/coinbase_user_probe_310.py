@@ -4,23 +4,35 @@ Run it yourself with your own Coinbase CDP API credentials:
 
     export COINBASE_API_KEY='organizations/<org>/apiKeys/<key-id>'
     export COINBASE_API_SECRET="$(cat cdp_private_key.pem)"   # EC P-256 PEM
-    pixi run python scripts/coinbase_user_probe_310.py --duration 300 --reconnects 1
+    pixi run probe-coinbase-user --duration 300 --reconnects 1
+
+``probe-coinbase-user`` is a pixi task (default env, which has the websockets, pyjwt and
+cryptography dependencies) that runs ``python scripts/coinbase_user_probe_310.py``. The package is
+not installed into the env: running a file puts ``scripts/`` (not the repo root) on ``sys.path``,
+so the script inserts the repo root itself before importing ``market_connector``. Check the wiring
+without credentials with ``pixi run probe-coinbase-user --help``.
 
 Optional flags: ``--product-ids BTC-USD,ETH-USD`` (omit for all products), ``--output FILE``
-(default ``probe_output/coinbase_user_310_<UTC timestamp>.jsonl``, gitignored),
-``--watch-order-id ID`` / ``--watch-client-order-id ID`` (print cumulative_quantity, status and
-receive latency of that order's updates; place a small order by hand in the Coinbase UI).
+(default ``probe_output/coinbase_user_310_<UTC timestamp>_<unique suffix>.jsonl``, gitignored),
+``--overwrite`` (allow replacing an existing ``--output`` file; otherwise it is an error),
+``--watch-order-id ID`` / ``--watch-client-order-id ID`` (print cumulative_quantity, status and,
+for updates, receive latency of that order's events; place a small order by hand in the Coinbase
+UI).
 
 What it captures: it connects to ``CoinbaseConfig(sandbox=False).ws_user_url``, sends separate
 ``heartbeats`` and ``user`` subscribes (a fresh ES256 JWT per frame) and records every inbound
 frame verbatim as JSONL with local receive times (``wall`` = time.time(), ``mono`` =
 time.monotonic()) and a connection index. Outbound frames are recorded with the JWT redacted.
-After half of ``--duration`` it closes the socket and reconnects ``--reconnects`` times,
-resubscribing with fresh JWTs, so the reconnect snapshot is captured. It then prints a SUMMARY:
+The capture file is created exclusively with mode 0600 and records are streamed to disk; the
+summary is computed incrementally. After half of ``--duration`` it closes the socket and
+reconnects ``--reconnects`` times, resubscribing with fresh JWTs, so the reconnect snapshot is
+captured. If the peer closes a segment early, the probe records the close code, reason and timing
+and reconnects for the remaining time (an unscheduled connection). It then prints a SUMMARY:
 per-connection first sequence_num, gaps (heartbeats+user together and user-only), whether
-heartbeats share the sequence counter, snapshot batch sizes (and whether the final batch had
-exactly 50 orders), order updates with an empty/missing client_order_id, status values seen,
-``subscriptions`` / ``error`` frames, and the maximum idle gap between frames.
+heartbeats share the sequence counter (shared / separate / inconclusive), snapshot batch sizes
+(and whether the snapshot was completed), order updates with an empty/missing client_order_id,
+status values seen, ``subscriptions`` / ``error`` frames, short or early-closed segments, and the
+maximum idle gap between frames.
 
 Safety: WebSocket only and read-only. This script never places, modifies or cancels orders and
 imports no trading or REST code. Credentials are read from the environment only; the secret, the
@@ -32,10 +44,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 import time
+import uuid
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any, Protocol
@@ -43,13 +58,24 @@ from typing import IO, Any, Protocol
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from market_connector.exchanges.coinbase.config import CoinbaseConfig
-from market_connector.exchanges.coinbase.ws_auth import CoinbaseJwtWsAuth
+# Run as a file, sys.path[0] is scripts/, not the repo root, and the package is not installed.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from market_connector.exchanges.coinbase.config import CoinbaseConfig  # noqa: E402
+from market_connector.exchanges.coinbase.ws_auth import CoinbaseJwtWsAuth  # noqa: E402
 
 DEFAULT_OUTPUT_DIR = Path("probe_output")
 SEQ_CHANNELS = frozenset({"heartbeats", "user"})
 RECV_POLL_SECONDS = 1.0
 REDACTED = "REDACTED"
+SNAPSHOT_BATCH_SIZE = 50
+MAX_UNSCHEDULED_RECONNECTS = 10
+RECONNECT_DELAY_S = 1.0
+MAX_KEPT_FRAMES = 100
+MIN_INTERLEAVE_SWITCHES = 2
+OUTPUT_MODE = 0o600
 
 
 class Socket(Protocol):
@@ -62,6 +88,16 @@ class Signer(Protocol):
     async def transform_outgoing(self, msg: dict[str, Any]) -> dict[str, Any]: ...
 
 
+@dataclass
+class SegmentEnd:
+    """How one connection segment ended."""
+
+    reason: str  # "scheduled" or "closed_by_peer"
+    elapsed_s: float
+    close_code: int | None = None
+    close_reason: str | None = None
+
+
 def redact_frame(frame: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of an outbound frame with the ``jwt`` field replaced."""
     if "jwt" not in frame:
@@ -69,51 +105,9 @@ def redact_frame(frame: dict[str, Any]) -> dict[str, Any]:
     return {**frame, "jwt": REDACTED}
 
 
-class Recorder:
-    """Appends one JSON object per line to ``sink`` and keeps the records for the summary."""
-
-    def __init__(self, sink: IO[str] | None) -> None:
-        self._sink = sink
-        self.records: list[dict[str, Any]] = []
-
-    def add(self, record: dict[str, Any]) -> None:
-        self.records.append(record)
-        if self._sink is not None:
-            self._sink.write(json.dumps(record) + "\n")
-            self._sink.flush()
-
-    def inbound(self, conn: int, raw: str) -> dict[str, Any]:
-        record: dict[str, Any] = {
-            "conn": conn,
-            "dir": "in",
-            "wall": time.time(),
-            "mono": time.monotonic(),
-            "raw": raw,
-        }
-        self.add(record)
-        return record
-
-    def outbound(self, conn: int, frame: dict[str, Any]) -> None:
-        self.add(
-            {
-                "conn": conn,
-                "dir": "out",
-                "wall": time.time(),
-                "mono": time.monotonic(),
-                "frame": redact_frame(frame),
-            }
-        )
-
-    def event(self, conn: int, name: str) -> None:
-        self.add(
-            {
-                "conn": conn,
-                "dir": "event",
-                "wall": time.time(),
-                "mono": time.monotonic(),
-                "event": name,
-            }
-        )
+def gaps(seqs: list[int]) -> list[tuple[int, int]]:
+    """(previous, current) pairs where the sequence did not advance by exactly 1."""
+    return [(a, b) for a, b in zip(seqs, seqs[1:], strict=False) if b != a + 1]
 
 
 def parse_raw(raw: str) -> dict[str, Any] | None:
@@ -153,104 +147,249 @@ def iter_orders(frame: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     return out
 
 
-def gaps(seqs: list[int]) -> list[tuple[int, int]]:
-    """(previous, current) pairs where the sequence did not advance by exactly 1."""
-    return [(a, b) for a, b in zip(seqs, seqs[1:], strict=False) if b != a + 1]
+def _advance(last: int | None, seq: int, found: list[tuple[int, int]]) -> int:
+    if last is not None and seq != last + 1:
+        found.append((last, seq))
+    return seq
 
 
-def _heartbeat_sharing(hb: list[int], user: list[int], combined: list[int]) -> str:
-    if not hb or not user:
-        return "unknown (need both heartbeat and user frames)"
-    if set(hb) & set(user):
-        return "no (heartbeats and user frames reuse the same numbers: separate counters)"
-    if not gaps(combined):
-        return "yes (one counter: combined sequence has no gaps)"
-    return "inconclusive (combined sequence has gaps)"
+class _ConnStats:
+    """Running per-connection statistics (no frames are retained)."""
 
+    def __init__(self) -> None:
+        self.frames = 0
+        self.first_seq: int | None = None
+        self.last_all: int | None = None
+        self.last_hb: int | None = None
+        self.last_user: int | None = None
+        self.last_channel: str | None = None
+        self.switches = 0
+        self.hb_frames = 0
+        self.user_frames = 0
+        self.gaps_all: list[tuple[int, int]] = []
+        self.gaps_hb: list[tuple[int, int]] = []
+        self.gaps_user: list[tuple[int, int]] = []
+        self.batches: list[int] = []
+        self.update_after_snapshot = False
+        self.last_mono: float | None = None
+        self.max_idle = 0.0
+        self.unscheduled = False
 
-def _summarize_connection(frames: list[tuple[float, dict[str, Any]]]) -> dict[str, Any]:
-    seq_all: list[int] = []
-    seq_user: list[int] = []
-    seq_hb: list[int] = []
-    batches: list[int] = []
-    for _, frame in frames:
+    def add_frame(self, mono: float, frame: dict[str, Any]) -> None:
+        self.frames += 1
+        if self.last_mono is not None:
+            self.max_idle = max(self.max_idle, mono - self.last_mono)
+        self.last_mono = mono
         seq = frame.get("sequence_num")
         channel = frame.get("channel")
+        if isinstance(seq, int) and self.first_seq is None:
+            self.first_seq = seq
         if isinstance(seq, int) and channel in SEQ_CHANNELS:
-            seq_all.append(seq)
-            (seq_user if channel == "user" else seq_hb).append(seq)
+            self.last_all = _advance(self.last_all, seq, self.gaps_all)
+            if channel == "user":
+                self.user_frames += 1
+                self.last_user = _advance(self.last_user, seq, self.gaps_user)
+            else:
+                self.hb_frames += 1
+                self.last_hb = _advance(self.last_hb, seq, self.gaps_hb)
+            if self.last_channel is not None and channel != self.last_channel:
+                self.switches += 1
+            self.last_channel = channel
         if channel == "user":
             for event in frame.get("events") or []:
-                if isinstance(event, dict) and event.get("type") == "snapshot":
-                    batches.append(len(event.get("orders") or []))
-    all_seqs = [s for _, f in frames if isinstance(s := f.get("sequence_num"), int)]
-    monos = [m for m, _ in frames]
-    return {
-        "frames": len(frames),
-        "first_sequence_num": all_seqs[0] if all_seqs else None,
-        "gaps_combined": gaps(seq_all),
-        "gaps_user_only": gaps(seq_user),
-        "heartbeats_share_counter": _heartbeat_sharing(seq_hb, seq_user, seq_all),
-        "snapshot_batches": batches,
-        "final_batch_is_50": bool(batches) and batches[-1] == 50,
-        "max_idle_gap_s": max((b - a for a, b in zip(monos, monos[1:], strict=False)), default=0.0),
-    }
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") == "snapshot":
+                    self.batches.append(len(event.get("orders") or []))
+                    self.update_after_snapshot = False
+                elif event.get("type") == "update" and self.batches:
+                    self.update_after_snapshot = True
+
+    def heartbeat_sharing(self) -> str:
+        if not self.hb_frames or not self.user_frames:
+            return "unknown (need both heartbeat and user frames)"
+        if not self.gaps_all and self.switches >= MIN_INTERLEAVE_SWITCHES:
+            return "shared (heartbeat and user frames interleave in one +1 sequence)"
+        if self.gaps_all and not self.gaps_hb and not self.gaps_user:
+            return "separate (each type is contiguous alone, the combined sequence is not)"
+        return "inconclusive (no positive evidence either way)"
+
+    def snapshot_status(self) -> str:
+        if not self.batches:
+            return "none"
+        if self.batches[-1] < SNAPSHOT_BATCH_SIZE:
+            return "complete (short final batch)"
+        if self.update_after_snapshot:
+            return "complete (an update followed the last batch)"
+        return "incomplete (connection ended before a short batch or an update)"
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "frames": self.frames,
+            "first_sequence_num": self.first_seq,
+            "gaps_combined": self.gaps_all,
+            "gaps_user_only": self.gaps_user,
+            "heartbeats_share_counter": self.heartbeat_sharing(),
+            "snapshot_batches": self.batches,
+            "final_batch_is_50": bool(self.batches) and self.batches[-1] == SNAPSHOT_BATCH_SIZE,
+            "snapshot_status": self.snapshot_status(),
+            "max_idle_gap_s": self.max_idle,
+            "unscheduled": self.unscheduled,
+        }
+
+
+class SummaryAccumulator:
+    """Computes the probe SUMMARY incrementally from records, retaining none of them."""
+
+    def __init__(self) -> None:
+        self._conns: dict[int, _ConnStats] = {}
+        self._statuses: Counter[str] = Counter()
+        self._channels: Counter[str] = Counter()
+        self._empty_cid = {"update": 0, "snapshot": 0}
+        self._updates = 0
+        self._subscriptions: list[Any] = []
+        self._errors: list[Any] = []
+        self._segments: list[dict[str, Any]] = []
+
+    def _conn(self, conn: int) -> _ConnStats:
+        return self._conns.setdefault(conn, _ConnStats())
+
+    def add(self, rec: dict[str, Any]) -> None:
+        if rec.get("dir") == "event":
+            self._add_event(rec)
+            return
+        if rec.get("dir") != "in":
+            return
+        frame = parse_raw(rec["raw"])
+        if frame is None:
+            return
+        self._conn(rec["conn"]).add_frame(rec["mono"], frame)
+        self._channels[str(frame.get("channel"))] += 1
+        if frame.get("channel") == "subscriptions" and len(self._subscriptions) < MAX_KEPT_FRAMES:
+            self._subscriptions.append(frame.get("events"))
+        is_error = frame.get("type") == "error" or frame.get("channel") == "error"
+        if is_error and len(self._errors) < MAX_KEPT_FRAMES:
+            self._errors.append(frame.get("message") or frame)
+        for etype, order in iter_orders(frame):
+            self._statuses[str(order.get("status"))] += 1
+            if etype == "update":
+                self._updates += 1
+            if etype in self._empty_cid and not order.get("client_order_id"):
+                self._empty_cid[etype] += 1
+
+    def _add_event(self, rec: dict[str, Any]) -> None:
+        conn = rec["conn"]
+        if rec.get("event") == "connected":
+            self._conn(conn).unscheduled = not rec.get("scheduled", True)
+        elif rec.get("event") == "segment_end":
+            self._segments.append(
+                {
+                    "conn": conn,
+                    "reason": rec.get("reason"),
+                    "scheduled_s": rec.get("scheduled_s"),
+                    "elapsed_s": rec.get("elapsed_s"),
+                    "close_code": rec.get("close_code"),
+                    "close_reason": rec.get("close_reason"),
+                }
+            )
+
+    def summary(self) -> dict[str, Any]:
+        connections = {c: s.summary() for c, s in sorted(self._conns.items())}
+        short = [s for s in self._segments if s["reason"] != "scheduled"]
+        return {
+            "connections": connections,
+            "order_updates": self._updates,
+            "updates_empty_client_order_id": self._empty_cid["update"],
+            "snapshot_orders_empty_client_order_id": self._empty_cid["snapshot"],
+            "statuses": dict(self._statuses),
+            "channels": dict(self._channels),
+            "subscriptions_frames": self._subscriptions,
+            "error_frames": self._errors,
+            "short_segments": short,
+            "unscheduled_connections": sum(1 for c in connections.values() if c["unscheduled"]),
+            "max_idle_gap_s": max((c["max_idle_gap_s"] for c in connections.values()), default=0.0),
+        }
 
 
 def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute the probe SUMMARY from recorded frames (pure; no I/O)."""
-    per_conn: dict[int, list[tuple[float, dict[str, Any]]]] = {}
-    statuses: Counter[str] = Counter()
-    channels: Counter[str] = Counter()
-    empty_cid = {"update": 0, "snapshot": 0}
-    updates = 0
-    subscriptions: list[Any] = []
-    errors: list[Any] = []
+    """Compute the probe SUMMARY from a list of records (pure; no I/O)."""
+    acc = SummaryAccumulator()
     for rec in records:
-        if rec.get("dir") != "in":
-            continue
-        frame = parse_raw(rec["raw"])
-        if frame is None:
-            continue
-        per_conn.setdefault(rec["conn"], []).append((rec["mono"], frame))
-        channels[str(frame.get("channel"))] += 1
-        if frame.get("channel") == "subscriptions":
-            subscriptions.append(frame.get("events"))
-        if frame.get("type") == "error" or frame.get("channel") == "error":
-            errors.append(frame.get("message") or frame)
-        for etype, order in iter_orders(frame):
-            statuses[str(order.get("status"))] += 1
-            if etype == "update":
-                updates += 1
-            if etype in empty_cid and not order.get("client_order_id"):
-                empty_cid[etype] += 1
-    connections = {c: _summarize_connection(f) for c, f in sorted(per_conn.items())}
-    return {
-        "connections": connections,
-        "order_updates": updates,
-        "updates_empty_client_order_id": empty_cid["update"],
-        "snapshot_orders_empty_client_order_id": empty_cid["snapshot"],
-        "statuses": dict(statuses),
-        "channels": dict(channels),
-        "subscriptions_frames": subscriptions,
-        "error_frames": errors,
-        "max_idle_gap_s": max((c["max_idle_gap_s"] for c in connections.values()), default=0.0),
-    }
+        acc.add(rec)
+    return acc.summary()
+
+
+class Recorder:
+    """Appends one JSON object per line to ``sink``; keeps only running summary statistics."""
+
+    def __init__(self, sink: IO[str] | None) -> None:
+        self._sink = sink
+        self.stats = SummaryAccumulator()
+
+    def add(self, record: dict[str, Any]) -> None:
+        if self._sink is not None:
+            self._sink.write(json.dumps(record) + "\n")
+            self._sink.flush()
+        self.stats.add(record)  # only after the record is safely written
+
+    def inbound(self, conn: int, raw: str) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "conn": conn,
+            "dir": "in",
+            "wall": time.time(),
+            "mono": time.monotonic(),
+            "raw": raw,
+        }
+        self.add(record)
+        return record
+
+    def outbound(self, conn: int, frame: dict[str, Any]) -> None:
+        self.add(
+            {
+                "conn": conn,
+                "dir": "out",
+                "wall": time.time(),
+                "mono": time.monotonic(),
+                "frame": redact_frame(frame),
+            }
+        )
+
+    def event(self, conn: int, name: str, **extra: Any) -> None:
+        self.add(
+            {
+                "conn": conn,
+                "dir": "event",
+                "wall": time.time(),
+                "mono": time.monotonic(),
+                "event": name,
+                **extra,
+            }
+        )
 
 
 def format_summary(summary: dict[str, Any]) -> str:
     lines = ["=== SUMMARY ==="]
     for conn, c in summary["connections"].items():
+        kind = " (unscheduled reconnect)" if c.get("unscheduled") else ""
         lines += [
-            f"conn {conn}: frames={c['frames']} first_sequence_num={c['first_sequence_num']}",
+            f"conn {conn}{kind}: frames={c['frames']} first_sequence_num={c['first_sequence_num']}",
             f"  gaps (heartbeats+user): {c['gaps_combined'] or 'none'}",
             f"  gaps (user only): {c['gaps_user_only'] or 'none'}",
             f"  heartbeats share counter: {c['heartbeats_share_counter']}",
             f"  snapshot batches: {c['snapshot_batches']} final batch is 50: "
-            f"{c['final_batch_is_50']}",
+            f"{c['final_batch_is_50']}; snapshot: {c['snapshot_status']}",
             f"  max idle gap: {c['max_idle_gap_s']:.2f}s",
         ]
+    short = summary.get("short_segments", [])
+    lines.append(f"short/early-closed segments: {len(short) or 'none'}")
+    for s in short:
+        lines.append(
+            f"  conn {s['conn']}: {s['reason']} after {s['elapsed_s']:.1f}s of "
+            f"{s['scheduled_s']:.1f}s scheduled "
+            f"(code={s['close_code']} reason={s['close_reason']!r})"
+        )
     lines += [
+        f"unscheduled reconnects: {summary.get('unscheduled_connections', 0)}",
         f"order updates: {summary['order_updates']} "
         f"with empty/missing client_order_id: {summary['updates_empty_client_order_id']} "
         f"(snapshot orders: {summary['snapshot_orders_empty_client_order_id']})",
@@ -266,16 +405,18 @@ def format_summary(summary: dict[str, Any]) -> str:
 def watch_lines(
     frame: dict[str, Any], recv_wall: float, order_id: str | None, client_order_id: str | None
 ) -> list[str]:
-    """One line per matching order update: cumulative_quantity, status and receive latency."""
+    """One line per matching order event; receive latency is computed for updates only."""
     if not order_id and not client_order_id:
         return []
     sent = parse_rfc3339(str(frame.get("timestamp", "")))
-    latency = f"{recv_wall - sent:.3f}s" if sent is not None else "n/a"
     lines = []
     for etype, order in iter_orders(frame):
         if (order_id and order.get("order_id") == order_id) or (
             client_order_id and order.get("client_order_id") == client_order_id
         ):
+            latency = (
+                f"{recv_wall - sent:.3f}s" if etype == "update" and sent is not None else "n/a"
+            )
             lines.append(
                 f"WATCH {etype} order_id={order.get('order_id')} "
                 f"cumulative_quantity={order.get('cumulative_quantity')} "
@@ -302,23 +443,30 @@ async def pump(
     conn: int,
     seconds: float,
     watch: tuple[str | None, str | None] = (None, None),
-) -> None:
+) -> SegmentEnd:
     """Record inbound frames until ``seconds`` elapse or the socket closes."""
-    deadline = time.monotonic() + seconds
+    start = time.monotonic()
+    deadline = start + seconds
     while (remaining := deadline - time.monotonic()) > 0:
         try:
             msg = await asyncio.wait_for(ws.recv(), min(RECV_POLL_SECONDS, remaining))
         except TimeoutError:
             continue
-        except ConnectionClosed:
-            rec.event(conn, "closed_by_peer")
-            return
+        except ConnectionClosed as exc:
+            frame_close = getattr(exc, "rcvd", None)
+            return SegmentEnd(
+                "closed_by_peer",
+                time.monotonic() - start,
+                getattr(frame_close, "code", None),
+                getattr(frame_close, "reason", None) or None,
+            )
         raw = msg if isinstance(msg, str) else msg.decode("utf-8", "replace")
         record = rec.inbound(conn, raw)
         frame = parse_raw(raw)
         if frame is not None:
             for line in watch_lines(frame, record["wall"], *watch):
                 print(line, flush=True)
+    return SegmentEnd("scheduled", time.monotonic() - start)
 
 
 def segment_seconds(duration: float, reconnects: int) -> list[float]:
@@ -329,31 +477,104 @@ def segment_seconds(duration: float, reconnects: int) -> list[float]:
     return [half] + [half / reconnects] * reconnects
 
 
+def parse_product_ids(text: str | None) -> list[str] | None:
+    """Split a comma-separated list, stripping whitespace and dropping empties."""
+    ids = [p.strip() for p in (text or "").split(",")]
+    return [p for p in ids if p] or None
+
+
 async def run_probe(args: argparse.Namespace, rec: Recorder, signer: Signer, url: str) -> None:
-    product_ids = [p for p in (args.product_ids or "").split(",") if p] or None
+    product_ids = parse_product_ids(args.product_ids)
     watch = (args.watch_order_id, args.watch_client_order_id)
-    for conn, seconds in enumerate(segment_seconds(args.duration, args.reconnects)):
-        async with websockets.connect(url) as ws:
-            rec.event(conn, "connected")
-            await subscribe(ws, signer, rec, conn, product_ids)
-            await pump(ws, rec, conn, seconds, watch)
-            await ws.close()
-        rec.event(conn, "closed_by_probe")
+    conn = -1
+    unscheduled = 0
+    for scheduled in segment_seconds(args.duration, args.reconnects):
+        seg_deadline = time.monotonic() + scheduled
+        first = True
+        while (remaining := seg_deadline - time.monotonic()) > 0 or first:
+            if not first:
+                if unscheduled >= MAX_UNSCHEDULED_RECONNECTS:
+                    rec.event(conn, "gave_up_unscheduled_reconnects", limit=unscheduled)
+                    return
+                unscheduled += 1
+                await asyncio.sleep(RECONNECT_DELAY_S)
+                remaining = seg_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+            conn += 1
+            async with websockets.connect(url) as ws:
+                rec.event(conn, "connected", scheduled=first)
+                await subscribe(ws, signer, rec, conn, product_ids)
+                end = await pump(ws, rec, conn, remaining, watch)
+                if end.reason == "scheduled":
+                    await ws.close()
+            rec.event(
+                conn,
+                "segment_end",
+                reason=end.reason,
+                scheduled_s=remaining,
+                elapsed_s=end.elapsed_s,
+                close_code=end.close_code,
+                close_reason=end.close_reason,
+            )
+            if end.reason == "scheduled":
+                break
+            first = False
+
+
+def _positive_float(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError("must be a finite number > 0")
+    return value
+
+
+def _non_negative_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from exc
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return value
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Read-only Coinbase user-channel probe (#310).")
-    p.add_argument("--duration", type=float, default=300.0, help="total seconds (default 300)")
-    p.add_argument("--reconnects", type=int, default=1, help="reconnects after half (default 1)")
+    p.add_argument(
+        "--duration", type=_positive_float, default=300.0, help="total seconds > 0 (default 300)"
+    )
+    p.add_argument(
+        "--reconnects",
+        type=_non_negative_int,
+        default=1,
+        help="reconnects after half, >= 0 (default 1)",
+    )
     p.add_argument("--product-ids", default=None, help="comma-separated; omit for all products")
     p.add_argument("--output", type=Path, default=None, help="JSONL path (default probe_output/)")
+    p.add_argument(
+        "--overwrite", action="store_true", help="allow replacing an existing --output file"
+    )
     p.add_argument("--watch-order-id", default=None, help="print updates of this order_id")
     p.add_argument("--watch-client-order-id", default=None, help="print updates of this client id")
     return p.parse_args(argv)
 
 
 def default_output() -> Path:
-    return DEFAULT_OUTPUT_DIR / f"coinbase_user_310_{datetime.now(UTC):%Y%m%dT%H%M%SZ}.jsonl"
+    stamp = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}_{uuid.uuid4().hex[:8]}"
+    return DEFAULT_OUTPUT_DIR / f"coinbase_user_310_{stamp}.jsonl"
+
+
+def open_output(path: Path, overwrite: bool = False) -> IO[str]:
+    """Create ``path`` with mode 0600; fail if it exists unless ``overwrite``."""
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if overwrite else os.O_EXCL)
+    fd = os.open(path, flags, OUTPUT_MODE)
+    if overwrite and hasattr(os, "fchmod"):
+        os.fchmod(fd, OUTPUT_MODE)
+    return os.fdopen(fd, "w", encoding="utf-8")
 
 
 async def main_async(args: argparse.Namespace) -> int:
@@ -366,13 +587,18 @@ async def main_async(args: argparse.Namespace) -> int:
     signer = CoinbaseJwtWsAuth(api_key, secret)
     out = args.output or default_output()
     out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        sink = open_output(out, overwrite=args.overwrite)
+    except FileExistsError:
+        print(f"error: {out} already exists; choose another --output or pass --overwrite")
+        return 2
     print(f"recording to {out}; connecting to {config.ws_user_url}")
-    with out.open("w", encoding="utf-8") as sink:
+    with sink:
         rec = Recorder(sink)
         try:
             await run_probe(args, rec, signer, config.ws_user_url)
         finally:
-            print(format_summary(summarize(rec.records)))
+            print(format_summary(rec.stats.summary()))
     return 0
 
 

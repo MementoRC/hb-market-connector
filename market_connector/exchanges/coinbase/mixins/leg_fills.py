@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import inspect
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -32,6 +32,9 @@ logger = get_logger(__name__)
 
 _CODEC = CoinbaseClientOrderIdLinkCodec()
 _MAX_QUEUED = 1024  # per async subscriber backlog before superseded fills are coalesced
+_MAX_LAST = 65536  # registered order ids / last emitted cumulatives kept (as Kraken)
+_MAX_EARLY_ORDERS = 1024  # unregistered orders with buffered observations
+_MAX_EARLY_PER_ORDER = 64  # buffered observations per unregistered order
 _TERMINAL = frozenset(
     {
         CoinbaseOrderStatus.FILLED,
@@ -42,12 +45,19 @@ _TERMINAL = frozenset(
 )
 
 
+def _bounded_put(table: OrderedDict[Any, Any], key: Any, value: Any, cap: int) -> None:
+    """Insert/refresh ``key`` as newest and evict the oldest entries beyond ``cap``."""
+    table[key] = value
+    table.move_to_end(key)
+    while len(table) > cap:
+        table.popitem(last=False)
+
+
 @dataclass
 class _Leg:
     """A gateway-placed leg; carries its own exchange id (independent of the id cache)."""
 
     exchange_id: str
-    cumulative: Decimal = Decimal(0)
 
 
 class _Subscriber(ReplaySubscriber):
@@ -71,6 +81,9 @@ class _LegFillHub:
         self.subscribers: list[_Subscriber] = []
         self.legs: dict[str, _Leg] = {}  # client_order_id -> non-terminal leg
         self.ledger = LegFillLedger(gateway._config.leg_fill_max_tracked)
+        self.known: OrderedDict[str, None] = OrderedDict()  # registered exchange order ids
+        self.last: OrderedDict[str, Decimal] = OrderedDict()  # order id -> last emitted cumulative
+        self.early: OrderedDict[str, list[tuple[str, Decimal, Decimal]]] = OrderedDict()
         self.poll_task: asyncio.Task[None] | None = None
         self.orphans: set[asyncio.Task[None]] = set()  # drain tasks of unsubscribed subscribers
         self.stopped = False  # set by shutdown; cleared by resume
@@ -80,12 +93,15 @@ class _LegFillHub:
     def track(self, client_order_id: str, exchange_id: str) -> None:
         existing = self.legs.get(client_order_id)
         if existing is not None and existing.exchange_id == exchange_id:
-            # Same order re-registered: keep its cumulative so no fill is re-emitted.
+            # Same order re-registered: the gate keeps its cumulative, no fill is re-emitted.
             self.legs.pop(client_order_id)
             self.legs[client_order_id] = existing
         else:
             self.legs.pop(client_order_id, None)
             self.legs[client_order_id] = _Leg(exchange_id)
+        _bounded_put(self.known, exchange_id, None, _MAX_LAST)
+        for cid, total, price in self.early.pop(exchange_id, []):
+            self.observe(cid, total, price, exchange_id)
         cap = self.gateway._config.leg_fill_max_tracked
         while len(self.legs) > cap:
             dropped = next(iter(self.legs))
@@ -113,27 +129,52 @@ class _LegFillHub:
                 "order_status", params={"order_id": leg.exchange_id}
             )
             order = Order.model_validate(response.raw["order"])
-            cumulative = Decimal(order.filled_size)
-            if cumulative > leg.cumulative and self.legs.get(cid) is leg:
-                # Convert the price first: a malformed value must not advance the
-                # cumulative, or the fill would be deduped away on the next valid poll.
-                price = Decimal(order.average_filled_price)
-                leg.cumulative = cumulative
-                self._emit(
-                    LegFill(
-                        client_order_id=cid,
-                        cumulative_filled=cumulative,
-                        last_price=price,
-                        timestamp=time.time(),
-                        fill_id=None,
-                    )
-                )
+            if self.legs.get(cid) is leg:
+                self.observe(cid, order.filled_size, order.average_filled_price, leg.exchange_id)
             if order.status in _TERMINAL and self.legs.get(cid) is leg:
                 del self.legs[cid]
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning("leg fill poll of %r failed: %r", cid, exc)
+
+    # -- shared gate ---------------------------------------------------------
+
+    def observe(
+        self, cid: str, cumulative: Decimal | str, price: Decimal | str, order_id: str
+    ) -> None:
+        """Report a cumulative fill of order ``order_id``; emit only if strictly increasing.
+
+        Shared by the REST poller and any other source. An order not registered yet is
+        buffered (bounded) and replayed through this gate on registration.
+        """
+        total = Decimal(str(cumulative))
+        if total <= 0:
+            return
+        if order_id not in self.known:
+            # Validate before buffering so a malformed price never reaches the replay.
+            entry = (cid, total, Decimal(str(price)))
+            buffered = self.early.setdefault(order_id, [])
+            self.early.move_to_end(order_id)
+            buffered.append(entry)
+            del buffered[: max(0, len(buffered) - _MAX_EARLY_PER_ORDER)]
+            while len(self.early) > _MAX_EARLY_ORDERS:
+                self.early.popitem(last=False)
+            return
+        previous = self.last.get(order_id)
+        if previous is not None and total <= previous:
+            return
+        last_price = Decimal(str(price))
+        _bounded_put(self.last, order_id, total, _MAX_LAST)
+        self._emit(
+            LegFill(
+                client_order_id=cid,
+                cumulative_filled=total,
+                last_price=last_price,
+                timestamp=time.time(),
+                fill_id=None,
+            )
+        )
 
     # -- delivery ------------------------------------------------------------
 

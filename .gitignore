@@ -77,6 +77,9 @@ docs/site/
 # Logs
 logs/
 
+# Live probe captures (scripts/coinbase_user_probe_310.py)
+probe_output/
+
 # Claude Code
 .claude/
 .claude.json

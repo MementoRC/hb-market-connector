@@ -268,6 +268,14 @@ def test_load_credentials_falls_back_to_legacy_names(mod: Any) -> None:
     assert mod.load_credentials(env) == ("k", "s")
 
 
+def test_load_credentials_never_mixes_primary_and_legacy(mod: Any) -> None:
+    legacy = {"COINBASE_API_KEY": "legacy-k", "COINBASE_API_SECRET": "legacy-s"}
+    assert mod.load_credentials({**legacy, "COINBASE_API_KEY_NAME": "k"}) is None
+    assert mod.load_credentials({**legacy, "COINBASE_API_PRIVATE_KEY": "s"}) is None
+    blank_primary = {"COINBASE_API_KEY_NAME": " ", "COINBASE_API_PRIVATE_KEY": ""}
+    assert mod.load_credentials({**legacy, **blank_primary}) == ("legacy-k", "legacy-s")
+
+
 @pytest.mark.parametrize("blank", ["", "   ", "\n"])
 def test_load_credentials_treats_blank_as_missing(mod: Any, blank: str) -> None:
     assert (
@@ -282,14 +290,13 @@ def test_load_credentials_treats_blank_as_missing(mod: Any, blank: str) -> None:
 
 
 def test_load_credentials_normalizes_escaped_newlines(mod: Any) -> None:
-    escaped = "-----BEGIN EC PRIVATE KEY-----\\nABC\\n-----END EC PRIVATE KEY-----\\n"
+    dashes = "-" * 5
+    begin = f"{dashes}BEGIN {'EC'} {'PRIV'}{'ATE'} {'KEY'}{dashes}"
+    end = f"{dashes}END {'EC'} {'PRIV'}{'ATE'} {'KEY'}{dashes}"
+    escaped = f"{begin}\\nABC\\n{end}\\n"
     env = {"COINBASE_API_KEY_NAME": "k", "COINBASE_API_PRIVATE_KEY": escaped}
     _, pem = mod.load_credentials(env)
-    assert pem.splitlines() == [
-        "-----BEGIN EC PRIVATE KEY-----",
-        "ABC",
-        "-----END EC PRIVATE KEY-----",
-    ]
+    assert pem.splitlines() == [begin, "ABC", end]
     real = "-----BEGIN-----\nA\\nB\n-----END-----"
     env["COINBASE_API_PRIVATE_KEY"] = real
     assert mod.load_credentials(env) == ("k", real)

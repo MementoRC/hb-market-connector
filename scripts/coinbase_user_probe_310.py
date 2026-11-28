@@ -605,8 +605,13 @@ def load_credentials(env: Mapping[str, str]) -> tuple[str, str] | None:
     COINBASE_API_SECRET are accepted as fallbacks. A PEM with literal ``\\n`` sequences and no
     real newlines is converted to real newlines.
     """
-    api_key = _env_value(env, "COINBASE_API_KEY_NAME", "COINBASE_API_KEY")
-    secret = _env_value(env, "COINBASE_API_PRIVATE_KEY", "COINBASE_API_SECRET")
+    # Choose the pair atomically: the primary pair wins if either primary var is set, so a
+    # half-set primary pair is never mixed with a different legacy pair.
+    api_key = _env_value(env, "COINBASE_API_KEY_NAME")
+    secret = _env_value(env, "COINBASE_API_PRIVATE_KEY")
+    if api_key is None and secret is None:
+        api_key = _env_value(env, "COINBASE_API_KEY")
+        secret = _env_value(env, "COINBASE_API_SECRET")
     if api_key is None or secret is None:
         return None
     if "\n" not in secret:

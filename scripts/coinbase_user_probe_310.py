@@ -2,8 +2,11 @@
 
 Run it yourself with your own Coinbase CDP API credentials:
 
-    export COINBASE_API_KEY='organizations/<org>/apiKeys/<key-id>'
-    export COINBASE_API_SECRET="$(cat cdp_private_key.pem)"   # EC P-256 PEM
+    export COINBASE_API_KEY_NAME='organizations/<org>/apiKeys/<key-id>'
+    export COINBASE_API_PRIVATE_KEY="$(cat cdp_private_key.pem)"   # EC P-256 PEM
+
+(a PEM with literal backslash-n escapes instead of newlines is also accepted; the older names
+COINBASE_API_KEY / COINBASE_API_SECRET work as fallbacks)
     pixi run probe-coinbase-user --duration 300 --reconnects 1
 
 ``probe-coinbase-user`` is a pixi task (default env, which has the websockets, pyjwt and
@@ -53,7 +56,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import IO, Any, Protocol
+from typing import IO, TYPE_CHECKING, Any, Protocol
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -65,6 +68,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from market_connector.exchanges.coinbase.config import CoinbaseConfig  # noqa: E402
 from market_connector.exchanges.coinbase.ws_auth import CoinbaseJwtWsAuth  # noqa: E402
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 DEFAULT_OUTPUT_DIR = Path("probe_output")
 SEQ_CHANNELS = frozenset({"heartbeats", "user"})
@@ -543,7 +549,13 @@ def _non_negative_int(text: str) -> int:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Read-only Coinbase user-channel probe (#310).")
+    p = argparse.ArgumentParser(
+        description="Read-only Coinbase user-channel probe (#310).",
+        epilog=(
+            "Credentials come from the environment: COINBASE_API_KEY_NAME (CDP key name) and "
+            "COINBASE_API_PRIVATE_KEY (EC PEM)."
+        ),
+    )
     p.add_argument(
         "--duration", type=_positive_float, default=300.0, help="total seconds > 0 (default 300)"
     )
@@ -577,12 +589,42 @@ def open_output(path: Path, overwrite: bool = False) -> IO[str]:
     return os.fdopen(fd, "w", encoding="utf-8")
 
 
+def _env_value(env: Mapping[str, str], *names: str) -> str | None:
+    """First non-blank value among ``names`` (whitespace-stripped), else None."""
+    for name in names:
+        value = env.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def load_credentials(env: Mapping[str, str]) -> tuple[str, str] | None:
+    """Return (key name, PEM) from the environment, or None if either is missing or blank.
+
+    Primary names are COINBASE_API_KEY_NAME / COINBASE_API_PRIVATE_KEY; COINBASE_API_KEY /
+    COINBASE_API_SECRET are accepted as fallbacks. A PEM with literal ``\\n`` sequences and no
+    real newlines is converted to real newlines.
+    """
+    # Choose the pair atomically: the primary pair wins if either primary var is set, so a
+    # half-set primary pair is never mixed with a different legacy pair.
+    api_key = _env_value(env, "COINBASE_API_KEY_NAME")
+    secret = _env_value(env, "COINBASE_API_PRIVATE_KEY")
+    if api_key is None and secret is None:
+        api_key = _env_value(env, "COINBASE_API_KEY")
+        secret = _env_value(env, "COINBASE_API_SECRET")
+    if api_key is None or secret is None:
+        return None
+    if "\n" not in secret:
+        secret = secret.replace("\\n", "\n")
+    return api_key, secret
+
+
 async def main_async(args: argparse.Namespace) -> int:
-    api_key = os.environ.get("COINBASE_API_KEY")
-    secret = os.environ.get("COINBASE_API_SECRET")
-    if not api_key or not secret:
-        print("set COINBASE_API_KEY and COINBASE_API_SECRET (EC PEM) in the environment")
+    creds = load_credentials(os.environ)
+    if creds is None:
+        print("set COINBASE_API_KEY_NAME and COINBASE_API_PRIVATE_KEY (EC PEM) in the environment")
         return 2
+    api_key, secret = creds
     config = CoinbaseConfig(api_key=api_key, secret_key=secret, sandbox=False)
     signer = CoinbaseJwtWsAuth(api_key, secret)
     out = args.output or default_output()

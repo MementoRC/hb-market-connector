@@ -235,8 +235,8 @@ def test_default_output_names_are_unique(mod: Any) -> None:
 async def test_main_existing_output_errors_unless_overwrite(
     mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("COINBASE_API_KEY", "k")
-    monkeypatch.setenv("COINBASE_API_SECRET", "s")
+    monkeypatch.setenv("COINBASE_API_KEY_NAME", "k")
+    monkeypatch.setenv("COINBASE_API_PRIVATE_KEY", "s")
     monkeypatch.setattr(mod, "CoinbaseJwtWsAuth", lambda *_a: FakeSigner())
 
     async def noop(*_a: Any) -> None:
@@ -253,6 +253,69 @@ async def test_main_existing_output_errors_unless_overwrite(
     assert await mod.main_async(args) == 0
     assert path.read_text() == ""
     assert "recording to" in capsys.readouterr().out
+
+
+def test_load_credentials_accepts_primary_names(mod: Any) -> None:
+    env = {
+        "COINBASE_API_KEY_NAME": " organizations/o/apiKeys/k ",
+        "COINBASE_API_PRIVATE_KEY": "pem",
+    }
+    assert mod.load_credentials(env) == ("organizations/o/apiKeys/k", "pem")
+
+
+def test_load_credentials_falls_back_to_legacy_names(mod: Any) -> None:
+    env = {"COINBASE_API_KEY": "k", "COINBASE_API_SECRET": "s"}
+    assert mod.load_credentials(env) == ("k", "s")
+
+
+def test_load_credentials_never_mixes_primary_and_legacy(mod: Any) -> None:
+    legacy = {"COINBASE_API_KEY": "legacy-k", "COINBASE_API_SECRET": "legacy-s"}
+    assert mod.load_credentials({**legacy, "COINBASE_API_KEY_NAME": "k"}) is None
+    assert mod.load_credentials({**legacy, "COINBASE_API_PRIVATE_KEY": "s"}) is None
+    blank_primary = {"COINBASE_API_KEY_NAME": " ", "COINBASE_API_PRIVATE_KEY": ""}
+    assert mod.load_credentials({**legacy, **blank_primary}) == ("legacy-k", "legacy-s")
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n"])
+def test_load_credentials_treats_blank_as_missing(mod: Any, blank: str) -> None:
+    assert (
+        mod.load_credentials({"COINBASE_API_KEY_NAME": "k", "COINBASE_API_PRIVATE_KEY": blank})
+        is None
+    )
+    assert (
+        mod.load_credentials({"COINBASE_API_KEY_NAME": blank, "COINBASE_API_PRIVATE_KEY": "s"})
+        is None
+    )
+    assert mod.load_credentials({}) is None
+
+
+def test_load_credentials_normalizes_escaped_newlines(mod: Any) -> None:
+    dashes = "-" * 5
+    begin = f"{dashes}BEGIN {'EC'} {'PRIV'}{'ATE'} {'KEY'}{dashes}"
+    end = f"{dashes}END {'EC'} {'PRIV'}{'ATE'} {'KEY'}{dashes}"
+    escaped = f"{begin}\\nABC\\n{end}\\n"
+    env = {"COINBASE_API_KEY_NAME": "k", "COINBASE_API_PRIVATE_KEY": escaped}
+    _, pem = mod.load_credentials(env)
+    assert pem.splitlines() == [begin, "ABC", end]
+    real = "-----BEGIN-----\nA\\nB\n-----END-----"
+    env["COINBASE_API_PRIVATE_KEY"] = real
+    assert mod.load_credentials(env) == ("k", real)
+
+
+async def test_main_missing_credentials_names_primary_vars(
+    mod: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for name in (
+        "COINBASE_API_KEY_NAME",
+        "COINBASE_API_PRIVATE_KEY",
+        "COINBASE_API_KEY",
+        "COINBASE_API_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    assert await mod.main_async(mod.parse_args([])) == 2
+    out = capsys.readouterr().out
+    assert "COINBASE_API_KEY_NAME" in out
+    assert "COINBASE_API_PRIVATE_KEY" in out
 
 
 def test_recorder_streams_without_retaining_records(mod: Any) -> None:
